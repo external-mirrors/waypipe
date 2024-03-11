@@ -327,6 +327,39 @@ of their initialization, and will not work correctly with this flag.
 *waypipe ssh* will exit with the exit status code from the remote command, or
 with return code 1 if there has been an error.
 
+# SECURITY
+
+Waypipe does not provide any strong security guarantees, and connecting to
+untrusted servers is not recommended. It does not filter which Wayland
+protocols the compositor makes available to the client (with a few exceptions
+for protocols that require file descriptors which Waypipe cannot yet handle).
+For example, if a Wayland compositor gives all its clients access to a
+screenshot or lock-screen protocol, then proxied clients run under Waypipe
+can also make screenshots or lock the screen.
+
+In general, applications are not well tested against malicious compositors,
+and compositors are not well tested against malicious clients. Waypipe can
+connect the two, and may blindly forward denial-of-service and other attacks.
+
+Waypipe itself is written in C and links to compression, graphics, and video
+libraries; both it and these libraries may have security bugs. Some risk
+can be avoided by building Waypipe with DMABUF support turned off, or
+running Waypipe with the *--no-gpu* flag so that it does not expose graphics
+libraries.
+
+*waypipe ssh* has no explicit protections against timing attacks; an observer
+to the resulting network traffic may, by studying the size and timing of
+packets, learn information about the user's interaction with a Wayland client
+proxied through *waypipe ssh*. For example: a lack of activity suggests the
+user is not currently using the application, while an intermittant stream of
+messages from the compositor to the client may indicate mouse movement (or
+maybe something else: the contents of the messages are protected by *ssh*.)
+
+The memory used by Waypipe processes may, at a given time, include Wayland
+messages encoding user input, and the contents of current and recent frames
+drawn for application windows. Swap should be encrypted to prevent this data
+from being leaked to disk.
+
 # BUGS
 
 File bug reports at: https://gitlab.freedesktop.org/mstoeckl/waypipe/
