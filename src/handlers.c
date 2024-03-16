@@ -36,6 +36,10 @@
 
 #include <protocols.h>
 
+#ifndef DRM_FORMAT_MOD_INVALID
+#define DRM_FORMAT_MOD_INVALID 0x00ffffffffffffffULL
+#endif
+
 struct obj_wl_shm_pool {
 	struct wp_object base;
 	struct shadow_fd *owned_buffer;

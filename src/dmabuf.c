@@ -105,6 +105,10 @@ uint32_t dmabuf_get_stride(struct gbm_bo *bo)
 
 #include <gbm.h>
 
+#ifndef DRM_FORMAT_MOD_INVALID
+#define DRM_FORMAT_MOD_INVALID 0x00ffffffffffffffULL
+#endif
+
 int init_render_data(struct render_data *data)
 {
 	/* render node support can be disabled either by choice
