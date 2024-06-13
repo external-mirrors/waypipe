@@ -52,6 +52,25 @@ if ( host_machine.cpu_family() == 'aarch64' or cc.has_argument('-mfpu=neon') ) a
 	kernel_libs += static_library('kernel_neon', 'kernel_neon.c', c_args:neon_args)
 	config_data.set('HAVE_NEON', 1, description: 'Compiler supports NEON')
 endif
+if config_data.has('HAS_SECURITY_CONTEXT')
+	wayland_scanner_prog = find_program(wayland_scanner.get_variable(pkgconfig: 'wayland_scanner'))
+	wl_security_context_xml = '../protocols/security-context-v1.xml'
+	protocols_src += custom_target(
+		'security-context-v1-protocol.c',
+		input: wl_security_context_xml,
+		output: 'security-context-v1-protocol.c',
+		command: [wayland_scanner_prog, 'private-code', '@INPUT@', '@OUTPUT@'],
+	)
+	protocols_src += custom_target(
+		'security-context-v1-protocol.h',
+		input: wl_security_context_xml,
+		output: 'security-context-v1-protocol.h',
+		command: [wayland_scanner_prog, 'client-header', '@INPUT@', '@OUTPUT@'],
+	)
+
+    waypipe_deps += [wayland_client]
+    waypipe_source_files += ['secctx.c']
+endif
 
 configure_file(
 	output: 'config-waypipe.h',

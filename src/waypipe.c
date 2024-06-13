@@ -98,6 +98,8 @@ static const char usage_string[] =
 		"      --video[=V]      compress certain linear dmabufs only with a video codec\n"
 		"                         V is list of options: sw,hw,bpf=1.2e5,h264,vp9,av1\n"
 		"      --vsock          use vsock instead of unix socket\n"
+		"      --secctx S       client,ssh: enable Wayland security context protocol\n"
+		"                         S is an app id to be attached to the security context\n"
 		"\n";
 
 static int usage(int retcode)
@@ -450,6 +452,7 @@ static const bool feature_flags[] = {
 #define ARG_BENCH_TEST_SIZE 1012
 #define ARG_VSOCK 1013
 #define ARG_TITLE_PREFIX 1014
+#define ARG_SECCTX 1015
 
 static const struct option options[] = {
 		{"compress", required_argument, NULL, 'c'},
@@ -473,6 +476,7 @@ static const struct option options[] = {
 		{"test-size", required_argument, NULL, ARG_BENCH_TEST_SIZE},
 		{"vsock", no_argument, NULL, ARG_VSOCK},
 		{"title-prefix", required_argument, NULL, ARG_TITLE_PREFIX},
+		{"secctx", required_argument, NULL, ARG_SECCTX},
 		{0, 0, NULL, 0}};
 struct arg_permissions {
 	int val;
@@ -498,10 +502,17 @@ static const struct arg_permissions arg_permissions[] = {
 		{ARG_CONTROL, MODE_SSH | MODE_SERVER},
 		{ARG_BENCH_TEST_SIZE, MODE_BENCH},
 		{ARG_VSOCK, MODE_SSH | MODE_CLIENT | MODE_SERVER},
-		{ARG_TITLE_PREFIX, MODE_SSH | MODE_CLIENT | MODE_SERVER}};
+		{ARG_TITLE_PREFIX, MODE_SSH | MODE_CLIENT | MODE_SERVER},
+		{ARG_SECCTX, MODE_SSH | MODE_CLIENT}};
 
 /* envp is nonstandard, so use environ */
 extern char **environ;
+
+#ifdef HAS_SECURITY_CONTEXT
+int create_security_context(const char *sock_path, const char *engine,
+		const char *instance_id, const char *app_id);
+void close_security_context();
+#endif
 
 int main(int argc, char **argv)
 {
@@ -541,6 +552,7 @@ int main(int argc, char **argv)
 			.vsock_to_host = false, /* VMADDR_FLAG_TO_HOST */
 			.vsock_port = 0,
 			.title_prefix = NULL,
+			.secctx_app_id = NULL,
 	};
 
 	/* We do not parse any getopt arguments happening after the mode choice
@@ -724,6 +736,14 @@ int main(int argc, char **argv)
 			}
 			config.title_prefix = optarg;
 			break;
+		case ARG_SECCTX:
+#ifdef HAS_SECURITY_CONTEXT
+			config.secctx_app_id = optarg;
+			break;
+#else
+			fprintf(stderr, "Option --secctx not allowed: this copy of Waypipe was not built with support for the Wayland security context protocol.\n");
+			return EXIT_FAILURE;
+#endif
 		default:
 			fail = true;
 			break;
@@ -832,9 +852,29 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	const char *wayland_socket = getenv("WAYLAND_SOCKET");
-	if (wayland_socket != NULL) {
-		oneshot = true;
+	const char *wayland_socket = NULL;
+	if (!config.secctx_app_id) {
+		wayland_socket = getenv("WAYLAND_SOCKET");
+		if (wayland_socket != NULL) {
+			oneshot = true;
+		}
+	} else {
+#ifdef HAS_SECURITY_CONTEXT
+		/* Create a new socket, send it to the compositor to attach
+		 * a security context and write it to WAYLAND_DISPLAY */
+		char secctx_sock_path[108];
+		sprintf(secctx_sock_path, "/tmp/waypipe%d", getpid());
+		unlink(secctx_sock_path);
+		char instance_id[21];
+		sprintf(instance_id, "%d", getpid());
+		if (create_security_context(secctx_sock_path, "waypipe",
+				    instance_id, config.secctx_app_id) == 0) {
+			unsetenv("WAYLAND_SOCKET");
+			setenv("WAYLAND_DISPLAY", secctx_sock_path, 1);
+		} else {
+			return EXIT_FAILURE;
+		}
+#endif
 	}
 
 	int ret;
@@ -1175,6 +1215,9 @@ int main(int argc, char **argv)
 			checked_close(channel_folder_fd);
 		}
 	}
+#ifdef HAS_SECURITY_CONTEXT
+	close_security_context();
+#endif
 	checked_close(cwd_fd);
 	check_unclosed_fds();
 	return ret;

@@ -176,6 +176,10 @@ compressible as images containing pictures.
 	CID is only used in the server mode and can be omitted when connecting from a
 	guest virtual machine to host.
 
+*--secctx S*
+	Enable the Wayland security context protocol (client or ssh modes). Specify
+	an application ID *S* that will be attached to the security context.
+
 # EXAMPLE 
 
 The following *waypipe ssh* subcommand will attempt to run *weston-flower* on

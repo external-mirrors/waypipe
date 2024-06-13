@@ -99,6 +99,11 @@ if libavcodec.found() and libavutil.found() and libswscale.found()
 		config_data.set('HAS_VAAPI', 1, description: 'Enable hardware video (de)compression with VAAPI')
 	endif
 endif
+wayland_scanner = dependency('wayland-scanner', version: '>=1.15.0', required: get_option('with_secctx'), native: true)
+wayland_client = dependency('wayland-client', required: get_option('with_secctx'))
+if wayland_scanner.found() and wayland_client.found()
+	config_data.set('HAS_SECURITY_CONTEXT', 1, description: 'Enable security-context-v1 support')
+endif
 
 waypipe_includes = [include_directories('protocols'), include_directories('src')]
 if libdrm.found()

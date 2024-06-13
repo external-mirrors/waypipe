@@ -46,6 +46,7 @@ struct main_config {
 	uint32_t vsock_port;
 	bool vsock_to_host;
 	const char *title_prefix;
+	const char *secctx_app_id;
 };
 struct globals {
 	const struct main_config *config;
