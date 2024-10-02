@@ -971,6 +971,11 @@ static void queue_fill_transfers(struct thread_pool *threads,
 		return;
 	}
 
+	/* Align fill operations to multiples of 64; this may slightly overcopy
+	 * if region_start % 64 != 0. */
+	int block_start = region_start / 64;
+	int block_end = align(region_end, 64) / 64;
+
 	for (int i = 0; i < nshards; i++) {
 		struct task_data task;
 		memset(&task, 0, sizeof(task));
@@ -978,10 +983,14 @@ static void queue_fill_transfers(struct thread_pool *threads,
 		task.sfd = sfd;
 		task.msg_queue = &transfers->async_recv_queue;
 
-		task.zone_start = split_interval(
-				region_start, region_end, nshards, i);
-		task.zone_end = split_interval(
-				region_start, region_end, nshards, i + 1);
+		task.zone_start = 64 * split_interval(block_start, block_end,
+						       nshards, i);
+		task.zone_end = 64 * split_interval(block_start, block_end,
+						     nshards, i + 1);
+		if (task.zone_start > region_end) {
+			task.zone_start = region_end;
+		}
+
 		threads->stack[threads->stack_count++] = task;
 	}
 	pthread_mutex_unlock(&threads->work_mutex);
