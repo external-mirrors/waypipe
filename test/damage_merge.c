@@ -255,10 +255,10 @@ static int simple_lexsort(const void *L, const void *R)
 /** A merge operation which reduces the compound intervals to simple intervals,
  * and then merges them that way. After all, this only expands memory use and
  * runtime by a factor of screen height... */
-static void __attribute__((noinline))
-merge_simple(const int old_count, struct ext_interval *old_list,
-		const int new_count, const struct ext_interval *const new_list,
-		int *dst_count, struct interval **dst_list, int merge_margin)
+static void __attribute__((noinline)) merge_simple(const int old_count,
+		struct ext_interval *old_list, const int new_count,
+		const struct ext_interval *const new_list, int *dst_count,
+		struct interval **dst_list, int merge_margin)
 {
 	int nintervals = 0;
 	for (int i = 0; i < old_count; i++) {

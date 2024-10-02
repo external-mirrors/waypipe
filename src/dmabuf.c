@@ -163,8 +163,8 @@ static bool dmabuf_info_valid(const struct dmabuf_slice_data *info)
 {
 	if (info->height > (1u << 24) || info->width > (1u << 24) ||
 			info->num_planes > 4 || info->num_planes == 0) {
-		wp_error("Invalid DMABUF slice data: height " PRIu32
-			 " width " PRIu32 " num_planes " PRIu32,
+		wp_error("Invalid DMABUF slice data: height %" PRIu32
+			 " width %" PRIu32 " num_planes %" PRIu32,
 				info->height, info->width, info->num_planes);
 		return false;
 	}
