@@ -2279,7 +2279,7 @@ int fill_with_pipes(const struct fd_translation_map *map, struct pollfd *pfds,
 		if (cur->type == FDC_PIPE && cur->pipe.fd != -1) {
 			pfds[np].fd = cur->pipe.fd;
 			pfds[np].events = 0;
-			if (check_read && cur->pipe.readable) {
+			if (check_read && cur->pipe.can_read) {
 				pfds[np].events |= POLLIN;
 			}
 			if (cur->pipe.send.used > 0) {
