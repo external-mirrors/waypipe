@@ -863,7 +863,7 @@ int main(int argc, char **argv)
 		/* Create a new socket, send it to the compositor to attach
 		 * a security context and write it to WAYLAND_DISPLAY */
 		char secctx_sock_path[108];
-		sprintf(secctx_sock_path, "/tmp/waypipe%d", getpid());
+		sprintf(secctx_sock_path, "/tmp/waypipe-secctx-%d", getpid());
 		unlink(secctx_sock_path);
 		char instance_id[21];
 		sprintf(instance_id, "%d", getpid());
