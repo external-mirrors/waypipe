@@ -438,6 +438,8 @@ void do_wl_registry_evt_global(struct context *ctx, uint32_t name,
 	unsupported |= !strcmp(
 			interface, "zwp_linux_explicit_synchronization_v1");
 	unsupported |= !strcmp(interface, "wp_linux_drm_syncobj_manager_v1");
+	unsupported |= !strcmp(interface, "wp_security_context_manager_v1");
+	unsupported |= !strcmp(interface, "wp_drm_lease_device_v1");
 	if (unsupported) {
 		wp_debug("Hiding %s advertisement, unsupported", interface);
 		ctx->drop_this_msg = true;
