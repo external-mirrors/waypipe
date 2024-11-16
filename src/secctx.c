@@ -34,7 +34,7 @@ static const struct wl_registry_listener registry_listener = {
 		.global = registry_handle_global,
 		.global_remove = registry_handle_global_remove};
 
-void close_security_context()
+void close_security_context(void)
 {
 	if (close_fd[1] >= 0) {
 		close(close_fd[1]);

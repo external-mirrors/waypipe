@@ -511,7 +511,7 @@ extern char **environ;
 #ifdef HAS_SECURITY_CONTEXT
 int create_security_context(const char *sock_path, const char *engine,
 		const char *instance_id, const char *app_id);
-void close_security_context();
+void close_security_context(void);
 #endif
 
 int main(int argc, char **argv)
