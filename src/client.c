@@ -45,20 +45,11 @@ static inline uint32_t conntoken_version(uint32_t header)
 static int check_conn_header(uint32_t header, const struct main_config *config,
 		char *err, size_t err_size)
 {
-	if ((header >> 16) != WAYPIPE_PROTOCOL_VERSION) {
-		const char *endian_warning = "";
-		if ((header & CONN_FIXED_BIT) == 0 &&
-				(header & CONN_UNSET_BIT) != 0) {
-			endian_warning =
-					" It is also possible that server endianness does not match client";
-		}
-
+	if ((header & CONN_FIXED_BIT) == 0 && (header & CONN_UNSET_BIT) != 0) {
 		snprintf(err, err_size,
 				"Waypipe client is rejecting connection header %08" PRIx32
-				"; as Waypipe server (application-side) protocol version (%u) is incompatible with Waypipe client protocol version (%u, from waypipe %s). Check that both sides have compatible versions of Waypipe.%s",
-				header, conntoken_version(header),
-				WAYPIPE_PROTOCOL_VERSION, WAYPIPE_VERSION,
-				endian_warning);
+				"; it is either garbage or there was a wire protocol endianness mismatch.",
+				header);
 		return -1;
 	}
 
@@ -67,6 +58,19 @@ static int check_conn_header(uint32_t header, const struct main_config *config,
 	if (!config) {
 		return 0;
 	}
+
+	/* Earlier versions strictly required a protocol version match; now
+	 * there is a protocol version negotiation where waypipe-server sends
+	 * its desired version, and if this is not the minimum, the
+	 * waypipe-client's first message in reply will acknowledge that
+	 * version. To ensure newer clients still work with older Waypipe (that
+	 * checked bits 16-31), the version field is now extracted from bits 3-6
+	 * and 16-23.
+	 */
+	uint32_t version =
+			(((header >> 16) & 0xff) << 4) | ((header >> 3) & 0xf);
+	wp_debug("Waypipe server is requesting protocol version %u; using default version 16",
+			version);
 
 	/* For now, reject mismatches in compression format and video coding
 	 * setting, and print an error. Adopting whatever the server asks for
