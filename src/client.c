@@ -37,11 +37,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-static inline uint32_t conntoken_version(uint32_t header)
-{
-	return header >> 16;
-}
-
 static int check_conn_header(uint32_t header, const struct main_config *config,
 		char *err, size_t err_size)
 {
