@@ -1,5 +1,6 @@
 #include "security-context-v1-protocol.h"
 #include "util.h"
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
