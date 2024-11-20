@@ -112,7 +112,9 @@ endif
 
 subdir('protocols')
 subdir('src')
-subdir('test')
+if get_option('tests')
+	subdir('test')
+endif
 
 scdoc = dependency('scdoc', version: '>=1.9.4', native: true, required: get_option('man-pages'))
 if scdoc.found()
