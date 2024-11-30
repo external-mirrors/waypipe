@@ -118,7 +118,7 @@ def get_child_process(proc_pid, expected_name, sub_test_name):
     if psutil is not None:
         # assuming pid has not been recycled/duplicated
         proc = psutil.Process(proc_pid)
-        if proc.name() == "waypipe":
+        if proc.name() == "waypipe-c":
             for i in range(5):
                 kids = proc.children()
                 if len(kids) > 0:

@@ -527,7 +527,7 @@ int main(int argc, char **argv)
 	char *comp_string = NULL;
 	char *nthread_string = NULL;
 	char *wayland_display = NULL;
-	char *waypipe_binary = "waypipe";
+	char *waypipe_binary = "waypipe-c";
 	char *control_path = NULL;
 	char *socketpath = NULL;
 	uint32_t bench_test_size = (1u << 22) + 13;

@@ -175,7 +175,7 @@ lib_waypipe_src = static_library(
 )
 
 waypipe_prog = executable(
-	'waypipe',
+	'waypipe-c',
 	['waypipe.c', 'bench.c', 'client.c', 'server.c'],
 	link_with: lib_waypipe_src,
 	install: true
