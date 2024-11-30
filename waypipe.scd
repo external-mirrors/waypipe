@@ -10,11 +10,10 @@ waypipe - A transparent proxy for Wayland applications
 
 *waypipe* [options...] *client*++
 *waypipe* [options...] *server* -- _command..._++
-*waypipe* *recon* _control_pipe_ _new_socket_path_++
-*waypipe* *bench* _bandwidth_++
+*waypipe* *bench*++
 *waypipe* [*--version*] [*-h*, *--help*]
 
-\[options...\] = [*-c*, *--compress* C] [*-d*, *--debug*] [*-n*, *--no-gpu*] [*-o*, *--oneshot*] [*-s*, *--socket* S] [*--allow-tiled*] [*--control* C] [*--display* D] [*--drm-node* R] [*--remote-node* R] [*--remote-bin* R] [*--login-shell*] [*--threads* T] [*--title-prefix* P] [*--unlink-socket*] [*--video*[=V]] [*--vsock*]
+\[options...\] = [*-c*, *--compress* C] [*-d*, *--debug*] [*-n*, *--no-gpu*] [*-o*, *--oneshot*] [*-s*, *--socket* S] [*--display* D] [*--drm-node* R] [*--remote-node* R] [*--remote-bin* R] [*--login-shell*] [*--threads* T] [*--title-prefix* P] [*--unlink-socket*] [*--video* V] [*--vsock*] [*--secctx S*]
 
 
 # DESCRIPTION
@@ -39,14 +38,9 @@ try to connect to its matching *waypipe client* socket (by default
 _/tmp/waypipe-server.sock_) and try to forward all the Wayland clients
 that connect to fake compositor socket to the matching *waypipe client*.
 
-The *waypipe recon* mode is used to reconnect a *waypipe server* instance
-which has had a control pipe (option *--control*) set. The new socket path
-should indicate a Unix socket whose connections are forwarded to the *waypipe
-client* that the *waypipe server* was initially connected to.
-
-The *waypipe bench* mode can be used to estimate, given a specific
-connection _bandwidth_ in MB/sec, which compression options produce the
-lowest latency. It tests two synthetic images, one made to be roughly as
+The *waypipe bench* mode can be used to estimate which compression options
+produce the lowest latency, for a given connection bandwidth and number of
+threads. It tests two synthetic images, one made to be roughly as
 compressible as images containing text, and one made to be roughly as
 compressible as images containing pictures.
 
@@ -90,21 +84,6 @@ compressible as images containing pictures.
 	support, ability to transfer DMABUFs, video compression support, VAAPI
 	hardware video de/encoding support.
 
-*--allow-tiled*
-	By default, waypipe filters out all advertised DMABUF formats which have
-	format layout modifiers, as CPU access to these formats may be very slow.
-	Setting this flag disables the filtering. Since tiled images often permit
-	faster GPU operations, most OpenGL applications will select tiling modifiers
-	when they are available.
-
-*--control C*
-	For server or ssh mode, provide the path to the "control pipe" that will
-	be created the the server. Writing (with *waypipe recon C T*, or
-	'echo -n T > C') a new socket path to this pipe will make the server
-	instance replace all running connections with connections to the new
-	Unix socket. The new socket should ultimately forward data to the same
-	waypipe client that the server was connected to before.
-
 *--display D*
 	For server or ssh mode, provide _WAYLAND_DISPLAY_ and let waypipe configure
 	its Wayland display socket to have a matching path. (If *D* is not an
@@ -142,20 +121,13 @@ compressible as images containing pictures.
 *--unlink-socket*
 	Only for server mode; on shutdown, unlink the Unix socket that waypipe connects to.
 
-*--video[=V]*
+*--video V*
 	Compress specific DMABUF formats using a lossy video codec. Opaque, 10-bit, and
 	multiplanar formats, among others, are not supported. *V* is a comma separated 
 	list of options to control the video encoding. Using the *--video* flag without
 	setting any options is equivalent to using the default setting of:
-	*--video=sw,bpf=120000,h264*. Later options supersede earlier ones.
-	
-	*sw*
-		Use software encoding and decoding.
-	
-	*hw*
-		Use hardware (VAAPI) encoding and decoding, if available. This can be finicky
-		and may only work with specific window buffer formats and sizes.
-		
+	*--video=h264,bpf=120000*. Later options supersede earlier ones.
+
 	*h264*
 		Use H.264 encoded video.
 		
@@ -167,9 +139,6 @@ compressible as images containing pictures.
 		*B* can be written as an integer or with exponential notation; thus
 		*--video=bpf=7.5e5* is equivalent to *--video=bpf=750000*.
 
-*--hwvideo*
-	Deprecated option, equivalent to --video=hw .
-
 *--vsock*
 	Use vsock instead of unix sockets. This is used when waypipe is running in
 	virtual machines. With this option enabled specify a CID and a port number in *S*.
@@ -179,6 +148,11 @@ compressible as images containing pictures.
 *--secctx S*
 	Enable the Wayland security context protocol (client or ssh modes). Specify
 	an application ID *S* that will be attached to the security context.
+
+*--control C*++
+*--hwvideo*++
+*--allow-tiled*
+	Options present in older versions of Waypipe that were removed.
 
 # EXAMPLE 
 
@@ -253,35 +227,6 @@ Instead, one can use _~/.ssh/environment_, or use the *--remote-bin* option to
 change the remote Waypipe instance to a shell script that sets the environment
 before running the actual *waypipe* program.
 
-Waypipe has support for reconnecting a *waypipe client* and a *waypipe server*
-instance when whatever was used to transfer data between their sockets fails.
-For this to work, waypipe must still be running on both sides of the connection.
-As the *waypipe ssh* wrapper will automatically close both the *waypipe client*
-and the *waypipe server* when the connection fails, the client and server modes
-must be run seprately. For example, to persistently forward applications running
-on server _rserv_ to a local Wayland compositor running on _lserv_, one would
-first set up a waypipe client instance on _lserv_,
-
-```
-	waypipe -s /tmp/waypipe.sock client &
-```
-
-and on server _rserv_, establish socket forwarding and run the server
-
-```
-	ssh -fN -L /tmp/waypipe-lserv.sock:/tmp/waypipe.sock user@lserv
-	waypipe -s /tmp/waypipe-lserv.sock --control /tmp/ctrl-lserv.pipe \\
-		--display wayland-lserv server -- sleep inf &
-```
-
-then set _WAYLAND_DISPLAY=wayland-lserv_ and run the desired applications.
-When the ssh forwarding breaks, on _rserv_, reconnect with
-
-```
-	ssh -fN -L /tmp/waypipe-lserv-2.sock:/tmp/waypipe.sock user@lserv
-	waypipe recon /tmp/ctrl-lserv.pipe /tmp/waypipe-lserv-2.sock
-```
-
 ## Running waypipe in virtual machines
 
 When running waypipe in virtual machines on the same host it is possible to use vsock
@@ -314,7 +259,6 @@ VMADDR_FLAG_TO_HOST flag for sibling communication by prefixing the CID with an 
 
 In this case all packets will be routed to host where they can be forwarded to another
 virtual machine with a vhost-device-vsock device or some other utility.
-
 
 # ENVIRONMENT
 
