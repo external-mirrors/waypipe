@@ -9,42 +9,42 @@ fn_list = join_paths(meson.current_source_dir(), 'function_list.txt')
 # b) keep the minimum build complexity for waypipe low
 # c) be able to relay through newer protocols than are default on a system
 protocols = [
-	'wayland.xml',
-	'xdg-shell.xml',
-	'presentation-time.xml',
-	'linux-dmabuf-v1.xml',
-	'gtk-primary-selection.xml',
-	'input-method-unstable-v2.xml',
-	'primary-selection-unstable-v1.xml',
-	'virtual-keyboard-unstable-v1.xml',
-	'wlr-screencopy-unstable-v1.xml',
-	'wlr-export-dmabuf-unstable-v1.xml',
-	'wlr-data-control-unstable-v1.xml',
-	'wlr-gamma-control-unstable-v1.xml',
-	'wayland-drm.xml',
+    'wayland.xml',
+    'xdg-shell.xml',
+    'presentation-time.xml',
+    'linux-dmabuf-v1.xml',
+    'gtk-primary-selection.xml',
+    'input-method-unstable-v2.xml',
+    'primary-selection-unstable-v1.xml',
+    'virtual-keyboard-unstable-v1.xml',
+    'wlr-screencopy-unstable-v1.xml',
+    'wlr-export-dmabuf-unstable-v1.xml',
+    'wlr-data-control-unstable-v1.xml',
+    'wlr-gamma-control-unstable-v1.xml',
+    'wayland-drm.xml',
 ]
 
 protocol_folder = meson.project_source_root() / 'protocols/'
 
 abs_protocols = []
 foreach xml : protocols
-        abs_protocols += join_paths(protocol_folder, xml)
+    abs_protocols += join_paths(protocol_folder, xml)
 endforeach
 
 protocols_src = []
 protocols_src += custom_target(
-	'protocol code',
-	output: 'protocols.c',
-	input: abs_protocols,
-	depend_files: [fn_list, symgen_path],
-	command: [python3, symgen_path, 'data', fn_list, '@OUTPUT@', '@INPUT@'],
+    'protocol code',
+    output: 'protocols.c',
+    input: abs_protocols,
+    depend_files: [fn_list, symgen_path],
+    command: [python3, symgen_path, 'data', fn_list, '@OUTPUT@', '@INPUT@'],
 )
 protocols_src += custom_target(
-	'protocol header',
-	output: 'protocols.h',
-	input: abs_protocols,
-	depend_files: [fn_list, symgen_path],
-	command: [python3, symgen_path, 'header', fn_list, '@OUTPUT@', '@INPUT@'],
+    'protocol header',
+    output: 'protocols.h',
+    input: abs_protocols,
+    depend_files: [fn_list, symgen_path],
+    command: [python3, symgen_path, 'header', fn_list, '@OUTPUT@', '@INPUT@'],
 )
 
 # For use in test
