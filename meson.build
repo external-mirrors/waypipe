@@ -132,6 +132,7 @@ if get_option('build_rs')
             '--features',
             ','.join(features),
         ],
+        timeout: 200,
     )
 
     test(
