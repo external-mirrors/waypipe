@@ -9,20 +9,21 @@ read unused
 
 mkdir -p build-minimal
 cd build-minimal
+root=../waypipe-c
 
 echo "Generating code..."
-python3 ../protocols/symgen.py data ../protocols/function_list.txt protocols.c \
+python3 $root/protocols/symgen.py data $root/protocols/function_list.txt protocols.c \
     ../protocols/*.xml
-python3 ../protocols/symgen.py header ../protocols/function_list.txt protocols.h \
+python3 $root/protocols/symgen.py header $root/protocols/function_list.txt protocols.h \
     ../protocols/*.xml
 echo '#define WAYPIPE_VERSION "minimal"' > config-waypipe.h
 
 echo "Compiling..."
-gcc -D_DEFAULT_SOURCE -Os -I. -I../protocols/ -lpthread -o waypipe protocols.c \
-    ../src/bench.c ../src/client.c ../src/dmabuf.c ../src/handlers.c \
-    ../src/interval.c ../src/kernel.c ../src/mainloop.c ../src/parsing.c \
-    ../src/platform.c ../src/server.c ../src/shadow.c ../src/util.c \
-    ../src/video.c ../src/waypipe.c
+gcc -D_DEFAULT_SOURCE -Os -I. -I$root/protocols/ -lpthread -o waypipe protocols.c \
+    $root/bench.c $root/client.c $root/dmabuf.c $root/handlers.c \
+    $root/interval.c $root/kernel.c $root/mainloop.c $root/parsing.c \
+    $root/platform.c $root/server.c $root/shadow.c $root/util.c \
+    $root/video.c $root/waypipe.c
 
 cd ..
 echo "Done. See ./build-minimal/waypipe"

@@ -139,7 +139,7 @@ if __name__ == "__main__":
     sources = sys.argv[3:]
     assert dest.endswith(".h")
     dest_shortname = dest[:-2]
-    header_flag = dest_shortname.upper().replace("/", "_") + "_H"
+    header_flag = dest_shortname.upper().replace("/", "_").replace("-", "_") + "_H"
 
     export_list = open(req_file).read().split("\n")
 

@@ -24,24 +24,28 @@ protocols = [
 	'wayland-drm.xml',
 ]
 
+protocol_folder = meson.project_source_root() / 'protocols/'
+
+abs_protocols = []
+foreach xml : protocols
+        abs_protocols += join_paths(protocol_folder, xml)
+endforeach
+
 protocols_src = []
 protocols_src += custom_target(
 	'protocol code',
 	output: 'protocols.c',
-	input: protocols,
+	input: abs_protocols,
 	depend_files: [fn_list, symgen_path],
 	command: [python3, symgen_path, 'data', fn_list, '@OUTPUT@', '@INPUT@'],
 )
 protocols_src += custom_target(
 	'protocol header',
 	output: 'protocols.h',
-	input: protocols,
+	input: abs_protocols,
 	depend_files: [fn_list, symgen_path],
 	command: [python3, symgen_path, 'header', fn_list, '@OUTPUT@', '@INPUT@'],
 )
 
 # For use in test
-abs_protocols = []
-foreach xml : protocols
-        abs_protocols += join_paths(meson.current_source_dir(), xml)
-endforeach
+
