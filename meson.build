@@ -127,7 +127,7 @@ if scdoc.found()
 		input: 'waypipe.scd',
 		output: 'waypipe.1',
 		command: [
-			sh, '-c', '@0@ < @INPUT@ > @1@'.format(scdoc_prog.path(), 'waypipe.1')
+			sh, '-c', '@0@ < @INPUT@ > @1@'.format(scdoc_prog.full_path(), 'waypipe.1')
 		],
 		install: true,
 		install_dir: '@0@/man1'.format(mandir)

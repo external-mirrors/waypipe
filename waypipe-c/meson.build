@@ -12,7 +12,7 @@ config_data.set('WAYPIPE_VERSION', version)
 # Make build reproducible if possible
 python3 = import('python').find_installation()
 prefix_finder = 'import os.path; print(os.path.join(os.path.relpath(\'@0@\', \'@1@\'),\'\'))'
-r = run_command(python3, '-c', prefix_finder.format(meson.source_root(), meson.build_root()))
+r = run_command(python3, '-c', prefix_finder.format(meson.current_source_dir(), meson.project_build_root()))
 relative_dir = r.stdout().strip()
 if cc.has_argument('-fmacro-prefix-map=/prefix/to/hide=')
 	add_project_arguments(
@@ -83,7 +83,7 @@ endif
 
 waypipe_includes = [include_directories('protocols'), include_directories('.')]
 if libdrm.found()
-	waypipe_includes += include_directories(libdrm.get_pkgconfig_variable('includedir'))
+	waypipe_includes += include_directories(libdrm.get_variable(pkgconfig: 'includedir'))
 endif
 
 subdir('protocols')

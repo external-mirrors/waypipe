@@ -81,7 +81,7 @@ weston_dep = dependency('weston', required: false)
 testprog_paths = []
 if weston_dep.found()
 	# Sometimes weston's test clients are installed here instead
-	testprog_paths += weston_dep.get_pkgconfig_variable('libexecdir')
+	testprog_paths += weston_dep.get_variable(pkgconfig: 'libexecdir')
 endif
 weston_prog = find_program('weston', required: false)
 base_envlist = [
@@ -90,7 +90,7 @@ base_envlist = [
 
 headless_envlist = base_envlist
 if weston_prog.found()
-	headless_envlist += 'TEST_WESTON_PATH=@0@'.format(weston_prog.path())
+	headless_envlist += 'TEST_WESTON_PATH=@0@'.format(weston_prog.full_path())
 endif
 test_programs = [
 	['TEST_WESTON_SHM_PATH', 'weston-simple-shm'],
@@ -112,7 +112,7 @@ foreach t : test_programs
 	endforeach
 	if test_prog.found()
 		have_test_progs = true
-		headless_envlist += '@0@=@1@'.format(t[0], test_prog.path())
+		headless_envlist += '@0@=@1@'.format(t[0], test_prog.full_path())
 	endif
 endforeach
 
@@ -123,7 +123,7 @@ endif
 
 sleep_prog = find_program('sleep')
 startup_envlist = base_envlist
-startup_envlist += ['TEST_SLEEP_PATH=' + sleep_prog.path()]
+startup_envlist += ['TEST_SLEEP_PATH=' + sleep_prog.full_path()]
 startup_envlist += ['TEST_FAKE_SSH_PATH=' + fake_ssh.full_path()]
 test_startup = join_paths(meson.current_source_dir(), 'startup_failure.py')
 test('That waypipe exits cleanly given a bad setup',
