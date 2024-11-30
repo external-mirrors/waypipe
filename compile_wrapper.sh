@@ -8,5 +8,5 @@ if [ $# -ne 5 ] ; then
     echo "Incorrect number of arguments: $#"
     exit 1
 fi
-cargo build --frozen -v --profile $1 --manifest-path $2 --no-default-features --target-dir $3 --features $4
-cp $3/$1/waypipe $5
+cargo build --frozen -v --profile "$1" --manifest-path "$2" --no-default-features --target-dir "$3" --features "$4"
+cp "$3/$1/waypipe" "$5"
