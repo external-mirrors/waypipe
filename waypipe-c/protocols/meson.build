@@ -12,7 +12,7 @@ protocols = [
 	'wayland.xml',
 	'xdg-shell.xml',
 	'presentation-time.xml',
-	'linux-dmabuf-unstable-v1.xml',
+	'linux-dmabuf-v1.xml',
 	'gtk-primary-selection.xml',
 	'input-method-unstable-v2.xml',
 	'primary-selection-unstable-v1.xml',
