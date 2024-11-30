@@ -387,7 +387,6 @@ dependencies = [
  "ash",
  "clap",
  "getrandom",
- "libloading",
  "log",
  "nix",
  "waypipe-ffmpeg-wrapper",
