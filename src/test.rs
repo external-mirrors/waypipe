@@ -288,6 +288,9 @@ fn test_interact(
                     Err(Errno::EINTR) | Err(Errno::EAGAIN) => {
                         println!("eintr");
                     }
+                    Err(Errno::EPIPE) | Err(Errno::ECONNRESET) => {
+                        recv.eof = true;
+                    }
                     Err(e) => {
                         panic!("{:?}", e);
                     }
