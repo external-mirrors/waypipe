@@ -1523,7 +1523,7 @@ pub fn process_way_msg(
                 },
             )?;
 
-            copy_msg(msg, dst);
+            copy_msg_tag_fd(msg, dst, from_channel)?;
             Ok(ProcMsg::Done)
         }
         (
@@ -1723,7 +1723,7 @@ pub fn process_way_msg(
                         write_req_zwp_linux_buffer_params_v1_add(
                             dst,
                             object_id,
-                            true,
+                            false,
                             plane.plane_idx,
                             plane.offset,
                             plane.stride,
@@ -1776,7 +1776,7 @@ pub fn process_way_msg(
                     write_req_zwp_linux_buffer_params_v1_add(
                         dst,
                         object_id,
-                        false,
+                        true,
                         /* plane idx */ 0,
                         /* offset */ 0,
                         (bpp * width as usize) as u32, // stride as if tightly packed
@@ -1846,7 +1846,7 @@ pub fn process_way_msg(
                         write_req_zwp_linux_buffer_params_v1_add(
                             dst,
                             object_id,
-                            true,
+                            false,
                             plane.plane_idx,
                             plane.offset,
                             plane.stride,
@@ -1899,7 +1899,7 @@ pub fn process_way_msg(
                     write_req_zwp_linux_buffer_params_v1_add(
                         dst,
                         object_id,
-                        false,
+                        true,
                         /* plane idx */ 0,
                         /* offset */ 0,
                         (bpp * width as usize) as u32, // stride as if tightly packed
@@ -2194,7 +2194,7 @@ pub fn process_way_msg(
                         write_evt_zwp_linux_dmabuf_feedback_v1_format_table(
                             dst,
                             object_id,
-                            true,
+                            false,
                             new_size.try_into().unwrap(),
                         )
                     }
@@ -2224,7 +2224,7 @@ pub fn process_way_msg(
                         y.push(sfd);
 
                         write_evt_zwp_linux_dmabuf_feedback_v1_format_table(
-                            dst, object_id, false, table_size,
+                            dst, object_id, true, table_size,
                         );
 
                         feedback.format_table = parse_format_table(&data[..]);

@@ -873,7 +873,7 @@ fn proto_keymap() {
                         write_evt_wl_keyboard_keymap(
                             dst,
                             keyboard,
-                            true,
+                            false,
                             1,
                             source_data.len() as _,
                         );
@@ -1013,7 +1013,7 @@ fn proto_pipe_write() {
             write_req_wl_data_device_set_selection(dst, dev, source, 99);
         }),
         build_msgs(|dst| {
-            write_evt_wl_data_source_send(dst, source, true, mime);
+            write_evt_wl_data_source_send(dst, source, false, mime);
         }),
     ];
     let ex_prim: &[Vec<u8>] = &[
@@ -1033,7 +1033,7 @@ fn proto_pipe_write() {
             write_req_zwp_primary_selection_device_v1_set_selection(dst, dev, source, 99);
         }),
         build_msgs(|dst| {
-            write_evt_zwp_primary_selection_source_v1_send(dst, source, true, mime);
+            write_evt_zwp_primary_selection_source_v1_send(dst, source, false, mime);
         }),
     ];
     let ex_data: &[Vec<u8>] = &[
@@ -1053,7 +1053,7 @@ fn proto_pipe_write() {
             write_req_ext_data_control_device_v1_set_selection(dst, dev, source);
         }),
         build_msgs(|dst| {
-            write_evt_ext_data_control_source_v1_send(dst, source, true, mime);
+            write_evt_ext_data_control_source_v1_send(dst, source, false, mime);
         }),
     ];
     let ex_gtk: &[Vec<u8>] = &[
@@ -1073,7 +1073,7 @@ fn proto_pipe_write() {
             write_req_gtk_primary_selection_device_set_selection(dst, dev, source, 99);
         }),
         build_msgs(|dst| {
-            write_evt_gtk_primary_selection_source_send(dst, source, true, mime);
+            write_evt_gtk_primary_selection_source_send(dst, source, false, mime);
         }),
     ];
     let ex_wlr: &[Vec<u8>] = &[
@@ -1093,7 +1093,7 @@ fn proto_pipe_write() {
             write_req_zwlr_data_control_device_v1_set_selection(dst, dev, source);
         }),
         build_msgs(|dst| {
-            write_evt_zwlr_data_control_source_v1_send(dst, source, true, mime);
+            write_evt_zwlr_data_control_source_v1_send(dst, source, false, mime);
         }),
     ];
 
@@ -1119,7 +1119,7 @@ fn proto_pipe_write() {
             write_evt_wl_data_device_selection(dst, dev, offer);
         }),
         build_msgs(|dst| {
-            write_req_wl_data_offer_receive(dst, offer, true, mime);
+            write_req_wl_data_offer_receive(dst, offer, false, mime);
         }),
     ];
     let ex2_prim: &[Vec<u8>] = &[
@@ -1141,7 +1141,7 @@ fn proto_pipe_write() {
             write_evt_zwp_primary_selection_device_v1_selection(dst, dev, offer);
         }),
         build_msgs(|dst| {
-            write_req_zwp_primary_selection_offer_v1_receive(dst, offer, true, mime);
+            write_req_zwp_primary_selection_offer_v1_receive(dst, offer, false, mime);
         }),
     ];
     let ex2_data: &[Vec<u8>] = &[
@@ -1163,7 +1163,7 @@ fn proto_pipe_write() {
             write_evt_ext_data_control_device_v1_selection(dst, dev, offer);
         }),
         build_msgs(|dst| {
-            write_req_ext_data_control_offer_v1_receive(dst, offer, true, mime);
+            write_req_ext_data_control_offer_v1_receive(dst, offer, false, mime);
         }),
     ];
     let ex2_gtk: &[Vec<u8>] = &[
@@ -1185,7 +1185,7 @@ fn proto_pipe_write() {
             write_evt_gtk_primary_selection_device_selection(dst, dev, offer);
         }),
         build_msgs(|dst| {
-            write_req_gtk_primary_selection_offer_receive(dst, offer, true, mime);
+            write_req_gtk_primary_selection_offer_receive(dst, offer, false, mime);
         }),
     ];
     let ex2_wlr: &[Vec<u8>] = &[
@@ -1207,7 +1207,7 @@ fn proto_pipe_write() {
             write_evt_zwlr_data_control_device_v1_selection(dst, dev, offer);
         }),
         build_msgs(|dst| {
-            write_req_zwlr_data_control_offer_v1_receive(dst, offer, true, mime);
+            write_req_zwlr_data_control_offer_v1_receive(dst, offer, false, mime);
         }),
     ];
 
@@ -1399,7 +1399,7 @@ fn proto_shm_buffer() {
         /* First, simple test case: an empty shm pool, never modified */
         let empty_fd = make_file_with_contents(&[]).unwrap();
         let msg = build_msgs(|dst| {
-            write_req_wl_shm_create_pool(dst, shm, true, pool, 0);
+            write_req_wl_shm_create_pool(dst, shm, false, pool, 0);
         });
         let (rmsg, mut rfd) = ctx.prog_write(&msg[..], &[&empty_fd]).unwrap();
         assert!(rmsg.concat() == msg);
@@ -1429,7 +1429,7 @@ fn proto_shm_buffer() {
             }
             let buf_fd = make_file_with_contents(&data[..]).unwrap();
             let msgs = build_msgs(|dst| {
-                write_req_wl_shm_create_pool(dst, shm, true, pool, sz as i32);
+                write_req_wl_shm_create_pool(dst, shm, false, pool, sz as i32);
                 write_req_wl_shm_pool_create_buffer(
                     dst,
                     pool,
@@ -1495,7 +1495,7 @@ fn proto_shm_extend() {
             write_req_wl_registry_bind(dst, registry, 1, "wl_shm".as_bytes(), 2, shm);
             write_req_wl_registry_bind(dst, registry, 2, "wl_compositor".as_bytes(), 6, comp);
             write_req_wl_compositor_create_surface(dst, comp, surface);
-            write_req_wl_shm_create_pool(dst, shm, true, pool, 0);
+            write_req_wl_shm_create_pool(dst, shm, false, pool, 0);
         });
         let (rmsg, mut rfd) = ctx.prog_write(&msg[..], &[&pool_fd]).unwrap();
         assert!(rmsg.concat() == msg);
@@ -1611,7 +1611,7 @@ fn setup_linux_dmabuf(
         write_evt_zwp_linux_dmabuf_feedback_v1_format_table(
             dst,
             feedback,
-            true,
+            false,
             table.len() as u32,
         );
         write_evt_zwp_linux_dmabuf_feedback_v1_main_device(
@@ -1684,7 +1684,7 @@ fn proto_dmabuf() {
                     write_req_zwp_linux_buffer_params_v1_add(
                         dst,
                         params,
-                        true,
+                        false,
                         p.plane_idx,
                         p.offset,
                         p.stride,
@@ -1833,7 +1833,7 @@ fn create_dmabuf_and_copy(
             write_req_zwp_linux_buffer_params_v1_add(
                 dst,
                 params,
-                true,
+                false,
                 p.plane_idx,
                 p.offset,
                 p.stride,
@@ -2192,7 +2192,7 @@ fn proto_shm_damage() {
             let mut base = vec![0x80; file_sz];
             let buffer_fd = make_file_with_contents(&base).unwrap();
             let msg = build_msgs(|dst| {
-                write_req_wl_shm_create_pool(dst, shm, true, pool, file_sz as i32);
+                write_req_wl_shm_create_pool(dst, shm, false, pool, file_sz as i32);
                 write_req_wl_shm_pool_create_buffer(
                     dst,
                     pool,
@@ -2397,7 +2397,9 @@ fn proto_explicit_sync() {
                 manager,
             );
             write_req_wp_linux_drm_syncobj_manager_v1_get_surface(dst, manager, sync_surf, surface);
-            write_req_wp_linux_drm_syncobj_manager_v1_import_timeline(dst, manager, true, timeline);
+            write_req_wp_linux_drm_syncobj_manager_v1_import_timeline(
+                dst, manager, false, timeline,
+            );
         });
         let start_pt = 150;
         let (prog_timeline, timeline_fd) = vulkan_create_timeline(&vulk, start_pt).unwrap();
@@ -2542,7 +2544,7 @@ fn proto_many_fds() {
 
         let m = &build_msgs(|dst| {
             for (contents, _fd) in &files {
-                write_evt_wl_keyboard_keymap(dst, keyboard, true, 1, contents.len() as u32);
+                write_evt_wl_keyboard_keymap(dst, keyboard, false, 1, contents.len() as u32);
             }
         });
 

@@ -215,11 +215,11 @@ pub const OPCODE_EXT_DATA_CONTROL_SOURCE_V1_OFFER: MethodId = MethodId::Request(
 pub fn write_evt_ext_data_control_source_v1_send(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     mime_type: &[u8],
 ) {
     let l = length_evt_ext_data_control_source_v1_send(mime_type.len());
-    write_header(dst, for_id, l, 0, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 0, if tag_fds { 1 } else { 0 });
     write_string(dst, Some(mime_type));
 }
 pub fn length_evt_ext_data_control_source_v1_send(mime_type_len: usize) -> usize {
@@ -269,11 +269,11 @@ const EXT_DATA_CONTROL_SOURCE_V1: WaylandData = WaylandData {
 pub fn write_req_ext_data_control_offer_v1_receive(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     mime_type: &[u8],
 ) {
     let l = length_req_ext_data_control_offer_v1_receive(mime_type.len());
-    write_header(dst, for_id, l, 0, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 0, if tag_fds { 1 } else { 0 });
     write_string(dst, Some(mime_type));
 }
 pub fn length_req_ext_data_control_offer_v1_receive(mime_type_len: usize) -> usize {
@@ -793,11 +793,11 @@ const GTK_PRIMARY_SELECTION_DEVICE: WaylandData = WaylandData {
 pub fn write_req_gtk_primary_selection_offer_receive(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     mime_type: &[u8],
 ) {
     let l = length_req_gtk_primary_selection_offer_receive(mime_type.len());
-    write_header(dst, for_id, l, 0, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 0, if tag_fds { 1 } else { 0 });
     write_string(dst, Some(mime_type));
 }
 pub fn length_req_gtk_primary_selection_offer_receive(mime_type_len: usize) -> usize {
@@ -890,11 +890,11 @@ pub const OPCODE_GTK_PRIMARY_SELECTION_SOURCE_OFFER: MethodId = MethodId::Reques
 pub fn write_evt_gtk_primary_selection_source_send(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     mime_type: &[u8],
 ) {
     let l = length_evt_gtk_primary_selection_source_send(mime_type.len());
-    write_header(dst, for_id, l, 0, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 0, if tag_fds { 1 } else { 0 });
     write_string(dst, Some(mime_type));
 }
 pub fn length_evt_gtk_primary_selection_source_send(mime_type_len: usize) -> usize {
@@ -1254,7 +1254,7 @@ pub const OPCODE_ZWP_LINUX_BUFFER_PARAMS_V1_DESTROY: MethodId = MethodId::Reques
 pub fn write_req_zwp_linux_buffer_params_v1_add(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     plane_idx: u32,
     offset: u32,
     stride: u32,
@@ -1262,7 +1262,7 @@ pub fn write_req_zwp_linux_buffer_params_v1_add(
     modifier_lo: u32,
 ) {
     let l = length_req_zwp_linux_buffer_params_v1_add();
-    write_header(dst, for_id, l, 1, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 1, if tag_fds { 1 } else { 0 });
     write_u32(dst, plane_idx);
     write_u32(dst, offset);
     write_u32(dst, stride);
@@ -1446,11 +1446,11 @@ pub const OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_DONE: MethodId = MethodId::Event(0
 pub fn write_evt_zwp_linux_dmabuf_feedback_v1_format_table(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     size: u32,
 ) {
     let l = length_evt_zwp_linux_dmabuf_feedback_v1_format_table();
-    write_header(dst, for_id, l, 1, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 1, if tag_fds { 1 } else { 0 });
     write_u32(dst, size);
 }
 pub fn length_evt_zwp_linux_dmabuf_feedback_v1_format_table() -> usize {
@@ -1656,11 +1656,11 @@ pub const OPCODE_WP_LINUX_DRM_SYNCOBJ_MANAGER_V1_GET_SURFACE: MethodId = MethodI
 pub fn write_req_wp_linux_drm_syncobj_manager_v1_import_timeline(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     id: ObjId,
 ) {
     let l = length_req_wp_linux_drm_syncobj_manager_v1_import_timeline();
-    write_header(dst, for_id, l, 2, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 2, if tag_fds { 1 } else { 0 });
     write_obj(dst, id);
 }
 pub fn length_req_wp_linux_drm_syncobj_manager_v1_import_timeline() -> usize {
@@ -2106,11 +2106,11 @@ const ZWP_PRIMARY_SELECTION_DEVICE_V1: WaylandData = WaylandData {
 pub fn write_req_zwp_primary_selection_offer_v1_receive(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     mime_type: &[u8],
 ) {
     let l = length_req_zwp_primary_selection_offer_v1_receive(mime_type.len());
-    write_header(dst, for_id, l, 0, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 0, if tag_fds { 1 } else { 0 });
     write_string(dst, Some(mime_type));
 }
 pub fn length_req_zwp_primary_selection_offer_v1_receive(mime_type_len: usize) -> usize {
@@ -2203,11 +2203,11 @@ pub const OPCODE_ZWP_PRIMARY_SELECTION_SOURCE_V1_OFFER: MethodId = MethodId::Req
 pub fn write_evt_zwp_primary_selection_source_v1_send(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     mime_type: &[u8],
 ) {
     let l = length_evt_zwp_primary_selection_source_v1_send(mime_type.len());
-    write_header(dst, for_id, l, 0, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 0, if tag_fds { 1 } else { 0 });
     write_string(dst, Some(mime_type));
 }
 pub fn length_evt_zwp_primary_selection_source_v1_send(mime_type_len: usize) -> usize {
@@ -2257,11 +2257,11 @@ const ZWP_PRIMARY_SELECTION_SOURCE_V1: WaylandData = WaylandData {
 pub fn write_req_wp_security_context_manager_v1_create_listener(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     id: ObjId,
 ) {
     let l = length_req_wp_security_context_manager_v1_create_listener();
-    write_header(dst, for_id, l, 1, if from_channel { 0 } else { 2 });
+    write_header(dst, for_id, l, 1, if tag_fds { 2 } else { 0 });
     write_obj(dst, id);
 }
 pub fn length_req_wp_security_context_manager_v1_create_listener() -> usize {
@@ -3152,12 +3152,12 @@ impl TryFrom<u32> for WlShmFormat {
 pub fn write_req_wl_shm_create_pool(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     id: ObjId,
     size: i32,
 ) {
     let l = length_req_wl_shm_create_pool();
-    write_header(dst, for_id, l, 0, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 0, if tag_fds { 1 } else { 0 });
     write_obj(dst, id);
     write_i32(dst, size);
 }
@@ -3240,11 +3240,11 @@ const WL_BUFFER: WaylandData = WaylandData {
 pub fn write_req_wl_data_offer_receive(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     mime_type: &[u8],
 ) {
     let l = length_req_wl_data_offer_receive(mime_type.len());
-    write_header(dst, for_id, l, 1, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 1, if tag_fds { 1 } else { 0 });
     write_string(dst, Some(mime_type));
 }
 pub fn length_req_wl_data_offer_receive(mime_type_len: usize) -> usize {
@@ -3350,11 +3350,11 @@ pub const OPCODE_WL_DATA_SOURCE_OFFER: MethodId = MethodId::Request(0);
 pub fn write_evt_wl_data_source_send(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     mime_type: &[u8],
 ) {
     let l = length_evt_wl_data_source_send(mime_type.len());
-    write_header(dst, for_id, l, 1, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 1, if tag_fds { 1 } else { 0 });
     write_string(dst, Some(mime_type));
 }
 pub fn length_evt_wl_data_source_send(mime_type_len: usize) -> usize {
@@ -4069,12 +4069,12 @@ const WL_POINTER: WaylandData = WaylandData {
 pub fn write_evt_wl_keyboard_keymap(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     format: u32,
     size: u32,
 ) {
     let l = length_evt_wl_keyboard_keymap();
-    write_header(dst, for_id, l, 0, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 0, if tag_fds { 1 } else { 0 });
     write_u32(dst, format);
     write_u32(dst, size);
 }
@@ -4533,11 +4533,11 @@ pub const OPCODE_ZWLR_DATA_CONTROL_SOURCE_V1_OFFER: MethodId = MethodId::Request
 pub fn write_evt_zwlr_data_control_source_v1_send(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     mime_type: &[u8],
 ) {
     let l = length_evt_zwlr_data_control_source_v1_send(mime_type.len());
-    write_header(dst, for_id, l, 0, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 0, if tag_fds { 1 } else { 0 });
     write_string(dst, Some(mime_type));
 }
 pub fn length_evt_zwlr_data_control_source_v1_send(mime_type_len: usize) -> usize {
@@ -4587,11 +4587,11 @@ const ZWLR_DATA_CONTROL_SOURCE_V1: WaylandData = WaylandData {
 pub fn write_req_zwlr_data_control_offer_v1_receive(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
     mime_type: &[u8],
 ) {
     let l = length_req_zwlr_data_control_offer_v1_receive(mime_type.len());
-    write_header(dst, for_id, l, 0, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 0, if tag_fds { 1 } else { 0 });
     write_string(dst, Some(mime_type));
 }
 pub fn length_req_zwlr_data_control_offer_v1_receive(mime_type_len: usize) -> usize {
@@ -4724,10 +4724,10 @@ const ZWLR_GAMMA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
 pub fn write_req_zwlr_gamma_control_v1_set_gamma(
     dst: &mut &mut [u8],
     for_id: ObjId,
-    from_channel: bool,
+    tag_fds: bool,
 ) {
     let l = length_req_zwlr_gamma_control_v1_set_gamma();
-    write_header(dst, for_id, l, 0, if from_channel { 0 } else { 1 });
+    write_header(dst, for_id, l, 0, if tag_fds { 1 } else { 0 });
 }
 pub fn length_req_zwlr_gamma_control_v1_set_gamma() -> usize {
     8

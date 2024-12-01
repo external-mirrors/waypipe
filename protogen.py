@@ -253,9 +253,9 @@ def write_method_write(meth_name, meth_num, method, write):
         "    let l = length_{}({});".format(meth_name, ", ".join(length_args)),
     ]
     if num_fds > 0:
-        args.append("from_channel: bool")
+        args.append("tag_fds: bool")
         lines.append(
-            "    write_header(dst, for_id, l, {}, if from_channel {{ 0 }} else {{ {} }});".format(
+            "    write_header(dst, for_id, l, {}, if tag_fds {{ {} }} else {{ 0 }});".format(
                 meth_num, num_fds
             )
         )
