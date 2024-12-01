@@ -1515,34 +1515,42 @@ pub const VERSION_STRING: &str = concat!(
 );
 
 fn main() -> Result<(), String> {
-    let matches = Command::new(env!("CARGO_PKG_NAME"))
+    let command = Command::new(env!("CARGO_PKG_NAME"))
         .disable_help_subcommand(true)
         .subcommand_required(true)
         .help_expected(true)
-        .flatten_help(true)
-        .about("A proxy to remotely use Wayland protocol applications")
-        .version(VERSION_STRING)
+        .flatten_help(false)
+        .subcommand_help_heading("Modes")
+        .subcommand_value_name("MODE")
+        .about(
+            "A proxy to remotely use Wayland protocol applications\n\
+            Example: waypipe ssh user@server weston-terminal\n\
+            See `man 1 waypipe` for detailed help.",
+        )
+        .next_line_help(false)
+        .version(VERSION_STRING);
+    let command = command
         .subcommand(
             Command::new("ssh")
                 .about("Wrap an ssh invocation to run Waypipe on both ends of the connection, and\nautomatically forward Wayland applications")
                 .disable_help_flag(true)
                 // collect all following arguments
-                .arg(Arg::new("ssh_args").num_args(0..).trailing_var_arg(true).allow_hyphen_values(true).help("Arguments for ssh")),
+                .arg(Arg::new("ssh_args").num_args(0..).trailing_var_arg(true).allow_hyphen_values(true).help("Arguments for ssh"))
+        ).subcommand(
+            Command::new("server")
+            .about("Run remotely to run a process and forward application data through a socket\nto a matching `waypipe client` instance")
+            .disable_help_flag(true)
+            // collect all following arguments as the command
+            .arg(Arg::new("command").num_args(0..).trailing_var_arg(true).help("Command to execute")
+            .allow_hyphen_values(true) )
         ).subcommand(
             Command::new("client")
                 .disable_help_flag(true)
-                .about("Run locally to create a Unix socket to which `waypipe server` instances can connect")
+                .about("Run locally to set up a Unix socket that `waypipe server` can connect to")
                 // forbid all following arguments
         ).subcommand(
-            Command::new("server")
-                .about("Run remotely to run a process and forward application data through a socket\nto a matching `waypipe client` instance")
-                .disable_help_flag(true)
-                // collect all following arguments as the command
-                .arg(Arg::new("command").num_args(0..).trailing_var_arg(true).help("Command to execute")
-                    .allow_hyphen_values(true) ),
-        ).subcommand(
             Command::new("bench")
-                .about("Estimate the best compression level used to send data, for a given connection bandwidth")
+                .about("Estimate the best compression level used to send data, for each bandwidth")
                 .disable_help_flag(true)
         ).subcommand(
             Command::new("server-conn")
@@ -1550,14 +1558,8 @@ fn main() -> Result<(), String> {
         ).subcommand(
             Command::new("client-conn")
                 .disable_help_flag(true).hide(true)
-        )
-        .arg(
-            Arg::new("debug")
-                .short('d')
-                .long("debug")
-                .help("Print debug messages")
-                .action(ArgAction::SetTrue),
-        )
+        );
+    let command = command
         .arg(
             Arg::new("compress")
                 .short('c')
@@ -1568,6 +1570,20 @@ fn main() -> Result<(), String> {
                 .default_value("lz4"),
         )
         .arg(
+            Arg::new("debug")
+                .short('d')
+                .long("debug")
+                .help("Print debug messages")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("no-gpu")
+                .short('n')
+                .long("no-gpu")
+                .help("Block protocols using GPU memory transfers (via DMABUFs)")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("oneshot")
                 .short('o')
                 .long("oneshot")
@@ -1576,51 +1592,60 @@ fn main() -> Result<(), String> {
         )
         .arg(
             Arg::new("socket")
-            .short('s')
-            .long("socket")
-            .value_name("path")
-            .help("Set the socket path to either create or connect to.\n\
+                .short('s')
+                .long("socket")
+                .value_name("path")
+                .help(
+                    "Set the socket path to either create or connect to.\n\
                   - server default: /tmp/waypipe-server.sock\n\
                   - client default: /tmp/waypipe-client.sock\n\
                   - ssh: sets the prefix for the socket path\n\
-                  - vsock: [[s]CID:]port")
-            // todo: decide value parser based on --vsock flag?
-            .value_parser(value_parser!(OsString)),
+                  - vsock: [[s]CID:]port",
+                )
+                // todo: decide value parser based on --vsock flag?
+                .value_parser(value_parser!(OsString)),
         )
         .arg(
             Arg::new("display")
                 .long("display")
                 .value_name("display")
-                .help("server,ssh: set the Wayland display name or path")
+                .help("server,ssh: Set the Wayland display name or path")
                 .value_parser(value_parser!(PathBuf)),
-        )
-        .arg(
-            Arg::new("login-shell")
-                .long("login-shell")
-                .help("server: if server command is empty, run a login shell")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("remote-bin")
-                .long("remote-bin")
-                .value_name("path")
-                .help("ssh: set the remote Waypipe binary to use")
-                .value_parser(value_parser!(PathBuf))
-                .default_value(env!("CARGO_PKG_NAME")),
         )
         .arg(
             Arg::new("drm-node")
                 .long("drm-node")
                 .value_name("path")
-                .help("set preferred DRM node to use; may be ignored in client/ssh modes")
+                .help("Set preferred DRM node (may be ignored in ssh/client modes)")
                 .value_parser(value_parser!(PathBuf)),
         )
         .arg(
             Arg::new("remote-node")
                 .long("remote-node")
                 .value_name("path")
-                .help("ssh: set the preferred remote DRM node to use")
+                .help("ssh: Set the preferred remote DRM node")
                 .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("remote-bin")
+                .long("remote-bin")
+                .value_name("path")
+                .help("ssh: Set the remote Waypipe binary to use")
+                .value_parser(value_parser!(PathBuf))
+                .default_value(env!("CARGO_PKG_NAME")),
+        )
+        .arg(
+            Arg::new("login-shell")
+                .long("login-shell")
+                .help("server: If server command is empty, run a login shell")
+                .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("threads")
+                .long("threads")
+                .help("Number of worker threads to use: 0 ⇒ hardware threads/2")
+                .value_parser(value_parser!(u32))
+                .default_value("0"),
         )
         .arg(
             Arg::new("title-prefix")
@@ -1630,47 +1655,34 @@ fn main() -> Result<(), String> {
                 .default_value(""),
         )
         .arg(
-            Arg::new("threads")
-                .long("threads")
-                .help("Number of diff/compression worker threads")
-                .value_parser(value_parser!(u32))
-                .default_value("0"),
-        )
-        .arg(
             Arg::new("unlink-socket")
                 .long("unlink-socket")
-                .help("server: unlink the socket that Waypipe connects to")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("no-gpu")
-                .short('n')
-                .long("no-gpu")
-                .help("Disable DMABUF support; currently not supported anyway")
+                .help("server: Unlink the socket that Waypipe connects to")
                 .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("video")
                 .long("video")
-                .value_name("format")
-                .help("Video-encode DMABUFs; only h264 supported")
+                .value_name("options")
+                .help(
+                    "Video-encode DMABUFs when possible\n\
+                option format: (none|h264|vp9)[,bpf=<X>]",
+                )
                 .default_value("none")
                 .value_parser(value_parser!(VideoSetting)),
         )
         .arg(
-            Arg::new("secctx")
-            .long("secctx")
-            .value_name("str")
-            .help("client,ssh: Use security-context protocol to attach app-id")
-            .value_parser(value_parser!(String)),
+            Arg::new("vsock")
+                .long("vsock")
+                .help("Connect over vsock-type socket instead of unix socket")
+                .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("vsock")
-            .long("vsock")
-            .value_name("str")
-            .hide(cfg!(not(target_os = "linux")))
-            .help("Connect over vsock-type socket instead of unix socket")
-            .action(ArgAction::SetTrue),
+            Arg::new("secctx")
+                .long("secctx")
+                .value_name("str")
+                .help("client,ssh: Use security-context protocol with application ID")
+                .value_parser(value_parser!(String)),
         )
         .arg(
             Arg::new("anti-staircase")
@@ -1688,24 +1700,24 @@ fn main() -> Result<(), String> {
         )
         .arg(
             Arg::new("test-fast-bench")
-            .long("test-fast-bench")
-            .hide(true)
-            .help("Test option: run 'bench' mode on a tiny input")
-            .action(ArgAction::SetTrue),
+                .long("test-fast-bench")
+                .hide(true)
+                .help("Test option: run 'bench' mode on a tiny input")
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("test-swenc")
-            .long("test-swenc")
-            .hide(true)
-            .help("Test option: force software video encoding")
-            .action(ArgAction::SetTrue),
+                .long("test-swenc")
+                .hide(true)
+                .help("Test option: force software video encoding")
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("test-swdec")
-            .long("test-swdec")
-            .hide(true)
-            .help("Test option: force software video decoding")
-            .action(ArgAction::SetTrue),
+                .long("test-swdec")
+                .hide(true)
+                .help("Test option: force software video decoding")
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("trace")
@@ -1713,8 +1725,8 @@ fn main() -> Result<(), String> {
                 .action(ArgAction::SetTrue)
                 .help("Test option: log all Wayland messages received and sent")
                 .hide(true),
-        )
-        .get_matches();
+        );
+    let matches = command.get_matches();
 
     let debug = matches.get_one::<bool>("debug").unwrap();
     let trace = matches.get_one::<bool>("trace").unwrap();
@@ -2063,8 +2075,7 @@ fn main() -> Result<(), String> {
             debug!("Starting server connection process");
 
             let env_sock = std::env::var_os("WAYPIPE_CONNECTION_FD")
-                .ok_or_else(|| tag!("Connection fd not provided"))?;
-
+                .ok_or_else(|| tag!("Connection fd not provided for server-conn mode"))?;
             let opt_fd = env_sock
                 .into_string()
                 .ok()
@@ -2103,9 +2114,8 @@ fn main() -> Result<(), String> {
         Some(("client-conn", _)) => {
             debug!("Starting client connection process");
 
-            let env_sock =
-                std::env::var_os("WAYPIPE_CONNECTION_FD").ok_or("Connection fd not provided")?;
-
+            let env_sock = std::env::var_os("WAYPIPE_CONNECTION_FD")
+                .ok_or_else(|| tag!("Connection fd not provided for client-conn mode"))?;
             let opt_fd = env_sock
                 .into_string()
                 .ok()
