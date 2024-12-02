@@ -576,12 +576,12 @@ pub unsafe fn setup_video(
         ctx.get_proc_addr = Some(core::mem::transmute::<
             unsafe extern "system" fn(
                 ash::vk::Instance,
-                *const i8,
+                *const c_char,
             )
                 -> std::option::Option<unsafe extern "system" fn()>,
             unsafe extern "C" fn(
                 *mut waypipe_ffmpeg_wrapper::VkInstance_T,
-                *const i8,
+                *const c_char,
             ) -> std::option::Option<unsafe extern "C" fn()>,
         >(entry.static_fn().get_instance_proc_addr));
         // u64?
