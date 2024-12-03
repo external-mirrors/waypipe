@@ -4683,7 +4683,7 @@ pub fn main_interface_loop(
         next_msg: None,
         rid_queue: VecDeque::new(),
         output: TransferWayland {
-            data: &mut [0; 1024],
+            data: &mut [0; 4096],
             start: 0,
             len: 0,
             fds: VecDeque::new(),
@@ -4700,7 +4700,7 @@ pub fn main_interface_loop(
         },
 
         output: TransferQueue {
-            protocol_data: &mut [0; 1024],
+            protocol_data: &mut [0; 4096],
             protocol_len: 0,
             protocol_header_added: false,
             protocol_rids: Vec::new(),
