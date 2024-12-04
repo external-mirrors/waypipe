@@ -39,6 +39,7 @@ pub struct VulkanVideo {
 
     codecs_h264: CodecSet,
     codecs_vp9: CodecSet,
+    codecs_av1: CodecSet,
 
     can_hw_dec: bool,
     can_hw_enc: bool,
@@ -345,6 +346,9 @@ unsafe fn avcodec_receive_packet(
         let mut err_buf = [0_u8; 1024];
         let err = av_strerror(bindings, &mut err_buf, ret);
         let name = CStr::from_ptr((*(*avctx).codec).name);
+        if name == CStr::from_bytes_with_nul(b"libsvtav1\0").unwrap() {
+            debug!("Note: libsvtav1 version > 2.3.0 is required for low delay encoding to work");
+        }
         return Err(tag!(
             "Failed to receive video packet from {:?}: {}: {:?}",
             name,
@@ -644,6 +648,19 @@ pub unsafe fn setup_video(
         sw_encoder: lib
             .avcodec_find_encoder_by_name("libvpx-vp9\0".as_bytes().as_ptr() as *const _),
     };
+    let codecs_av1 = CodecSet {
+        decoder: lib.avcodec_find_decoder_by_name("libdav1d\0".as_bytes().as_ptr() as *const _),
+        encoder: std::ptr::null(), // TODO: use 'av1'+vulkan; requires VK_KHR_video_decode_av1
+        /* AV1 encoder comparison. As of writing:
+         * - librav1e: may require a minimum frame lookahead, unknown if this was ever fixed
+         * - libsvtav1: as of version 2.3.0, zero latency is attainable with pred-struct=1:rc=2.
+         *     but: the setup/memory allocation for encoding takes a large fraction of a second,
+         *     which is impractical for Waypipe's current one-stream-per-buffer approach
+         * - libaom-av1: works, has a zero lag mode
+         */
+        sw_encoder: lib
+            .avcodec_find_encoder_by_name("libaom-av1\0".as_bytes().as_ptr() as *const _),
+    };
 
     let bindings = &[
         vk::DescriptorSetLayoutBinding::default()
@@ -766,6 +783,7 @@ pub unsafe fn setup_video(
         av_hwdevice: device_ref,
         codecs_h264,
         codecs_vp9,
+        codecs_av1,
         can_hw_dec: would_use_hw_dec,
         can_hw_enc: would_use_hw_enc,
         rgb_to_yuv420_buf,
@@ -906,13 +924,11 @@ pub fn setup_video_decode_sw(
     img: &Arc<VulkanDmabuf>,
     fmt: VideoFormat,
 ) -> Result<VideoDecodeState, String> {
-    assert!(fmt == VideoFormat::H264 || fmt == VideoFormat::VP9);
     let video = img.vulk.video.as_ref().unwrap();
-
     let decoder: *const AVCodec = match fmt {
         VideoFormat::H264 => video.codecs_h264.decoder,
         VideoFormat::VP9 => video.codecs_vp9.decoder,
-        VideoFormat::AV1 => unreachable!(),
+        VideoFormat::AV1 => video.codecs_av1.decoder,
     };
     unsafe {
         let ctx: *mut AVCodecContext = video.bindings.avcodec_alloc_context3(decoder);
@@ -1009,7 +1025,9 @@ pub fn supports_video_format(
         VideoFormat::VP9 => {
             !vid.codecs_vp9.decoder.is_null() && !vid.codecs_vp9.sw_encoder.is_null()
         }
-        VideoFormat::AV1 => false,
+        VideoFormat::AV1 => {
+            !vid.codecs_av1.decoder.is_null() && !vid.codecs_av1.sw_encoder.is_null()
+        }
     }
 }
 
@@ -1846,7 +1864,7 @@ pub fn setup_video_encode_sw(
     let sw_encoder: *const AVCodec = match fmt {
         VideoFormat::H264 => video.codecs_h264.sw_encoder,
         VideoFormat::VP9 => video.codecs_vp9.sw_encoder,
-        VideoFormat::AV1 => unreachable!(),
+        VideoFormat::AV1 => video.codecs_av1.sw_encoder,
     };
     unsafe {
         let ctx = video.bindings.avcodec_alloc_context3(sw_encoder);
@@ -1902,7 +1920,14 @@ pub fn setup_video_encode_sw(
                     (b"cpu-used\0", b"8\0"),
                 ],
             )?,
-            VideoFormat::AV1 => unreachable!(),
+            VideoFormat::AV1 => build_av_dict(
+                &video.bindings,
+                &[
+                    (b"usage\0", b"realtime\0"),
+                    (b"lag-in-frames\0", b"0\0"),
+                    (b"cpu-used\0", b"8\0"),
+                ],
+            )?,
         };
 
         avcodec_open(&video.bindings, ctx, sw_encoder, &mut options)?;
@@ -2819,8 +2844,13 @@ fn test_video(try_hardware: bool) {
                     assert!(check_err <= 0.1);
                     if !try_hardware {
                         // As of writing, H264+radeon hardware video decoding fails on <=32x32 images
+                        let thresh = if video_format == VideoFormat::AV1 {
+                            0.2
+                        } else {
+                            0.1
+                        };
                         assert!(
-                            rtrip_err <= 0.1,
+                            rtrip_err <= thresh,
                             "size: {:?} color: {:?} output: {:?}",
                             (w, h),
                             *color,

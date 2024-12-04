@@ -369,7 +369,7 @@ impl FromStr for VideoSetting {
             } else if chunk == "vp9" {
                 f.format = Some(VideoFormat::VP9);
             } else if chunk == "av1" {
-                return Err("AV1 video en/decoding is not supported");
+                f.format = Some(VideoFormat::AV1);
             } else if let Some(suffix) = chunk.strip_prefix("bpf=") {
                 f.bits_per_frame = Some(suffix.parse::<f32>().map_err(|_| FAILURE)?);
             } else {
@@ -421,7 +421,10 @@ fn video_setting_roundtrip() {
             format: Some(VideoFormat::H264),
             bits_per_frame: None,
         },
-        // future: add AV1 when supported
+        VideoSetting {
+            format: Some(VideoFormat::AV1),
+            bits_per_frame: None,
+        },
     ];
     for v in examples {
         assert_eq!(VideoSetting::from_str(&VideoSetting::to_string(&v)), Ok(v));

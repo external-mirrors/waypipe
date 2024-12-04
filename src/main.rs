@@ -1666,7 +1666,7 @@ fn main() -> Result<(), String> {
                 .value_name("options")
                 .help(
                     "Video-encode DMABUFs when possible\n\
-                option format: (none|h264|vp9)[,bpf=<X>]",
+                option format: (none|h264|vp9|av1)[,bpf=<X>]",
                 )
                 .default_value("none")
                 .value_parser(value_parser!(VideoSetting)),

@@ -3088,7 +3088,9 @@ fn run_encode_task(task: VideoEncodeTask, cache: &mut ThreadCache) -> TaskResult
 }
 fn run_decode_task(task: VideoDecodeTask, cache: &mut ThreadCache) -> TaskResult {
     let pool: &Arc<VulkanCommandPool> = cache.get_cmd_pool(&task.vulk)?;
-    let packet = &task.msg.get()[8..];
+    let msg = &task.msg.get();
+    let (len, _t) = parse_wmsg_header(u32::from_le_bytes(msg[..4].try_into().unwrap())).unwrap();
+    let packet = &msg[8..len];
     let decode_handle = start_dmavid_apply(&task.state, pool, packet)?;
 
     let completion_point = decode_handle.get_timeline_point();
