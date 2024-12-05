@@ -22,6 +22,20 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+/* Constant, saves some code when allocating sequence ids */
+const ID_SEQUENCE: [ObjId; 10] = [
+    ObjId(1),
+    ObjId(2),
+    ObjId(3),
+    ObjId(4),
+    ObjId(5),
+    ObjId(6),
+    ObjId(7),
+    ObjId(8),
+    ObjId(9),
+    ObjId(10),
+];
+
 struct TestLogger {
     max_level: log::LevelFilter,
     color_output: bool,
@@ -2581,15 +2595,6 @@ fn proto_title_prefix() {
         };
         run_protocol_test_with_opts(
             &|mut ctx: ProtocolTestContext| {
-                const ID_SEQUENCE: [ObjId; 7] = [
-                    ObjId(1),
-                    ObjId(2),
-                    ObjId(3),
-                    ObjId(4),
-                    ObjId(5),
-                    ObjId(6),
-                    ObjId(7),
-                ];
                 let [display, reg, compositor, xdg_wm_base, wl_surf, xdg_surf, toplevel, ..] =
                     ID_SEQUENCE;
 
@@ -2655,4 +2660,198 @@ fn proto_title_prefix() {
             None,
         );
     }
+}
+
+/* Test that basic wlr_screencopy operations work with wl_shm buffers */
+#[test]
+fn proto_test_screencopy_shm() {
+    run_protocol_test(&|mut ctx: ProtocolTestContext| {
+        let [display, reg, shm, screencopy, output, shm_pool, buffer1, buffer2, frame, ..] =
+            ID_SEQUENCE;
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, reg);
+        }));
+        let scrcopy_name = "zwlr_screencopy_manager_v1".as_bytes();
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, reg, 1, "wl_shm".as_bytes(), 2);
+            write_evt_wl_registry_global(dst, reg, 2, scrcopy_name, 3);
+            write_evt_wl_registry_global(dst, reg, 3, "wl_output".as_bytes(), 4);
+        }));
+        let (w, h, fmt) = (33, 17, WlShmFormat::Xrgb8888 as u32);
+        let pool_sz: usize = 3 * (w * h * 4) / 2;
+        let offset1: usize = 10;
+        let offset2: usize = pool_sz - (w * h * 4);
+        let seed_contents: Vec<u8> = (0..pool_sz).map(|x| (x * 101) as u8).collect();
+        let mut copy_contents: Vec<u8> = seed_contents.clone();
+        assert!(offset1 <= 333 && 666 <= offset1 + w * h * 4);
+        copy_contents[333..666].fill(0xaa);
+        let shm_fd = make_file_with_contents(&seed_contents).unwrap();
+
+        let setup = build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, reg, 1, "wl_shm".as_bytes(), 2, shm);
+            write_req_wl_registry_bind(dst, reg, 2, scrcopy_name, 3, screencopy);
+            write_req_wl_registry_bind(dst, reg, 3, "wl_output".as_bytes(), 4, output);
+            write_req_wl_shm_create_pool(dst, shm, false, shm_pool, pool_sz.try_into().unwrap());
+            write_req_wl_shm_pool_create_buffer(
+                dst,
+                shm_pool,
+                buffer1,
+                offset1.try_into().unwrap(),
+                w.try_into().unwrap(),
+                h.try_into().unwrap(),
+                (w * 4).try_into().unwrap(),
+                fmt,
+            );
+            write_req_wl_shm_pool_create_buffer(
+                dst,
+                shm_pool,
+                buffer2,
+                offset2.try_into().unwrap(),
+                w.try_into().unwrap(),
+                h.try_into().unwrap(),
+                (w * 4).try_into().unwrap(),
+                fmt,
+            );
+            write_req_zwlr_screencopy_manager_v1_capture_output_region(
+                dst,
+                screencopy,
+                frame,
+                0,
+                output,
+                1,
+                1,
+                (w - 2) as _,
+                (h - 2) as _,
+            );
+        });
+        let fds = [&shm_fd];
+        let (rmsgs, mut rfds) = ctx.prog_write(&setup, &fds).unwrap();
+        assert!(rmsgs.concat() == setup);
+        assert!(rfds.len() == 1);
+        let rfd = rfds.pop().unwrap();
+        update_file_contents(&rfd, &copy_contents).unwrap();
+
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_zwlr_screencopy_frame_v1_buffer(
+                dst,
+                frame,
+                fmt,
+                w as _,
+                h as _,
+                (4 * w) as _,
+            );
+            write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
+        }));
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer2);
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_zwlr_screencopy_frame_v1_failed(dst, frame);
+        }));
+        /* Check that the failed screencopy does not lead to replication
+         * (Although technically Waypipe _could_ eagerly make updates in this scenario,
+         * since the buffer contents were already updated, doing so would be inefficient;
+         * the wlr-screencopy protocol also says nothing about the buffer state on failure.)
+         */
+        let check1 = get_file_contents(&shm_fd, pool_sz).unwrap();
+        assert!(check1 == seed_contents);
+
+        // Check diff
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_zwlr_screencopy_frame_v1_destroy(dst, frame);
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_display_delete_id(dst, display, frame.0);
+        }));
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_zwlr_screencopy_manager_v1_capture_output(dst, screencopy, frame, 0, output);
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_zwlr_screencopy_frame_v1_buffer(
+                dst,
+                frame,
+                fmt,
+                w as _,
+                h as _,
+                (4 * w) as _,
+            );
+            write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
+        }));
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer1);
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_zwlr_screencopy_frame_v1_ready(dst, frame, 0, 1, 123456789);
+        }));
+        /* Check that the update is replicated */
+        let check2 = get_file_contents(&shm_fd, pool_sz).unwrap();
+        assert!(check2 == copy_contents);
+    });
+}
+
+/* Test that basic wlr_screencopy operations work with dmabufs */
+#[cfg(feature = "dmabuf")]
+#[test]
+fn proto_test_screencopy_dmabuf() {
+    let vulk = setup_vulkan(None, false, true, false, false).unwrap();
+
+    run_protocol_test(&|mut ctx: ProtocolTestContext| {
+        let [display, reg, dmabuf, screencopy, output, frame, params, buffer, ..] = ID_SEQUENCE;
+
+        let fmt = wayland_to_drm(WlShmFormat::R8);
+        let bpp = 1;
+        let (w, h) = (8, 8);
+        let img_size = (w * h) as usize * bpp;
+        let img_data = vec![0x33u8; img_size];
+        let mod_data = vec![0x44u8; img_size];
+        let modifier_list = vulk.get_supported_modifiers(fmt);
+
+        let copy_buf = Arc::new(vulkan_get_buffer(&vulk, img_size, true).unwrap());
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, reg);
+        }));
+        let scrcopy_name = "zwlr_screencopy_manager_v1".as_bytes();
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3);
+            write_evt_wl_registry_global(dst, reg, 2, scrcopy_name, 3);
+            write_evt_wl_registry_global(dst, reg, 3, "wl_output".as_bytes(), 4);
+        }));
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3, dmabuf);
+            write_req_wl_registry_bind(dst, reg, 2, scrcopy_name, 3, screencopy);
+            write_req_wl_registry_bind(dst, reg, 3, "wl_output".as_bytes(), 4, output);
+            write_req_zwlr_screencopy_manager_v1_capture_output(dst, screencopy, frame, 0, output);
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_zwp_linux_dmabuf_v1_format(dst, dmabuf, fmt);
+            for m in modifier_list {
+                let (mod_hi, mod_lo) = split_u64(m);
+                write_evt_zwp_linux_dmabuf_v1_modifier(dst, dmabuf, fmt, mod_hi, mod_lo);
+            }
+            write_evt_zwlr_screencopy_frame_v1_linux_dmabuf(dst, frame, fmt, w, h);
+            write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
+        }));
+
+        let (prog_img, comp_img) = create_dmabuf_and_copy(
+            &vulk, &mut ctx, params, dmabuf, buffer, w as _, h as _, fmt, &img_data,
+        )
+        .unwrap();
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer);
+        }));
+
+        copy_onto_dmabuf(&comp_img, &copy_buf, &mod_data).unwrap();
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_zwlr_screencopy_frame_v1_ready(dst, frame, 0, 1, 123456789);
+        }));
+
+        let output = copy_from_dmabuf(&prog_img, &copy_buf).unwrap();
+        assert!(output == mod_data);
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_zwlr_screencopy_frame_v1_destroy(dst, frame);
+        }));
+    });
 }

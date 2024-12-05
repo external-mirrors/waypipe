@@ -65,6 +65,7 @@ struct ObjWlShmPool {
     buffer: Rc<RefCell<ShadowFd>>,
 }
 
+#[derive(Clone, Copy)]
 struct ObjWlBufferShm {
     width: i32,
     height: i32,
@@ -155,6 +156,11 @@ struct ObjWpPresentationFeedback {
     clock: ClockOrObject,
 }
 
+struct ObjZwlrScreencopyFrame {
+    /* Store sfd and shm metadata of target buffer in case the wl_buffer is destroyed early */
+    buffer: Option<(Rc<RefCell<ShadowFd>>, Option<ObjWlBufferShm>)>,
+}
+
 // issue: enum size overhead. Consider using Box<ObjWlSurface>, Box<ObjWlBuffer>, etc. entries?
 enum WpExtra {
     WlSurface(Box<ObjWlSurface>),
@@ -163,6 +169,7 @@ enum WpExtra {
     ZwpDmabuf(Box<ObjZwpLinuxDmabuf>),
     ZwpDmabufFeedback(Box<ObjZwpLinuxDmabufFeedback>),
     ZwpDmabufParams(Box<ObjZwpLinuxDmabufParams>),
+    ZwlrScreencopyFrame(Box<ObjZwlrScreencopyFrame>),
     WpDrmSyncobjSurface(Box<ObjWpDrmSyncobjSurface>),
     WpDrmSyncobjTimeline(Box<ObjWpDrmSyncobjTimeline>),
     WpPresentation(Box<ObjWpPresentation>),
@@ -2356,6 +2363,139 @@ pub fn process_way_msg(
 
             Ok(ProcMsg::Done)
         }
+        (
+            WaylandInterface::ZwlrScreencopyManagerV1,
+            OPCODE_ZWLR_SCREENCOPY_MANAGER_V1_CAPTURE_OUTPUT_REGION,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            let (frame, _overlay_cursor, _output, _x, _y, _w, _h) =
+                parse_req_zwlr_screencopy_manager_v1_capture_output_region(msg)?;
+            insert_new_object(
+                &mut glob.objects,
+                frame,
+                WpObject {
+                    obj_type: WaylandInterface::ZwlrScreencopyFrameV1,
+                    is_zombie: false,
+                    extra: WpExtra::ZwlrScreencopyFrame(Box::new(ObjZwlrScreencopyFrame {
+                        buffer: None,
+                    })),
+                },
+            )?;
+            copy_msg(msg, dst);
+            Ok(ProcMsg::Done)
+        }
+        (
+            WaylandInterface::ZwlrScreencopyManagerV1,
+            OPCODE_ZWLR_SCREENCOPY_MANAGER_V1_CAPTURE_OUTPUT,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            let (frame, _overlay_cursor, _output) =
+                parse_req_zwlr_screencopy_manager_v1_capture_output(msg)?;
+            insert_new_object(
+                &mut glob.objects,
+                frame,
+                WpObject {
+                    obj_type: WaylandInterface::ZwlrScreencopyFrameV1,
+                    is_zombie: false,
+                    extra: WpExtra::ZwlrScreencopyFrame(Box::new(ObjZwlrScreencopyFrame {
+                        buffer: None,
+                    })),
+                },
+            )?;
+            copy_msg(msg, dst);
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::ZwlrScreencopyFrameV1, OPCODE_ZWLR_SCREENCOPY_FRAME_V1_COPY) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+
+            let buffer = parse_req_zwlr_screencopy_frame_v1_copy(msg)?;
+            if buffer.0 == 0 {
+                return Err(tag!(
+                    "zwlr_screencopy_frame_v1::copy requires non-null object"
+                ));
+            }
+            let buf_obj = glob.objects.get(&buffer).ok_or_else(|| {
+                tag!(
+                    "Failed to lookup buffer (id {}) for zwlr_screencopy_frame_v1::copy",
+                    buffer
+                )
+            })?;
+            let WpExtra::WlBuffer(ref d) = buf_obj.extra else {
+                return Err(tag!("Expected wp_presentation_feedback object"));
+            };
+            let buf_info = (d.sfd.clone(), d.shm_info);
+
+            let object = glob.objects.get_mut(&object_id).unwrap();
+            let WpExtra::ZwlrScreencopyFrame(ref mut frame) = object.extra else {
+                unreachable!();
+            };
+            frame.buffer = Some(buf_info);
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::ZwlrScreencopyFrameV1, OPCODE_ZWLR_SCREENCOPY_FRAME_V1_READY) => {
+            check_space!(msg.len(), 0, remaining_space);
+            let WpExtra::ZwlrScreencopyFrame(ref mut frame) = obj.extra else {
+                unreachable!();
+            };
+
+            let Some((ref sfd, ref shm_info)) = frame.buffer else {
+                return Err(tag!(
+                    "zwlr_screencopy_frame_v1::ready is missing buffer information"
+                ));
+            };
+
+            if !glob.on_display_side {
+                let b = sfd.borrow();
+                let apply_count = if let ShadowFdVariant::File(data) = &b.data {
+                    data.pending_apply_tasks
+                } else if let ShadowFdVariant::Dmabuf(data) = &b.data {
+                    /* Assuming no timelines for screencopy-frame-v1 */
+                    data.pending_apply_tasks
+                } else {
+                    return Err(tag!("Attached buffer is not of file or dmabuf type"));
+                };
+                if apply_count > 0 {
+                    return Ok(ProcMsg::WaitFor(b.remote_id));
+                }
+            }
+
+            copy_msg(msg, dst);
+
+            if glob.on_display_side {
+                /* Mark damage */
+
+                let mut sfd = sfd.borrow_mut();
+                if let ShadowFdVariant::File(ref mut y) = &mut sfd.data {
+                    let damage_interval = damage_for_entire_buffer(shm_info.as_ref().unwrap());
+                    match &y.damage {
+                        Damage::Everything => {}
+                        Damage::Nothing => {
+                            y.damage = Damage::Intervals(vec![damage_interval]);
+                        }
+                        Damage::Intervals(old) => {
+                            let dmg = &[damage_interval];
+                            y.damage = Damage::Intervals(union_damage(&old[..], &dmg[..], 128));
+                        }
+                    }
+                } else if let ShadowFdVariant::Dmabuf(ref mut y) = &mut sfd.data {
+                    y.damage = Damage::Everything;
+                } else {
+                    return Err(tag!("Expected buffer shadowfd to be of file type"));
+                }
+            }
+            frame.buffer = None;
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::ZwlrScreencopyFrameV1, OPCODE_ZWLR_SCREENCOPY_FRAME_V1_FAILED) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+            let WpExtra::ZwlrScreencopyFrame(ref mut frame) = obj.extra else {
+                unreachable!();
+            };
+            frame.buffer = None;
+            Ok(ProcMsg::Done)
+        }
         (WaylandInterface::XdgToplevel, OPCODE_XDG_TOPLEVEL_SET_TITLE) => {
             let title = parse_req_xdg_toplevel_set_title(msg)?;
             let prefix = glob.opts.title_prefix.as_bytes();
@@ -2519,11 +2659,8 @@ pub fn process_way_msg(
                 }
 
                 let max_v = INTERFACE_TABLE[WaylandInterface::ZwpLinuxDmabufV1 as usize].version;
-                /* only support versions >= 4, which provide the local drm node to use */
-                if version < 4 {
-                    debug!("Dropping interface: {}", escape_wl_name(intf));
-                    return Ok(ProcMsg::Done);
-                }
+                /* note: with versions < 4, the the compositor has no way to specify the preferred
+                 * drm node, so it may be chosen arbitrarily */
                 if version > max_v {
                     version = max_v;
                     debug!(

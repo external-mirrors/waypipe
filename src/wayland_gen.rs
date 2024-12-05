@@ -4767,6 +4767,76 @@ const ZWLR_GAMMA_CONTROL_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub fn write_req_zwlr_screencopy_manager_v1_capture_output(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    frame: ObjId,
+    overlay_cursor: i32,
+    output: ObjId,
+) {
+    let l = length_req_zwlr_screencopy_manager_v1_capture_output();
+    write_header(dst, for_id, l, 0, 0);
+    write_obj(dst, frame);
+    write_i32(dst, overlay_cursor);
+    write_obj(dst, output);
+}
+pub fn length_req_zwlr_screencopy_manager_v1_capture_output() -> usize {
+    20
+}
+pub fn parse_req_zwlr_screencopy_manager_v1_capture_output<'a>(
+    mut msg: &'a [u8],
+) -> Result<(ObjId, i32, ObjId), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    let arg2 = parse_i32(&mut msg)?;
+    let arg3 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2, arg3))
+}
+pub const OPCODE_ZWLR_SCREENCOPY_MANAGER_V1_CAPTURE_OUTPUT: MethodId = MethodId::Request(0);
+pub fn write_req_zwlr_screencopy_manager_v1_capture_output_region(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    frame: ObjId,
+    overlay_cursor: i32,
+    output: ObjId,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) {
+    let l = length_req_zwlr_screencopy_manager_v1_capture_output_region();
+    write_header(dst, for_id, l, 1, 0);
+    write_obj(dst, frame);
+    write_i32(dst, overlay_cursor);
+    write_obj(dst, output);
+    write_i32(dst, x);
+    write_i32(dst, y);
+    write_i32(dst, width);
+    write_i32(dst, height);
+}
+pub fn length_req_zwlr_screencopy_manager_v1_capture_output_region() -> usize {
+    36
+}
+pub fn parse_req_zwlr_screencopy_manager_v1_capture_output_region<'a>(
+    mut msg: &'a [u8],
+) -> Result<(ObjId, i32, ObjId, i32, i32, i32, i32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    let arg2 = parse_i32(&mut msg)?;
+    let arg3 = parse_obj(&mut msg)?;
+    let arg4 = parse_i32(&mut msg)?;
+    let arg5 = parse_i32(&mut msg)?;
+    let arg6 = parse_i32(&mut msg)?;
+    let arg7 = parse_i32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2, arg3, arg4, arg5, arg6, arg7))
+}
+pub const OPCODE_ZWLR_SCREENCOPY_MANAGER_V1_CAPTURE_OUTPUT_REGION: MethodId = MethodId::Request(1);
 const ZWLR_SCREENCOPY_MANAGER_V1: WaylandData = WaylandData {
     name: "zwlr_screencopy_manager_v1",
     evts: &[],
@@ -4797,6 +4867,38 @@ const ZWLR_SCREENCOPY_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 3,
 };
+pub fn write_evt_zwlr_screencopy_frame_v1_buffer(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    format: u32,
+    width: u32,
+    height: u32,
+    stride: u32,
+) {
+    let l = length_evt_zwlr_screencopy_frame_v1_buffer();
+    write_header(dst, for_id, l, 0, 0);
+    write_u32(dst, format);
+    write_u32(dst, width);
+    write_u32(dst, height);
+    write_u32(dst, stride);
+}
+pub fn length_evt_zwlr_screencopy_frame_v1_buffer() -> usize {
+    24
+}
+pub fn parse_evt_zwlr_screencopy_frame_v1_buffer<'a>(
+    mut msg: &'a [u8],
+) -> Result<(u32, u32, u32, u32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_u32(&mut msg)?;
+    let arg2 = parse_u32(&mut msg)?;
+    let arg3 = parse_u32(&mut msg)?;
+    let arg4 = parse_u32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2, arg3, arg4))
+}
+pub const OPCODE_ZWLR_SCREENCOPY_FRAME_V1_BUFFER: MethodId = MethodId::Event(0);
 pub fn write_req_zwlr_screencopy_frame_v1_copy(dst: &mut &mut [u8], for_id: ObjId, buffer: ObjId) {
     let l = length_req_zwlr_screencopy_frame_v1_copy();
     write_header(dst, for_id, l, 0, 0);
@@ -4845,6 +4947,79 @@ pub fn parse_evt_zwlr_screencopy_frame_v1_ready<'a>(
     Ok((arg1, arg2, arg3))
 }
 pub const OPCODE_ZWLR_SCREENCOPY_FRAME_V1_READY: MethodId = MethodId::Event(2);
+pub fn write_evt_zwlr_screencopy_frame_v1_failed(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_evt_zwlr_screencopy_frame_v1_failed();
+    write_header(dst, for_id, l, 3, 0);
+}
+pub fn length_evt_zwlr_screencopy_frame_v1_failed() -> usize {
+    8
+}
+pub fn parse_evt_zwlr_screencopy_frame_v1_failed<'a>(msg: &'a [u8]) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_ZWLR_SCREENCOPY_FRAME_V1_FAILED: MethodId = MethodId::Event(3);
+pub fn write_req_zwlr_screencopy_frame_v1_destroy(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_req_zwlr_screencopy_frame_v1_destroy();
+    write_header(dst, for_id, l, 1, 0);
+}
+pub fn length_req_zwlr_screencopy_frame_v1_destroy() -> usize {
+    8
+}
+pub fn parse_req_zwlr_screencopy_frame_v1_destroy<'a>(msg: &'a [u8]) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_ZWLR_SCREENCOPY_FRAME_V1_DESTROY: MethodId = MethodId::Request(1);
+pub fn write_evt_zwlr_screencopy_frame_v1_linux_dmabuf(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    format: u32,
+    width: u32,
+    height: u32,
+) {
+    let l = length_evt_zwlr_screencopy_frame_v1_linux_dmabuf();
+    write_header(dst, for_id, l, 5, 0);
+    write_u32(dst, format);
+    write_u32(dst, width);
+    write_u32(dst, height);
+}
+pub fn length_evt_zwlr_screencopy_frame_v1_linux_dmabuf() -> usize {
+    20
+}
+pub fn parse_evt_zwlr_screencopy_frame_v1_linux_dmabuf<'a>(
+    mut msg: &'a [u8],
+) -> Result<(u32, u32, u32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_u32(&mut msg)?;
+    let arg2 = parse_u32(&mut msg)?;
+    let arg3 = parse_u32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2, arg3))
+}
+pub const OPCODE_ZWLR_SCREENCOPY_FRAME_V1_LINUX_DMABUF: MethodId = MethodId::Event(5);
+pub fn write_evt_zwlr_screencopy_frame_v1_buffer_done(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_evt_zwlr_screencopy_frame_v1_buffer_done();
+    write_header(dst, for_id, l, 6, 0);
+}
+pub fn length_evt_zwlr_screencopy_frame_v1_buffer_done() -> usize {
+    8
+}
+pub fn parse_evt_zwlr_screencopy_frame_v1_buffer_done<'a>(
+    msg: &'a [u8],
+) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_ZWLR_SCREENCOPY_FRAME_V1_BUFFER_DONE: MethodId = MethodId::Event(6);
 const ZWLR_SCREENCOPY_FRAME_V1: WaylandData = WaylandData {
     name: "zwlr_screencopy_frame_v1",
     evts: &[
