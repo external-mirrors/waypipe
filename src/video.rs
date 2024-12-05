@@ -28,7 +28,10 @@ struct VulkanComputePipeline {
 }
 
 struct CodecSet {
+    /* preferred hardware and software decoders; may be null if not available,
+     * and values may repeat if the same AVCodec works for both hardware + software video */
     decoder: *const AVCodec,
+    sw_decoder: *const AVCodec,
     encoder: *const AVCodec,
     sw_encoder: *const AVCodec,
 }
@@ -41,8 +44,9 @@ pub struct VulkanVideo {
     codecs_vp9: CodecSet,
     codecs_av1: CodecSet,
 
-    can_hw_dec: bool,
-    can_hw_enc: bool,
+    can_hw_enc_h264: bool,
+    can_hw_dec_h264: bool,
+    can_hw_dec_av1: bool,
 
     // TODO: is it possible to detect in advance when hardware en/decoding works?
     // and only create the necessary pipeline?
@@ -548,8 +552,7 @@ pub unsafe fn setup_video(
     instance: &Instance,
     physdev: &vk::PhysicalDevice,
     dev: &Device,
-    would_use_hw_dec: bool,
-    would_use_hw_enc: bool,
+    pdev_info: &DeviceInfo,
     debug: bool,
     qfis: [u32; 4],
     device_exts: &[*const c_char],
@@ -566,7 +569,8 @@ pub unsafe fn setup_video(
     // av_log_set_level(AV_LOG_TRACE as _);
     lib.av_log_set_callback(Some(lib.av_log_default_callback));
 
-    let device_ref = if would_use_hw_dec || would_use_hw_enc {
+    let hw_video = pdev_info.hw_enc_h264 | pdev_info.hw_dec_h264 | pdev_info.hw_dec_av1;
+    let device_ref = if hw_video {
         // Option<Video-ptr?>
         let device_ref: *mut AVBufferRef =
             lib.av_hwdevice_ctx_alloc(AVHWDeviceType_AV_HWDEVICE_TYPE_VULKAN);
@@ -637,20 +641,24 @@ pub unsafe fn setup_video(
     };
 
     // todo: loading earlier may simplify video availability detection; loading on demand may reduce latency
+    let h264dec = lib.avcodec_find_decoder_by_name("h264\0".as_bytes().as_ptr() as *const _);
     let codecs_h264 = CodecSet {
-        decoder: lib.avcodec_find_decoder_by_name("h264\0".as_bytes().as_ptr() as *const _),
+        decoder: h264dec,
+        sw_decoder: h264dec,
         encoder: lib.avcodec_find_encoder_by_name("h264_vulkan\0".as_bytes().as_ptr() as *const _),
         sw_encoder: lib.avcodec_find_encoder_by_name("libx264\0".as_bytes().as_ptr() as *const _),
     };
     let codecs_vp9 = CodecSet {
-        decoder: lib.avcodec_find_decoder_by_name("vp9\0".as_bytes().as_ptr() as *const _),
+        decoder: std::ptr::null(),
+        sw_decoder: lib.avcodec_find_decoder_by_name("vp9\0".as_bytes().as_ptr() as *const _),
         encoder: std::ptr::null(),
         sw_encoder: lib
             .avcodec_find_encoder_by_name("libvpx-vp9\0".as_bytes().as_ptr() as *const _),
     };
     let codecs_av1 = CodecSet {
-        decoder: lib.avcodec_find_decoder_by_name("libdav1d\0".as_bytes().as_ptr() as *const _),
-        encoder: std::ptr::null(), // TODO: use 'av1'+vulkan; requires VK_KHR_video_decode_av1
+        decoder: lib.avcodec_find_decoder_by_name("av1\0".as_bytes().as_ptr() as *const _),
+        sw_decoder: lib.avcodec_find_decoder_by_name("libdav1d\0".as_bytes().as_ptr() as *const _),
+        encoder: std::ptr::null(),
         /* AV1 encoder comparison. As of writing:
          * - librav1e: may require a minimum frame lookahead, unknown if this was ever fixed
          * - libsvtav1: as of version 2.3.0, zero latency is attainable with pred-struct=1:rc=2.
@@ -784,8 +792,9 @@ pub unsafe fn setup_video(
         codecs_h264,
         codecs_vp9,
         codecs_av1,
-        can_hw_dec: would_use_hw_dec,
-        can_hw_enc: would_use_hw_enc,
+        can_hw_enc_h264: pdev_info.hw_enc_h264,
+        can_hw_dec_h264: pdev_info.hw_dec_h264,
+        can_hw_dec_av1: pdev_info.hw_dec_av1,
         rgb_to_yuv420_buf,
         yuv420_buf_to_rgb,
         nv12_img_to_rgb,
@@ -840,10 +849,14 @@ pub fn setup_video_decode_hw(
     img: &Arc<VulkanDmabuf>,
     fmt: VideoFormat,
 ) -> Result<VideoDecodeState, String> {
-    assert!(fmt == VideoFormat::H264);
     let video = img.vulk.video.as_ref().unwrap();
 
-    let decoder: *const AVCodec = video.codecs_h264.decoder;
+    let decoder: *const AVCodec = match fmt {
+        VideoFormat::H264 => video.codecs_h264.decoder,
+        VideoFormat::VP9 => video.codecs_vp9.decoder,
+        VideoFormat::AV1 => video.codecs_av1.decoder,
+    };
+    assert!(!decoder.is_null());
     unsafe {
         let ctx: *mut AVCodecContext = video.bindings.avcodec_alloc_context3(decoder);
         if ctx.is_null() {
@@ -926,9 +939,9 @@ pub fn setup_video_decode_sw(
 ) -> Result<VideoDecodeState, String> {
     let video = img.vulk.video.as_ref().unwrap();
     let decoder: *const AVCodec = match fmt {
-        VideoFormat::H264 => video.codecs_h264.decoder,
-        VideoFormat::VP9 => video.codecs_vp9.decoder,
-        VideoFormat::AV1 => video.codecs_av1.decoder,
+        VideoFormat::H264 => video.codecs_h264.sw_decoder,
+        VideoFormat::VP9 => video.codecs_vp9.sw_decoder,
+        VideoFormat::AV1 => video.codecs_av1.sw_decoder,
     };
     unsafe {
         let ctx: *mut AVCodecContext = video.bindings.avcodec_alloc_context3(decoder);
@@ -989,7 +1002,9 @@ pub fn setup_video_decode(
 ) -> Result<VideoDecodeState, String> {
     assert!(img.can_store_and_sample);
     let video = img.vulk.video.as_ref().unwrap();
-    if video.can_hw_dec && fmt == VideoFormat::H264 {
+    if (video.can_hw_dec_h264 && fmt == VideoFormat::H264 && !video.codecs_h264.decoder.is_null())
+        || (video.can_hw_dec_av1 && fmt == VideoFormat::AV1 && !video.codecs_av1.decoder.is_null())
+    {
         setup_video_decode_hw(img, fmt)
     } else {
         setup_video_decode_sw(img, fmt)
@@ -1020,13 +1035,13 @@ pub fn supports_video_format(
     // TODO: lookup max size available for format
     match fmt {
         VideoFormat::H264 => {
-            !vid.codecs_h264.decoder.is_null() && !vid.codecs_h264.sw_encoder.is_null()
+            !vid.codecs_h264.sw_decoder.is_null() && !vid.codecs_h264.sw_encoder.is_null()
         }
         VideoFormat::VP9 => {
-            !vid.codecs_vp9.decoder.is_null() && !vid.codecs_vp9.sw_encoder.is_null()
+            !vid.codecs_vp9.sw_decoder.is_null() && !vid.codecs_vp9.sw_encoder.is_null()
         }
         VideoFormat::AV1 => {
-            !vid.codecs_av1.decoder.is_null() && !vid.codecs_av1.sw_encoder.is_null()
+            !vid.codecs_av1.sw_decoder.is_null() && !vid.codecs_av1.sw_encoder.is_null()
         }
     }
 }
@@ -1736,11 +1751,14 @@ pub fn setup_video_encode_hw(
     fmt: VideoFormat,
     bpf: Option<f32>,
 ) -> Result<VideoEncodeState, String> {
-    assert!(fmt == VideoFormat::H264);
     let video = img.vulk.video.as_ref().unwrap();
-    assert!(!video.codecs_h264.encoder.is_null());
 
-    let encoder: *const AVCodec = video.codecs_h264.encoder;
+    let encoder: *const AVCodec = match fmt {
+        VideoFormat::H264 => video.codecs_h264.encoder,
+        VideoFormat::VP9 => video.codecs_vp9.encoder,
+        VideoFormat::AV1 => video.codecs_av1.encoder,
+    };
+    assert!(!encoder.is_null());
     unsafe {
         let ctx = video.bindings.avcodec_alloc_context3(encoder);
         if ctx.is_null() {
@@ -1866,6 +1884,7 @@ pub fn setup_video_encode_sw(
         VideoFormat::VP9 => video.codecs_vp9.sw_encoder,
         VideoFormat::AV1 => video.codecs_av1.sw_encoder,
     };
+    assert!(!sw_encoder.is_null());
     unsafe {
         let ctx = video.bindings.avcodec_alloc_context3(sw_encoder);
         if ctx.is_null() {
@@ -1974,7 +1993,7 @@ pub fn setup_video_encode(
 ) -> Result<VideoEncodeState, String> {
     assert!(img.can_store_and_sample);
     let video = img.vulk.video.as_ref().unwrap();
-    if video.can_hw_enc && fmt == VideoFormat::H264 && !video.codecs_h264.encoder.is_null() {
+    if video.can_hw_enc_h264 && fmt == VideoFormat::H264 && !video.codecs_h264.encoder.is_null() {
         setup_video_encode_hw(img, fmt, bpf)
     } else {
         setup_video_encode_sw(img, fmt, bpf)

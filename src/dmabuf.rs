@@ -557,8 +557,8 @@ fn get_max_external_image_size(
 }
 
 /* Lower values are assumed better */
-fn device_rank(t: vk::PhysicalDeviceType, would_use_hw_enc: bool, would_use_hw_dec: bool) -> u8 {
-    let base_score = match t {
+fn device_rank(info: &DeviceInfo) -> u8 {
+    let base_score = match info.typ {
         vk::PhysicalDeviceType::DISCRETE_GPU => 0,
         vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
         vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
@@ -566,8 +566,20 @@ fn device_rank(t: vk::PhysicalDeviceType, would_use_hw_enc: bool, would_use_hw_d
         vk::PhysicalDeviceType::OTHER => 3,
         _ => 3,
     };
+    let hw_enc = info.hw_enc_h264;
+    let hw_dec = info.hw_dec_h264 | info.hw_dec_av1;
     /* prefers: faster gpu, then hw decoding availability, then hw encoding availability */
-    base_score * 4 + ((!would_use_hw_enc) as u8) + 2 * ((!would_use_hw_dec) as u8)
+    base_score * 4 + ((!hw_enc) as u8) + 2 * ((!hw_dec) as u8)
+}
+
+pub struct DeviceInfo {
+    physdev: vk::PhysicalDevice,
+    device_id: u64,
+    typ: vk::PhysicalDeviceType,
+    /* If hardware video encoding/decoding is supported; set to false if !with_video */
+    pub hw_enc_h264: bool,
+    pub hw_dec_h264: bool,
+    pub hw_dec_av1: bool,
 }
 
 pub fn setup_vulkan(
@@ -671,28 +683,26 @@ pub fn setup_vulkan(
             vk::KHR_EXTERNAL_SEMAPHORE_SPEC_VERSION,
         ),
     ];
-
-    // todo: figure out how to probe for individual formats
-    let ext_list_video_enc: &[(&CStr, u32)] = &[
-        (
-            vk::KHR_VIDEO_ENCODE_H264_NAME,
-            vk::KHR_VIDEO_ENCODE_H264_SPEC_VERSION,
-        ),
-        (
-            vk::KHR_VIDEO_ENCODE_QUEUE_NAME,
-            vk::KHR_VIDEO_ENCODE_QUEUE_SPEC_VERSION,
-        ),
-    ];
-    let ext_list_video_dec: &[(&CStr, u32)] = &[
-        (
-            vk::KHR_VIDEO_DECODE_H264_NAME,
-            vk::KHR_VIDEO_DECODE_H264_SPEC_VERSION,
-        ),
-        (
-            vk::KHR_VIDEO_DECODE_QUEUE_NAME,
-            vk::KHR_VIDEO_DECODE_QUEUE_SPEC_VERSION,
-        ),
-    ];
+    let ext_list_video_enc_base: &[(&CStr, u32)] = &[(
+        vk::KHR_VIDEO_ENCODE_QUEUE_NAME,
+        vk::KHR_VIDEO_ENCODE_QUEUE_SPEC_VERSION,
+    )];
+    let ext_video_enc_h264: (&CStr, u32) = (
+        vk::KHR_VIDEO_ENCODE_H264_NAME,
+        vk::KHR_VIDEO_ENCODE_H264_SPEC_VERSION,
+    );
+    let ext_list_video_dec_base: &[(&CStr, u32)] = &[(
+        vk::KHR_VIDEO_DECODE_QUEUE_NAME,
+        vk::KHR_VIDEO_DECODE_QUEUE_SPEC_VERSION,
+    )];
+    let ext_video_dec_h264: (&CStr, u32) = (
+        vk::KHR_VIDEO_DECODE_H264_NAME,
+        vk::KHR_VIDEO_DECODE_H264_SPEC_VERSION,
+    );
+    let ext_video_dec_av1: (&CStr, u32) = (
+        vk::KHR_VIDEO_DECODE_AV1_NAME,
+        vk::KHR_VIDEO_DECODE_AV1_SPEC_VERSION,
+    );
     let ext_list_video_base: &[(&CStr, u32)] = &[
         (vk::KHR_VIDEO_QUEUE_NAME, vk::KHR_VIDEO_QUEUE_SPEC_VERSION),
         /* Also required, for ffmpeg's vkQueueSubmit2 */
@@ -724,16 +734,13 @@ pub fn setup_vulkan(
             .create_instance(&create, None)
             .map_err(|x| tag!("Failed to create Vulkan instance: {}", x))?;
 
-        // note: this can somewhat inefficient: if there are multiple devices, time will be spent loading
-        // even those which do not match dev_t and will not be used.
-        // enumerating physical devices can be slow; can we create from dev_t ?
-        // TODO: check this doesn't scan X11 or Wayland
+        /* Note: initial enumeration can be expensive since some details may be loaded
+         * even for devices that are not needed */
         let devices = instance
             .enumerate_physical_devices()
             .map_err(|x| tag!("Failed to get physical devices: {:?}", x))?;
 
-        let mut best_device: Option<(vk::PhysicalDevice, u64, vk::PhysicalDeviceType, bool, bool)> =
-            None;
+        let mut best_device: Option<DeviceInfo> = None;
         for p in devices {
             // TODO: need to check extensions of device itself?
 
@@ -750,22 +757,37 @@ pub fn setup_vulkan(
                 continue;
             }
 
-            let mut would_use_hw_dec = false;
-            let mut would_use_hw_enc = false;
+            let mut hw_enc_h264 = false;
+            let mut hw_dec_h264 = false;
+            let mut hw_dec_av1 = false;
+
             if with_video
                 && ext_list_video_base
                     .iter()
                     .all(|(name, version)| exts_has_prop(&exts, name, *version))
             {
                 // TODO: first verify that libavcodec has the appropriate encoders/decoders available, if possible
-                would_use_hw_dec = can_hw_dec
-                    && ext_list_video_dec
+                if can_hw_dec
+                    && ext_list_video_dec_base
                         .iter()
-                        .all(|(name, version)| exts_has_prop(&exts, name, *version));
-                would_use_hw_enc = can_hw_enc
-                    && ext_list_video_enc
+                        .all(|(name, version)| exts_has_prop(&exts, name, *version))
+                {
+                    if exts_has_prop(&exts, ext_video_dec_h264.0, ext_video_dec_h264.1) {
+                        hw_dec_h264 = true;
+                    }
+                    if exts_has_prop(&exts, ext_video_dec_av1.0, ext_video_dec_av1.1) {
+                        hw_dec_av1 = true;
+                    }
+                }
+                if can_hw_enc
+                    && ext_list_video_enc_base
                         .iter()
-                        .all(|(name, version)| exts_has_prop(&exts, name, *version));
+                        .all(|(name, version)| exts_has_prop(&exts, name, *version))
+                {
+                    if exts_has_prop(&exts, ext_video_enc_h264.0, ext_video_enc_h264.1) {
+                        hw_enc_h264 = true;
+                    }
+                }
             }
 
             let mut timeline_semaphore_info = vk::SemaphoreTypeCreateInfoKHR::default()
@@ -827,23 +849,29 @@ pub fn setup_vulkan(
                 continue;
             };
 
-            let proposed = Some((p, device_id, dev_type, would_use_hw_enc, would_use_hw_dec));
-            if let Some((_, _, alt_type, whe, whd)) = best_device {
-                if device_rank(dev_type, would_use_hw_dec, would_use_hw_enc)
-                    < device_rank(alt_type, whd, whe)
-                {
-                    best_device = proposed;
+            let proposed = DeviceInfo {
+                physdev: p,
+                device_id,
+                typ: dev_type,
+                hw_enc_h264,
+                hw_dec_h264,
+                hw_dec_av1,
+            };
+            if let Some(ref cur) = best_device {
+                if device_rank(&proposed) < device_rank(&cur) {
+                    best_device = Some(proposed);
                 }
             } else {
-                best_device = proposed;
+                best_device = Some(proposed);
             }
         }
 
-        let Some((physdev, device_id, _device_type, would_use_hw_enc, would_use_hw_dec)) =
-            best_device
-        else {
+        let Some(dev_info) = best_device else {
             return Err(tag!("Failed to find matching physical device"));
         };
+
+        let physdev = dev_info.physdev;
+        let using_hw_video = dev_info.hw_enc_h264 | dev_info.hw_dec_h264 | dev_info.hw_dec_av1;
 
         let memory_properties = instance.get_physical_device_memory_properties(physdev);
         let queue_families = instance.get_physical_device_queue_family_properties(physdev);
@@ -851,14 +879,31 @@ pub fn setup_vulkan(
         // TODO: use a static (stack) array instead, since max number of extensions is small
         let mut enabled_exts: Vec<*const c_char> = Vec::<*const c_char>::new();
         enabled_exts.extend(ext_list.iter().map(|(name, _)| name.as_ptr()));
-        if would_use_hw_dec || would_use_hw_enc {
+        if using_hw_video {
             enabled_exts.extend(ext_list_video_base.iter().map(|(name, _)| name.as_ptr()));
         }
-        if would_use_hw_enc {
-            enabled_exts.extend(ext_list_video_enc.iter().map(|(name, _)| name.as_ptr()));
+        if dev_info.hw_enc_h264 {
+            enabled_exts.extend(
+                ext_list_video_enc_base
+                    .iter()
+                    .map(|(name, _)| name.as_ptr()),
+            );
         }
-        if would_use_hw_dec {
-            enabled_exts.extend(ext_list_video_dec.iter().map(|(name, _)| name.as_ptr()));
+        if dev_info.hw_enc_h264 {
+            enabled_exts.push(ext_video_enc_h264.0.as_ptr());
+        }
+        if dev_info.hw_dec_h264 | dev_info.hw_dec_av1 {
+            enabled_exts.extend(
+                ext_list_video_dec_base
+                    .iter()
+                    .map(|(name, _)| name.as_ptr()),
+            );
+        }
+        if dev_info.hw_dec_h264 {
+            enabled_exts.push(ext_video_dec_h264.0.as_ptr());
+        }
+        if dev_info.hw_dec_av1 {
+            enabled_exts.push(ext_video_dec_av1.0.as_ptr());
         }
 
         // order: [compute+transfer, graphics+transfer, encode, decode]
@@ -900,7 +945,7 @@ pub fn setup_vulkan(
 
         let prio = &[1.0]; // make a single queue
         let cg_queue = qfis[0] == qfis[1];
-        let nqf = if would_use_hw_dec || would_use_hw_enc {
+        let nqf = if using_hw_video {
             if qfis.iter().any(|x| *x == u32::MAX) {
                 return Err(tag!("Not all queue types needed available: compute {} graphics {} encode {} decode {}", qfis[0], qfis[1], qfis[2], qfis[3]));
             }
@@ -943,7 +988,7 @@ pub fn setup_vulkan(
             .queue_create_infos(&chosen_queues[qstart..qstart + nqf])
             .enabled_extension_names(&enabled_exts)
             .push_next(&mut features2);
-        if would_use_hw_dec || would_use_hw_enc {
+        if using_hw_video {
             logical_info = logical_info
                 .push_next(&mut featuresv11)
                 .push_next(&mut featuresv13)
@@ -1081,12 +1126,11 @@ pub fn setup_vulkan(
         }
 
         let init_sem_value = 0;
-        let drm_fd = drm_open_render((device_id & 0xff) as u32)?;
+        let drm_fd = drm_open_render((dev_info.device_id & 0xff) as u32)?;
         let (semaphore, semaphore_drm_handle, semaphore_fd, semaphore_event_fd) =
             vulkan_create_timeline_parts(&dev, &ext_semaphore_fd, &drm_fd, init_sem_value)?;
 
         // TODO: if video loading fails, post an error here immediately, for now
-
         #[cfg(feature = "video")]
         let video = if with_video {
             Some(setup_video(
@@ -1094,8 +1138,7 @@ pub fn setup_vulkan(
                 &instance,
                 &physdev,
                 &dev,
-                would_use_hw_dec,
-                would_use_hw_enc,
+                &dev_info,
                 debug,
                 *qfis,
                 &enabled_exts,
@@ -1128,7 +1171,7 @@ pub fn setup_vulkan(
             memory_properties,
             timeline_semaphore,
             ext_semaphore_fd,
-            device_id,
+            device_id: dev_info.device_id,
             formats,
             queue_family,
         }))
