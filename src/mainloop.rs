@@ -32,9 +32,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 
-/**
- * The proxy transfers messages in two directions. The shutdown process for each
- * direction is tracked using the DirectionState enum.
+/** Whether a message transfer direction is active, shutting down, or off.
+ *
+ * The shutdown process for each direction is tracked using the DirectionState enum.
  *
  * We assume that the connection ends shutdown entirely; a half-shutdown
  * (read only, or write only) is misbehavior and is interpreted as a full shutdown.
@@ -57,7 +57,9 @@ enum DirectionState {
     Off,
 }
 
-/* unique number identifying a ShadowFd */
+/** A unique number identifying a ShadowFd.
+ *
+ * `waypipe client` allocates negative RIDs; `waypipe server` allocates positive RIDs. */
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy)]
 #[repr(transparent)]
 pub struct Rid(i32);
@@ -67,12 +69,14 @@ impl std::fmt::Display for Rid {
     }
 }
 
+/** Allocate a new RID */
 fn allocate_rid(max_local_id: &mut i32) -> Rid {
     let v: i32 = *max_local_id;
     *max_local_id = max_local_id.checked_add(max_local_id.signum()).unwrap();
     Rid(v)
 }
 
+/** Most of the state used by the main loop (excluding in progress tasks and read/write buffers) */
 pub struct Globals {
     /* Index of ShadowFd by ID; ShadowFds stay alive as long as they have
      * some type of reference by the protocol objects or main code */
@@ -102,6 +106,7 @@ pub struct Globals {
     has_first_message: bool,
 }
 
+/** Data received from a Wayland connection */
 struct WaylandInputRing<'a> {
     // todo: eventually, convert to be a ring buffer (with 2x overflow space
     // to ensure individual messages are contiguous)
@@ -110,9 +115,10 @@ struct WaylandInputRing<'a> {
     fds: VecDeque<OwnedFd>,
 }
 
-// Limit on the size of TransferWayland.fds, and FromChannel.rid_queue
+/** Limit on the size of TransferWayland.fds, and the FromChannel.rid_queue */
 pub const MAX_OUTGOING_FDS: usize = 8;
 
+/** Data queued for transfer to the Wayland connection */
 struct TransferWayland<'a> {
     data: &'a mut [u8],
     start: usize,
@@ -124,6 +130,7 @@ struct TransferWayland<'a> {
 
 // TODO: consistent naming.
 // 'channel'/'wayland'
+/** State corresponding to the transfers from the channel to the Wayland connection */
 struct FromChannel<'a> {
     state: DirectionState,
     /* (typically) zero-copy buffer tracker */
@@ -142,6 +149,7 @@ struct FromChannel<'a> {
     message_counter: usize,
 }
 
+/** Reference to a DMABUF and associated metadata needed to apply diffs/fills to it */
 #[derive(Clone)]
 struct DecompTaskDmabuf {
     mirror: Option<Arc<Mirror>>,
@@ -149,11 +157,13 @@ struct DecompTaskDmabuf {
     view_row_stride: Option<u32>,
 }
 
+/** Reference to a shm file and its associated metadata */
 struct DecompTaskFile {
     skip_mirror: bool, /* Whether to write onto the mirror or not */
     target: Arc<ShadowFdFileCore>,
 }
 
+/** Destination information when applying a diff or fill to a DMABUF */
 struct ApplyTaskDmabuf {
     target: DecompTaskDmabuf,
     /* ApplyTask.region_start/end can be rounded up/down to the nearest texel */
@@ -161,12 +171,14 @@ struct ApplyTaskDmabuf {
     orig_end: usize,
 }
 
+/** Possible destinations for an ApplyTask */
 enum ApplyTaskTarget {
     Dmabuf(ApplyTaskDmabuf),
     Shm(DecompTaskFile),
     MirrorOnly(Arc<Mirror>),
 }
 
+/** A task to apply a diff or fill operation to some object */
 struct ApplyTask {
     /* This task can only safely be applied when all apply tasks with earlier
      * sequence values are known, and when no preceding tasks have overlapping
@@ -183,11 +195,15 @@ struct ApplyTask {
     region_end: usize,
 }
 
+/** The target of a diff or fill operation */
 enum DecompTarget {
     Dmabuf(DecompTaskDmabuf),
     File(DecompTaskFile),
 }
 
+/** A task to decompress a diff or fill message.
+ *
+ * Applying the decompressed operation is done by ApplyTask. */
 struct DecompTask {
     sequence: Option<u64>,
     msg_view: ReadBufferView,
@@ -196,6 +212,11 @@ struct DecompTask {
     target: DecompTarget,
 }
 
+/** A structure keeping track of the various compute heavy tasks to perform or
+ * which are in progress.
+ *
+ * Note: to avoid race conditions, tasks whose target regions or memory overlap
+ * may be delayed until they have exclusive access. */
 struct TaskSet {
     /* Tasks to construct diff or fill messages. These _should_ be safe to
      * evaluate in parallel, in any order, because these tasks should only
@@ -225,18 +246,22 @@ struct TaskSet {
     stop: bool,
 }
 
+/** Structure shared between the main thread and workers, to keep track of tasks
+ * and notify the workers or main thread when they must act. */
 struct TaskSystem {
     task_notify: Condvar,
     tasks: Mutex<TaskSet>,
     wake_fd: OwnedFd,
 }
 
+/** Context objects for compression and decompression. */
 struct ThreadCacheComp {
     lz4_c: Option<LZ4CCtx>,
     zstd_c: Option<ZstdCCtx>,
     zstd_d: Option<ZstdDCtx>,
 }
 
+/** Data specific to a worker thread. */
 struct ThreadCache {
     /* Large (~256KB) vector in which to store intermediate diff / decompression contents; size
      * dynamically increased as needed. */
@@ -250,6 +275,7 @@ struct ThreadCache {
     comp: ThreadCacheComp,
 }
 
+/** Messages to be written through the channel (and associated metadata.) */
 struct TransferQueue<'a> {
     // protocol data: translated wayland messages
     protocol_data: &'a mut [u8],
@@ -274,6 +300,7 @@ struct TransferQueue<'a> {
     nbytes_written: usize,
 }
 
+/** State corresponding to the transfers from the Wayland connection to the channel */
 struct FromWayland<'a> {
     state: DirectionState,
 
@@ -281,7 +308,7 @@ struct FromWayland<'a> {
     output: TransferQueue<'a>,
 }
 
-/* Some work to be completed before sending protocol data further */
+/** Task to compute the changes for a shared memory file */
 struct DiffTask {
     rid: Rid,
     compression: Compression,
@@ -294,6 +321,7 @@ struct DiffTask {
     target: Arc<ShadowFdFileCore>,
 }
 
+/** Task to compute the changed data for a DMABUF: initial step to start copying data from the image */
 struct DiffDmabufTask {
     rid: Rid,
     compression: Compression,
@@ -309,6 +337,7 @@ struct DiffDmabufTask {
     acquires: Vec<(Arc<VulkanTimelineSemaphore>, u64)>,
 }
 
+/** Task to compute the changed data for a DMABUF: final step to compute the diff */
 struct DiffDmabufTask2 {
     rid: Rid,
     compression: Compression,
@@ -324,6 +353,7 @@ struct DiffDmabufTask2 {
     mirror: Arc<Mirror>,
 }
 
+/** Task to copy data for a DMABUF: initial step to start copying data */
 struct FillDmabufTask {
     rid: Rid,
     compression: Compression,
@@ -336,7 +366,7 @@ struct FillDmabufTask {
     acquires: Vec<(Arc<VulkanTimelineSemaphore>, u64)>,
 }
 
-/* Second part of fill task, for execution after copy operation completes */
+/** Task to copy data for a DMABUF: final step to construct and compress message */
 struct FillDmabufTask2 {
     rid: Rid,
     compression: Compression,
@@ -348,11 +378,13 @@ struct FillDmabufTask2 {
     read_buf: Arc<VulkanBuffer>,
 }
 
+/** Task to encode DMABUF changes as a video packet */
 struct VideoEncodeTask {
     vulk: Arc<Vulkan>,
     state: Arc<VideoEncodeState>,
     remote_id: Rid,
 }
+/** Task to apply a video packet to a DMABUF */
 struct VideoDecodeTask {
     msg: ReadBufferView,
     remote_id: Rid,
@@ -360,6 +392,7 @@ struct VideoDecodeTask {
     state: Arc<VideoDecodeState>,
 }
 
+/** A task to be performed by a worker thread */
 enum WorkTask {
     Fill(FillDmabufTask),
     FillDmabuf2(FillDmabufTask2),
@@ -372,15 +405,23 @@ enum WorkTask {
     VideoDecode(VideoDecodeTask),
 }
 
+/** The result of a typical task */
 enum TaskOutput {
-    MirrorApply,  // updated a mirror, but main task completion signalled through other means
-    Msg(Vec<u8>), // for construct-type tasks, messages to append
-    ApplyDone(Rid), // to indicate one apply task for an RID has completed
-    DmabufApplyOp((u64, Rid)), // apply task for RID will be done when semaphore reaches timeline pt
+    /** Have updated a mirror, so far; task completion will be signalled by some other pathway */
+    MirrorApply,
+    /** A new message to append to the output queue */
+    Msg(Vec<u8>),
+    /** Finished applying the message to the ShadowFd with the given RID */
+    ApplyDone(Rid),
+    /** Applying the message to the ShadowFd with the RID will be done when the main timeline semaphore
+     * reaches the given point */
+    DmabufApplyOp((u64, Rid)),
 }
 
+/** Result of a typical task (or error message )*/
 type TaskResult = Result<TaskOutput, String>;
 
+/** Damaged region of an DMABUF or File ShadowFd*/
 #[derive(PartialEq, Eq, Debug)]
 pub enum Damage {
     Everything,
@@ -388,12 +429,13 @@ pub enum Damage {
     Intervals(Vec<(usize, usize)>),
 }
 
-/* This will be accessed over multiple threads */
+/** Data for a ShadowFdFile to be shared between threads */
 pub struct ShadowFdFileCore {
     pub mem_mirror: Mirror,
     pub mapping: ExternalMapping,
 }
 
+/** A ShadowFd for a shared memory file object (either mutable wl_shm_pool, or something readonly) */
 pub struct ShadowFdFile {
     pub buffer_size: usize,
     pub remote_bufsize: usize,
@@ -407,6 +449,7 @@ pub struct ShadowFdFile {
     pub pending_apply_tasks: u64,
 }
 
+/** A ShadowFd associated with a DMABUF */
 pub struct ShadowFdDmabuf {
     pub buf: Arc<VulkanDmabuf>,
     /* Mirror copy of the dmabuf; only present after the first request */
@@ -441,6 +484,7 @@ pub struct ShadowFdDmabuf {
     pub debug_wayland_id: ObjId,
 }
 
+/** State of a ShadowFdPipe */
 enum ShadowFdPipeBuffer {
     // todo: use ring buffer, and/or increase size to 32K
     ReadFromWayland((Box<[u8; 4096]>, usize)),
@@ -450,7 +494,9 @@ enum ShadowFdPipeBuffer {
     ReadFromChannel(VecDeque<u8>),
 }
 
-// Wayland protocols need one-directional transfers only
+/** A ShadowFd associated with a DMABUF
+ *
+ * Note: Wayland protocols need one-directional transfers only */
 pub struct ShadowFdPipe {
     buf: ShadowFdPipeBuffer,
 
@@ -461,6 +507,7 @@ pub struct ShadowFdPipe {
     /** File descriptor to be sent over Wayland connection */
     export_fd: Option<OwnedFd>,
 }
+/** A ShadowFd associated with a DRM syncobj timeline object */
 pub struct ShadowFdTimeline {
     pub timeline: Arc<VulkanTimelineSemaphore>,
     export_fd: Option<OwnedFd>,
@@ -469,12 +516,15 @@ pub struct ShadowFdTimeline {
     /* List of dmabufs which have pending associated release operations */
     pub releases: Vec<(u64, Rc<RefCell<ShadowFd>>)>,
 }
+/** Type of ShadowFd */
 pub enum ShadowFdVariant {
     File(ShadowFdFile),
     Pipe(ShadowFdPipe),
     Dmabuf(ShadowFdDmabuf),
     Timeline(ShadowFdTimeline),
 }
+/** Structure keeping metadata and content for a file descriptor that Waypipe
+ * is proxying over its connection */
 pub struct ShadowFd {
     pub remote_id: Rid,
     /** This is true if the ShadowFd has not yet been replicated. This flag
@@ -486,6 +536,7 @@ pub struct ShadowFd {
     pub data: ShadowFdVariant,
 }
 
+/** Format a bool as 'T' or 'F' */
 fn fmt_bool(x: bool) -> char {
     if x {
         'T'
@@ -494,7 +545,9 @@ fn fmt_bool(x: bool) -> char {
     }
 }
 
-/** Read data from the Wayland side. Returns true if the Wayland connection fd closed */
+/** Read data and fds from a Wayland socket..
+ *
+ * Returns true if the Wayland connection fd closed */
 fn read_from_socket(socket: &OwnedFd, buf: &mut WaylandInputRing<'_>) -> Result<bool, String> {
     // assume the socket starts _empty_, for now
     if buf.len == buf.data.len() {
@@ -554,6 +607,9 @@ fn read_from_socket(socket: &OwnedFd, buf: &mut WaylandInputRing<'_>) -> Result<
     }
 }
 
+/** Write data and fds to a Wayland socket.
+ *
+ * Returns true if the Wayland connection fd closed */
 fn write_to_socket(socket: &OwnedFd, buf: &mut TransferWayland<'_>) -> Result<bool, String> {
     assert!(buf.len > 0);
 
@@ -671,6 +727,9 @@ fn write_to_socket(socket: &OwnedFd, buf: &mut TransferWayland<'_>) -> Result<bo
     }
 }
 
+/** Write data to the channel connecting this Waypipe instance with the other one.
+ *
+ * Returns true if the channel connection fd closed */
 fn write_to_channel(socket: &OwnedFd, queue: &mut TransferQueue) -> Result<bool, String> {
     let send_protocol = queue.protocol_len > 0 && queue.expected_recvd_msgs == 0;
 
@@ -808,7 +867,9 @@ fn write_to_channel(socket: &OwnedFd, queue: &mut TransferQueue) -> Result<bool,
     }
 }
 
-/** Read data from the channel. Returns true if the channel connection fd closed */
+/** Read data from the channel connecting this Waypipe instance with the other one.
+ *
+ * Returns true if the channel connection fd closed */
 fn read_from_channel(socket: &OwnedFd, from_chan: &mut FromChannel) -> Result<bool, String> {
     let eof = from_chan.input.read_more(socket)?;
 
@@ -819,7 +880,9 @@ fn read_from_channel(socket: &OwnedFd, from_chan: &mut FromChannel) -> Result<bo
     Ok(eof)
 }
 
-/* `readonce`: is this just a raw file transfer? */
+/** Construct a ShadowFd for a shared memory file descriptor
+ *
+ * `readonce`: is this just a raw file transfer? */
 pub fn translate_shm_fd(
     fd: OwnedFd,
     size_lb: usize,
@@ -862,6 +925,7 @@ pub fn translate_shm_fd(
     Ok(sfd)
 }
 
+/** Construct a ShadowFd for a DMABUF file descriptor */
 pub fn translate_dmabuf_fd(
     width: u32,
     height: u32,
@@ -939,6 +1003,7 @@ pub fn translate_dmabuf_fd(
     Ok(sfd)
 }
 
+/** Construct a ShadowFd for a timeline object file descriptor */
 pub fn translate_timeline(
     fd: OwnedFd,
     glob: &mut Globals,
@@ -966,6 +1031,7 @@ pub fn translate_timeline(
     Ok(sfd)
 }
 
+/** Construct a ShadowFd for a pipe-like file descriptor */
 pub fn translate_pipe_fd(
     fd: OwnedFd,
     glob: &mut Globals,
@@ -1000,6 +1066,8 @@ pub fn translate_pipe_fd(
     Ok(sfd)
 }
 
+/** Update mapping and mirror of a shared memory file descriptor for an increased
+ * size */
 pub fn update_core_for_new_size(
     fd: &OwnedFd,
     size: usize,
@@ -1025,6 +1093,7 @@ pub fn update_core_for_new_size(
     Ok(())
 }
 
+/** Lookup a ShadowFd by its RID, if it has been created and is still referenced by something */
 fn get_sfd(
     map: &BTreeMap<Rid, Weak<RefCell<ShadowFd>>>,
     rid: Rid,
@@ -1032,6 +1101,7 @@ fn get_sfd(
     map.get(&rid)?.upgrade()
 }
 
+/** Process a message directed to a ShadowFd */
 fn process_sfd_msg(
     typ: WmsgType,
     length: usize,
@@ -1565,8 +1635,12 @@ fn process_sfd_msg(
         _ => unreachable!("Unhandled message type: {:?}", typ),
     }
 }
+
+/** Maximize total length of the intervals on which a single diff or fill operation
+ * should be peformed */
 const DIFF_CHUNKSIZE: u32 = 262144;
 
+/** Construct BufferFill messages for an entire shared memory file descriptor */
 fn construct_fill_transfers(
     rid: Rid,
     bufsize: usize,
@@ -1624,8 +1698,11 @@ fn construct_fill_transfers(
     Ok(())
 }
 
-/* Output: intervals, max_diff_len, ntrailing */
 // TODO: produce an iterator instead?
+/** Partition a list of damaged intervals into smaller chunks, for processing on individual threads.
+ *
+ * Output: (ntrailing, interval lists)
+ */
 fn split_damage(intervals: &[(usize, usize)], buf_size: usize) -> (usize, Vec<Vec<(u32, u32)>>) {
     let final_chunk = 64 * (buf_size / 64);
 
@@ -1709,7 +1786,10 @@ fn split_damage(intervals: &[(usize, usize)], buf_size: usize) -> (usize, Vec<Ve
     (if has_trailing { trail_size } else { 0 }, parts)
 }
 
-/* Return value: true = keep, false = delete the sfd */
+/** Check if a specific ShadowFd has been updated, and if so create the messages
+ * or tasks required to replicate those updates.
+ *
+ * Return value: true = keep, false = delete the sfd */
 fn collect_updates(
     sfd: &mut ShadowFd,
     way_msg_output: &mut TransferQueue,
@@ -2065,7 +2145,9 @@ fn collect_updates(
     }
 }
 
-/* Requires that none of the ShadowFds in the list are currently borrowed */
+/** Remove buffer release events which have occurred.
+ *
+ * Requires that none of the ShadowFds in the list are currently borrowed */
 fn prune_releases(
     releases: &mut Vec<(u64, Rc<RefCell<ShadowFd>>)>,
     current_pt: u64,
@@ -2086,7 +2168,7 @@ fn prune_releases(
     });
 }
 
-/* Signal timeline acquires in a given list */
+/** Signal the timeline points in a list of buffer acquires */
 pub fn signal_timeline_acquires(
     acquires: &mut Vec<(u64, Rc<RefCell<ShadowFd>>)>,
 ) -> Result<(), String> {
@@ -2105,6 +2187,10 @@ pub fn signal_timeline_acquires(
     Ok(())
 }
 
+/** Central logic to compute a diff on a shared memory region
+ *
+ * Returns: core diff length, trailing diff bytes
+ */
 fn diff_inner(task: &DiffTask, dst: &mut [u8]) -> Result<(u32, u32), String> {
     let buflen = task.target.mapping.get_u8().len();
 
@@ -2161,6 +2247,7 @@ fn diff_inner(task: &DiffTask, dst: &mut [u8]) -> Result<(u32, u32), String> {
     Ok((diff_len, ntrailing))
 }
 
+/** Run a [DiffTask] */
 fn run_diff_task(task: &DiffTask, cache: &mut ThreadCache) -> TaskResult {
     debug!(
         "{} running diff task: {}..{},+{}",
@@ -2232,6 +2319,10 @@ fn run_diff_task(task: &DiffTask, cache: &mut ThreadCache) -> TaskResult {
     Ok(TaskOutput::Msg(msg))
 }
 
+/** Central logic to compute a diff using a buffer copied from a DMABUF
+ *
+ * Returns: core diff length, trailing diff bytes
+ */
 fn diff_dmabuf_inner(task: &DiffDmabufTask2, dst: &mut [u8]) -> Result<(u32, u32), String> {
     let img_len = task.nominal_size;
     let data = task.read_buf.get_read_view();
@@ -2309,6 +2400,7 @@ fn diff_dmabuf_inner(task: &DiffDmabufTask2, dst: &mut [u8]) -> Result<(u32, u32
     Ok((diff_len, ntrailing))
 }
 
+/** Run a [DiffDmabufTask] */
 fn run_diff_dmabuf_task(
     task: DiffDmabufTask,
     cache: &mut ThreadCache,
@@ -2361,6 +2453,7 @@ fn run_diff_dmabuf_task(
         nominal_size: task.img.nominal_size(task.view_row_stride),
     })
 }
+/** Run a [DiffDmabufTask2] */
 fn run_diff_dmabuf_task_2(task: DiffDmabufTask2, cache: &mut ThreadCache) -> TaskResult {
     task.read_buf.prepare_read()?;
 
@@ -2471,6 +2564,7 @@ impl ThreadCacheComp {
     }
 }
 
+/** Run a [FillDmabufTask] */
 fn run_fill_dmabuf_task(
     task: FillDmabufTask,
     cache: &mut ThreadCache,
@@ -2510,6 +2604,7 @@ fn run_fill_dmabuf_task(
     })
 }
 
+/** Run a [FillDmabufTask2] */
 fn run_dmabuf_fill_task_2(task: FillDmabufTask2, cache: &mut ThreadCache) -> TaskResult {
     task.read_buf.prepare_read()?;
     let data = task.read_buf.get_read_view();
@@ -2537,15 +2632,19 @@ fn run_dmabuf_fill_task_2(task: FillDmabufTask2, cache: &mut ThreadCache) -> Tas
     Ok(TaskOutput::Msg(msg))
 }
 
+/** The result of a message decompression task */
 enum DecompReturn {
     Shm(ApplyTask),
     Dmabuf((u64, Rid, Option<ApplyTask>)),
 }
 
+/** Return whether an interval is aligned with texel boundaries (multiples of `bpp`)*/
 fn is_segment_texel_aligned(start: usize, end: usize, bpp: usize) -> bool {
     start % bpp == 0 && end % bpp == 0
 }
 
+/** Decompress the input `src` with the specified compression method into `dst`, which
+ * must have exactly the decompressed size of the input. */
 fn decomp_into_slice(
     comp: Compression,
     cache: &mut ThreadCacheComp,
@@ -2563,7 +2662,9 @@ fn decomp_into_slice(
     Ok(())
 }
 
-/* note: this copies the input when the compression mode is None, which is slightly inefficient */
+/** Decompress the input `src` with the specified compression method and return the result.
+ *
+ * note: this copies the input when the compression mode is None, which is slightly inefficient */
 fn decomp_into_vec(
     comp: Compression,
     cache: &mut ThreadCacheComp,
@@ -2583,7 +2684,9 @@ fn decomp_into_vec(
     })
 }
 
-/* note: this copies the input when the compression mode is None, which is slightly inefficient;
+/** Compress the input `src` with the specified compression method and return the result.
+ *
+ * note: this copies the input when the compression mode is None, which is slightly inefficient;
  * instead, use a fast path which avoids comp=None entirely */
 fn comp_into_vec(
     comp: Compression,
@@ -2608,6 +2711,7 @@ fn comp_into_vec(
     })
 }
 
+/** Run a [DecompTask] */
 fn run_decomp_task(task: &DecompTask, cache: &mut ThreadCache) -> Result<DecompReturn, String> {
     let msg = task.msg_view.get();
 
@@ -2878,6 +2982,8 @@ fn run_decomp_task(task: &DecompTask, cache: &mut ThreadCache) -> Result<DecompR
         unreachable!();
     }
 }
+
+/** Run an [ApplyTask] */
 fn run_apply_task(task: &ApplyTask, cache: &mut ThreadCache) -> TaskResult {
     match task.target {
         ApplyTaskTarget::MirrorOnly(ref d) => {
@@ -3069,6 +3175,7 @@ fn run_apply_task(task: &ApplyTask, cache: &mut ThreadCache) -> TaskResult {
     }
 }
 
+/** Run a [VideoEncodeTask] */
 fn run_encode_task(task: VideoEncodeTask, cache: &mut ThreadCache) -> TaskResult {
     let pool: &Arc<VulkanCommandPool> = cache.get_cmd_pool(&task.vulk)?;
     let packet = start_dmavid_encode(&task.state, pool)?;
@@ -3086,6 +3193,8 @@ fn run_encode_task(task: VideoEncodeTask, cache: &mut ThreadCache) -> TaskResult
     }
     Ok(TaskOutput::Msg(msg))
 }
+
+/** Run a [VideoDecodeTask] */
 fn run_decode_task(task: VideoDecodeTask, cache: &mut ThreadCache) -> TaskResult {
     let pool: &Arc<VulkanCommandPool> = cache.get_cmd_pool(&task.vulk)?;
     let msg = &task.msg.get();
@@ -3101,6 +3210,7 @@ fn run_decode_task(task: VideoDecodeTask, cache: &mut ThreadCache) -> TaskResult
     )))
 }
 
+/** Process messages received from the channel to the other Waypipe instance */
 fn process_channel(
     chan_msg: &mut FromChannel,
     glob: &mut Globals,
@@ -3285,6 +3395,7 @@ fn process_channel(
     Ok(())
 }
 
+/** Process messages received from the Wayland connection */
 fn process_wayland_1(
     way_msg: &mut FromWayland,
     glob: &mut Globals,
@@ -3414,6 +3525,7 @@ fn process_wayland_1(
     Ok(())
 }
 
+/** Add RID and protocol transfer messages to send to the channel */
 fn process_wayland_2(way_msg: &mut FromWayland) {
     debug!("Process wayland 2");
 
@@ -3465,6 +3577,7 @@ fn process_wayland_2(way_msg: &mut FromWayland) {
     }
 }
 
+/** Process task completion events indicated by the main Vulkan timeline semaphore */
 fn process_vulkan_updates(
     glob: &mut Globals,
     tasksys: &TaskSystem,
@@ -3603,6 +3716,7 @@ fn has_from_chan_output(from_chan_output: &TransferWayland) -> bool {
     from_chan_output.len > 0
 }
 
+/** Write a message to the file descriptor to wake up the thread that polls `poll()` it */
 fn wakeup_fd(fd: &OwnedFd) -> Result<(), ()> {
     let zero = [0];
     loop {
@@ -3624,14 +3738,17 @@ fn wakeup_fd(fd: &OwnedFd) -> Result<(), ()> {
     }
 }
 
+/** Return true iff the two half-open intervals intersect */
 fn interval_overlaps(a: &(usize, usize), b: &(usize, usize)) -> bool {
     b.0 < a.1 && a.0 < b.1
 }
 
+/** Return true if waiting for pending tasks that may produce a message */
 fn has_pending_compute_tasks(from_way_output: &TransferQueue) -> bool {
     from_way_output.expected_recvd_msgs > 0
 }
 
+/** Identify a task which can be run, if one exists */
 fn pop_task(tasksys: &mut TaskSet) -> Option<WorkTask> {
     /* Task priorities are chosen to minimize the amount of data in-flight */
 
@@ -3674,6 +3791,7 @@ fn pop_task(tasksys: &mut TaskSet) -> Option<WorkTask> {
     tasksys.construct.pop_front()
 }
 
+/** Main loop for a worker thread to do compute-heavy tasks */
 fn work_thread(tasksys: &TaskSystem, output: Sender<TaskResult>) {
     let notify: &Condvar = &tasksys.task_notify;
     let mtx: &Mutex<_> = &tasksys.tasks;
@@ -3871,6 +3989,10 @@ fn work_thread(tasksys: &TaskSystem, output: Sender<TaskResult>) {
     );
 }
 
+/** Inner loop of Waypipe's proxy logic, which reads and writes Wayland messages for
+ * the Wayland application or compositor, and Waypipe messages for the matching Waypipe instance.
+ *
+ * Returns: if unsuccessful, an error message to print and send to the Wayland application */
 fn loop_inner(
     glob: &mut Globals,
     from_chan: &mut FromChannel,
@@ -4472,7 +4594,9 @@ fn loop_inner(
     Ok(())
 }
 
-/* Returns (eof, nwritten) */
+/** Write data to a socket.
+ *
+ * Returns (eof, nwritten) */
 fn write_bytes(sockfd: &OwnedFd, data: &[u8]) -> Result<(bool, usize), String> {
     let slice = &[IoSlice::new(data)];
     match uio::writev(sockfd, slice) {
@@ -4489,7 +4613,7 @@ fn write_bytes(sockfd: &OwnedFd, data: &[u8]) -> Result<(bool, usize), String> {
     }
 }
 
-/* Finish writing any queued data and then send an error message */
+/** Finish writing any queued data and then send an error message over the channel */
 fn loop_error_to_channel(
     error: &str,
     from_way: &mut FromWayland,
@@ -4559,6 +4683,7 @@ fn loop_error_to_channel(
 
     Ok(())
 }
+/** Finish writing any queued data and then send an error message to the Wayland application */
 fn loop_error_to_wayland(
     error: &str,
     from_chan: &mut FromChannel,
@@ -4625,6 +4750,7 @@ fn loop_error_to_wayland(
     Ok(())
 }
 
+/** Struct which on Drop notifies worker threads to stop */
 struct ThreadShutdown<'a> {
     tasksys: &'a TaskSystem,
 }
@@ -4643,7 +4769,7 @@ impl Drop for ThreadShutdown<'_> {
     }
 }
 
-/* Options for the main interface loop */
+/** Options for the main interface loop */
 #[derive(Debug, Clone)]
 pub struct Options {
     /* Whether to print debug messages and add extra correctness checks */
@@ -4664,7 +4790,7 @@ pub struct Options {
     pub force_sw_decoding: bool,
 }
 
-/* The main entrypoint for Wayland protocol proxying; should be given already opened and connected sockets
+/** The main entrypoint for Wayland protocol proxying; should be given already opened and connected sockets
  * for the Wayland program and for the other Waypipe instance. */
 pub fn main_interface_loop(
     chanfd: OwnedFd,

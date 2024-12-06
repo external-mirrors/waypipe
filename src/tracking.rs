@@ -23,11 +23,17 @@ use std::os::fd::OwnedFd;
 use std::rc::Rc;
 use std::sync::Arc;
 
+/** Structure storing information for a specific Wayland object */
 pub struct WpObject {
+    /** Wayland interface associated with the object */
     obj_type: WaylandInterface,
-    is_zombie: bool,
+    /** Extra data associated with the object; in practice this enum either matches
+     * WaylandInterface or is WpExtra::None */
     extra: WpExtra,
+    is_zombie: bool,
 }
+
+/** Damage rectangle, of the form directly provided by wl_surface.damage and wl_surface.damage_buffer */
 #[derive(Clone, Copy, Debug)]
 struct WlRect {
     x: i32,
@@ -35,9 +41,13 @@ struct WlRect {
     width: i32,
     height: i32,
 }
+
+/** Damage recorded for a surface during a commit interval, plus information
+ * needed to interpret the damage and record the associated buffer.
+ */
 #[derive(Clone)]
 struct DamageBatch {
-    /* wl_surface.damage is interpreted to have the scale/transform at the time the damage was committed,
+    /** wl_surface.damage is interpreted to have the scale/transform at the time the damage was committed,
      * so these must be recorded per commit. (It is unclear how this interacts with fractional scale and
      * wp_viewporter.) (The buffer dimensions must be known in order to apply the scale and transform,
      * so we delay this to better handle scenarios where the surface alternates between differently
@@ -49,8 +59,12 @@ struct DamageBatch {
     damage: Vec<WlRect>,
     damage_buffer: Vec<WlRect>,
 
+    /** The buffer attached at the time the damage was committed (or an arbitrary value if
+     * the batch was not yet committed.) */
     buffer_uid: u64,
 }
+
+/** Additional information for wl_surface */
 struct ObjWlSurface {
     attached_buffer_id: Option<ObjId>,
     /* The total damage for a buffer since the last time it was committed is given
@@ -61,10 +75,14 @@ struct ObjWlSurface {
     acquire_pt: Option<(u64, Rc<RefCell<ShadowFd>>)>,
     release_pt: Option<(u64, Rc<RefCell<ShadowFd>>)>,
 }
+
+/** Additional information for wl_shm_pool */
 struct ObjWlShmPool {
     buffer: Rc<RefCell<ShadowFd>>,
 }
 
+/** Metadata indicating how a wl_buffer created from a wl_shm pool maps
+ * onto the underlying pool */
 #[derive(Clone, Copy)]
 struct ObjWlBufferShm {
     width: i32,
@@ -74,6 +92,7 @@ struct ObjWlBufferShm {
     stride: i32,
 }
 
+/** Additional information for wl_buffer */
 struct ObjWlBuffer {
     sfd: Rc<RefCell<ShadowFd>>,
     /* Metadata explaining how a wl_buffer relates to its underlying wl_shm_pool.'
@@ -82,6 +101,8 @@ struct ObjWlBuffer {
 
     unique_id: u64,
 }
+
+/** Data of a format tranche from zwp_linux_dmabuf_feedback_v1 */
 struct DmabufTranche {
     flags: u32,
     /* note: these can only be interpreted when the "done" event arrives
@@ -90,8 +111,9 @@ struct DmabufTranche {
     device: u64,
 }
 
+/** Additional information for zwp_linux_dmabuf_v1 */
 struct ObjZwpLinuxDmabuf {
-    /* Set of formats seen in .modifier events. This makes it possible to
+    /** Set of formats seen in .modifier events. This makes it possible to
      * replace the first .modifier received with a full list of modifiers events
      * for that format, and then drop all subsequent .modifier events with same
      * format. (Alternatively, one could wait for "a roundtrip after binding" to
@@ -100,6 +122,7 @@ struct ObjZwpLinuxDmabuf {
     formats_seen: BTreeSet<u32>,
 }
 
+/** Additional information for zwp_linux_dmabuf_feedback_v1 */
 struct ObjZwpLinuxDmabufFeedback {
     /* Cache of the last sent table fd */
     table_fd: Option<(OwnedFd, u32)>,
@@ -111,6 +134,7 @@ struct ObjZwpLinuxDmabufFeedback {
     current: DmabufTranche,
 }
 
+/** Additional information for zwp_linux_buffer_params_v1 */
 struct ObjZwpLinuxDmabufParams {
     /* if using 'create', output dmabuf reference stored here before transferring to wl_buffer */
     dmabuf: Option<Rc<RefCell<ShadowFd>>>,
@@ -122,26 +146,31 @@ struct ObjZwpLinuxDmabufParams {
     // which might be awkward
 }
 
+/** Additional information for wp_linux_drm_syncobj_surface_v1 */
 struct ObjWpDrmSyncobjSurface {
     /* Corresponding wl_surface object */
     surface: ObjId,
 }
 
+/** Additional information for wp_linux_drm_syncobj_timeline_v1 */
 struct ObjWpDrmSyncobjTimeline {
     timeline: Rc<RefCell<ShadowFd>>,
 }
 
+/** Either a clock id, or list of Wayland objects */
 enum ClockOrObjects {
     Clock(u32),
     Objects(Vec<ObjId>),
 }
 
+/** Additional information for wp_presentation */
 struct ObjWpPresentation {
-    /* Either the clock id, once set, or the list of feedback objects which are waiting to receive
+    /** Either the clock id, once set, or the list of feedback objects which are waiting to receive
      * a clock id */
     state: ClockOrObjects,
 }
 
+/** Either a clock id, Wayland object, or invalid condition marker */
 #[derive(Debug)]
 enum ClockOrObject {
     Clock(u32),
@@ -150,18 +179,20 @@ enum ClockOrObject {
     Invalid,
 }
 
+/** Additional information for wp_presentation_feedback */
 struct ObjWpPresentationFeedback {
     /* It is possible to create a wp_presentation_feedback object before the event setting
      * the clock id onn wp_presentation is received; */
     clock: ClockOrObject,
 }
 
+/** Additional information for zwlr_screencopy_frame_v1 */
 struct ObjZwlrScreencopyFrame {
     /* Store sfd and shm metadata of target buffer in case the wl_buffer is destroyed early */
     buffer: Option<(Rc<RefCell<ShadowFd>>, Option<ObjWlBufferShm>)>,
 }
 
-// issue: enum size overhead. Consider using Box<ObjWlSurface>, Box<ObjWlBuffer>, etc. entries?
+/** Additional information attached to specific Wayland objects */
 enum WpExtra {
     WlSurface(Box<ObjWlSurface>),
     WlBuffer(Box<ObjWlBuffer>),
@@ -177,6 +208,8 @@ enum WpExtra {
     None,
 }
 
+/** This enum indicates in which direction messages are being processed, and
+ * provides queues for ShadowFds or file descriptors to receive or send. */
 pub enum TranslationInfo<'a> {
     // RID -> SFD/FD
     FromChannel(
@@ -194,6 +227,8 @@ pub enum TranslationInfo<'a> {
     ),
 }
 
+/** Given a Wayland rectangle, clip it with the \[0,0,w,h\] rectangle and return
+ * the result, if nonempty */
 fn clip_wlrect_to_buffer(a: &WlRect, w: i32, h: i32) -> Option<Rect> {
     let x1 = a.x;
     let x2 = a.x.saturating_add(a.width);
@@ -215,7 +250,12 @@ fn clip_wlrect_to_buffer(a: &WlRect, w: i32, h: i32) -> Option<Rect> {
     }
 }
 
-/* This handles out-of-bounds behavior by saturating, instead of erroring, since damage gets
+/** Transform a rectangle indicating damage on a surface to a rectangle indicating
+ * damage on a buffer.
+ *
+ * `scale` and `transform` are those of the surface; `width` and `height` those of the buffer.
+ *
+ * This handles out-of-bounds behavior by saturating, instead of erroring, since damage gets
  * clipped later anyway; and damage(0,0,INT_MAX,INT_MAX) is an occasional idiom */
 fn apply_damage_rect_transform(
     a: &WlRect,
@@ -257,6 +297,7 @@ fn apply_damage_rect_transform(
     }
 }
 
+/** Get an interval containing the entire memory region corresponding to the buffer */
 fn damage_for_entire_buffer(buffer: &ObjWlBufferShm) -> (usize, usize) {
     let start = (buffer.offset) as usize;
     let end = (buffer.offset + buffer.stride * buffer.height) as usize;
@@ -264,6 +305,7 @@ fn damage_for_entire_buffer(buffer: &ObjWlBufferShm) -> (usize, usize) {
     (64 * (start / 64), align(end, 64))
 }
 
+/** For single-plane non-subsampled linear formats, return the bytes used per pixel. */
 fn get_bpp(fmt: u32) -> Option<usize> {
     use WlShmFormat::*;
 
@@ -311,6 +353,8 @@ fn get_bpp(fmt: u32) -> Option<usize> {
     }
 }
 
+/** Return a list of rectangular areas damaged on a surface since the last time the given
+ * buffer was committed; the rectangles are not guaranteed to be disjoint. */
 fn get_damage_rects(surface: &ObjWlSurface, buffer_uid: u64, width: i32, height: i32) -> Vec<Rect> {
     let mut rects = Vec::<Rect>::new();
     let Some(mut first_idx) = surface
@@ -350,6 +394,8 @@ fn get_damage_rects(surface: &ObjWlSurface, buffer_uid: u64, width: i32, height:
     rects
 }
 
+/** Compute the (disjoint) damage intervals for a shared memory pool used by the buffer,
+ * using damage accumulated since the last time the buffer was committed */
 fn get_damage_for_shm(buffer: &ObjWlBuffer, surface: &ObjWlSurface) -> Vec<(usize, usize)> {
     let Some(shm_info) = &buffer.shm_info else {
         panic!();
@@ -371,6 +417,8 @@ fn get_damage_for_shm(buffer: &ObjWlBuffer, surface: &ObjWlSurface) -> Vec<(usiz
     )
 }
 
+/** Compute the (disjoint) damage intervals for the linear view of a DMABUF's contents,
+ * using damage accumulated since the last time the buffer was committed */
 fn get_damage_for_dmabuf(
     buffer: &ObjWlBuffer,
     sfdd: &ShadowFdDmabuf,
@@ -392,6 +440,7 @@ fn get_damage_for_dmabuf(
     compute_damaged_segments(&mut rects[..], 6, 128, 0, stride as usize, bpp)
 }
 
+/** Construct a format table for use by the zwp_linux_dmabuf_v1 protocol */
 fn build_new_format_table(
     vulk: &Arc<Vulkan>,
     sfd: &Rc<RefCell<ShadowFd>>,
@@ -518,6 +567,7 @@ fn build_new_format_table(
     Ok(sz)
 }
 
+/** Record a new Wayland object, checking that its ID was not already used */
 fn insert_new_object(
     objects: &mut BTreeMap<ObjId, WpObject>,
     id: ObjId,
@@ -533,6 +583,7 @@ fn insert_new_object(
     Ok(())
 }
 
+/** Register any new objects created by a message */
 fn register_generic_new_ids(
     msg: &[u8],
     meth: &WaylandMethod,
@@ -605,10 +656,12 @@ fn register_generic_new_ids(
     Ok(())
 }
 
+/** Copy a message to the destination buffer */
 fn copy_msg(msg: &[u8], dst: &mut &mut [u8]) {
     dst[..msg.len()].copy_from_slice(msg);
     *dst = &mut std::mem::take(dst)[msg.len()..];
 }
+/** Copy a message, stripping or adding the Waypipe-specific fd count field */
 fn copy_msg_tag_fd(msg: &[u8], dst: &mut &mut [u8], from_channel: bool) -> Result<(), String> {
     dst[..msg.len()].copy_from_slice(msg);
     let mut h2 = u32::from_le_bytes(dst[4..8].try_into().unwrap());
@@ -629,10 +682,12 @@ fn copy_msg_tag_fd(msg: &[u8], dst: &mut &mut [u8], from_channel: bool) -> Resul
     Ok(())
 }
 
+/** Return true iff `id` in the Wayland server allocation range */
 fn is_server_object(id: ObjId) -> bool {
     id.0 >= 0xff000000
 }
 
+/** Default processing for an identified Wayland message */
 fn default_proc_way_msg(
     msg: &[u8],
     dst: &mut &mut [u8],
@@ -664,6 +719,7 @@ fn default_proc_way_msg(
     Ok(ProcMsg::Done)
 }
 
+/** Process an unidentified Wayland message */
 fn proc_unknown_way_msg(
     msg: &[u8],
     dst: &mut &mut [u8],
@@ -719,6 +775,7 @@ fn proc_unknown_way_msg(
     Ok(ProcMsg::Done)
 }
 
+/** Parse and return the entries of a zwp_linux_dmabuf_v1 format table. */
 fn parse_format_table(data: &[u8]) -> Vec<(u32, u64)> {
     let mut t = Vec::new();
     for i in 0..data.len() / 16 {
@@ -729,7 +786,7 @@ fn parse_format_table(data: &[u8]) -> Vec<(u32, u64)> {
     t
 }
 
-/* Assuming the ShadowFd has file type, does it have pending apply tasks */
+/** Assuming the ShadowFd has file type, return whether has pending apply tasks? */
 fn file_has_pending_apply_tasks(sfd: &RefCell<ShadowFd>) -> Result<bool, String> {
     let b = sfd.borrow();
     let ShadowFdVariant::File(data) = &b.data else {
@@ -739,7 +796,9 @@ fn file_has_pending_apply_tasks(sfd: &RefCell<ShadowFd>) -> Result<bool, String>
     Ok(data.pending_apply_tasks > 0)
 }
 
-/* Return value is: (sec_diff, nsec_diff) where nsec_diff >= 0 */
+/** Estimate the time difference between two clocks.
+ *
+ * Return value is: (sec_diff, nsec_diff) where nsec_diff >= 0 */
 fn clock_sub(clock_a: u32, clock_b: u32) -> Result<(i64, u32), String> {
     let mut stamp_1 = libc::timespec {
         tv_sec: 0,
@@ -797,6 +856,8 @@ fn clock_sub(clock_a: u32, clock_b: u32) -> Result<(i64, u32), String> {
 
     Ok((tv_sec, tv_nsec as u32))
 }
+
+/** Add a signed time offset to a time point, returning None on overflow. */
 fn time_add(mut a: (u64, u32), b: (i64, u32)) -> Option<(u64, u32)> {
     assert!(a.1 < 1_000_000_000 && b.1 < 1_000_000_000);
     let mut nsec = a.1.checked_add(b.1)?;
@@ -809,20 +870,29 @@ fn time_add(mut a: (u64, u32), b: (i64, u32)) -> Option<(u64, u32)> {
     Some((a.0.checked_add_signed(b.0)?, nsec))
 }
 
+/** Result of a message processing attempt */
 #[derive(Debug, Eq, PartialEq)]
 pub enum ProcMsg {
+    /** Message successfully processed */
     Done,
-    NeedsSpace((usize, usize)), /* Not enough bytes or fds; value is amount needed */
-    /* Wait for all (diff/fill/etc) operations on the given RID to complete. This is only
-     * useful for messages coming from the channel whose associated processing might still be
-     * in progress. */
+    /* Not enough bytes or fds in the output queue to process the message.
+     *
+     * The argument is the (number of bytes, number of fds) needed */
+    NeedsSpace((usize, usize)),
+    /** Need to wait for all operations on a given RID to complete.
+     *
+     * This is only useful for messages coming from the channel whose associated
+     * processing might still be in progress. */
     WaitFor(Rid),
 }
 
+/** Returns true iff `x` is <= `y` in both coordinates */
 fn space_le(x: (usize, usize), y: (usize, usize)) -> bool {
     x.0 <= y.0 && x.1 <= y.1
 }
 
+/** Macro to check if the required space (`x` bytes, `y` fds) is more than
+ * the available space (`r.0` and `r.1`) and if so, return the required space. */
 macro_rules! check_space {
     ($x:expr, $y:expr, $r:expr) => {
         let space: (usize, usize) = ($x, $y);
@@ -832,10 +902,12 @@ macro_rules! check_space {
     };
 }
 
-/* Process a Wayland message; typically this just copies the message from the source
- * to the destination buffer. The function returns true if the message was
- * processed, and false if there was not enough space in the destination buffer
- * to do so. */
+/** Process a Wayland message; typically this just copies the message from the source
+ * to the destination buffer, but sometimes messages are dropped and inserted, and file
+ * descriptor processing is done or queued.
+ *
+ * The function returns ProcMsg depending on whether the message was processed or
+ * if some condition must be met first. */
 pub fn process_way_msg(
     msg: &[u8],
     dst: &mut &mut [u8],
@@ -2190,7 +2262,6 @@ pub fn process_way_msg(
                         let mut data = vec![0; table_size];
                         copy_from_mapping(&mut data, &x.core.as_ref().unwrap().mapping, 0);
                         drop(b);
-                        //
                         feedback.format_table = parse_format_table(&data[..]);
 
                         let new_size =
@@ -2748,6 +2819,7 @@ pub fn process_way_msg(
     }
 }
 
+/** Construct the Wayland object map with the initial object, wl_display#1 */
 pub fn setup_object_map() -> BTreeMap<ObjId, WpObject> {
     let mut map = BTreeMap::new();
     map.insert(
