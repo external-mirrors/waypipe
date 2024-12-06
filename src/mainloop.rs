@@ -813,7 +813,7 @@ fn read_from_channel(socket: &OwnedFd, from_chan: &mut FromChannel) -> Result<bo
     let eof = from_chan.input.read_more(socket)?;
 
     if from_chan.next_msg.is_none() {
-        from_chan.next_msg = from_chan.input.get_next_msg();
+        from_chan.next_msg = from_chan.input.pop_next_msg();
     }
 
     Ok(eof)
@@ -3280,7 +3280,7 @@ fn process_channel(
             }
         }
 
-        chan_msg.next_msg = chan_msg.input.get_next_msg();
+        chan_msg.next_msg = chan_msg.input.pop_next_msg();
     }
     Ok(())
 }

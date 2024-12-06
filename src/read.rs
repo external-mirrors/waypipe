@@ -9,6 +9,8 @@ use std::ffi::c_void;
 use std::os::fd::AsRawFd;
 use std::{collections::VecDeque, os::fd::OwnedFd, sync::Arc};
 
+/** A region of memory filled by a ReadBuffer and referred to by some
+ * number of ReadBufferView objects. */
 struct ReadBufferChunk {
     data: *mut u8,
     size: usize,
@@ -21,10 +23,12 @@ unsafe impl Sync for ReadBufferChunk {}
 // (also because Arc is used, drop will only happen when there are no references.)
 unsafe impl Send for ReadBufferChunk {}
 
-/* A data structure to allow readv-ing a sequence of large packets, which can be
+/** A data structure to allow readv-ing a sequence of large packets, which can be
  * loaned to a different thread for some variable time before the space can be
- * reused. To limit the number of read operations needed, multiple packets may
- * share the same backing storage */
+ * reused.
+ *
+ * To limit the number of allocations and read operations needed, multiple packets may
+ * share the same backing storage, which will only be freed when all packets are dropped. */
 pub struct ReadBuffer {
     /* Buffer with one last message in it to complete; if present, last_msg_start/end refer
      * to _this_ buffer */
@@ -63,6 +67,7 @@ impl Drop for ReadBufferChunk {
     }
 }
 
+/** A reference to a single message from a ReadBuffer */
 pub struct ReadBufferView {
     // Keep the chunk alive
     _base: Arc<ReadBufferChunk>, // alternatively: panic on drop, but let the main object consume these
@@ -76,9 +81,12 @@ unsafe impl Send for ReadBufferView {}
 // SAFETY: Safe to share between threads -- &/&mut self control data access
 unsafe impl Sync for ReadBufferView {}
 
+/** The maximum size expected for a typical message. Messages larger than this size may
+ * require copying memory around to ensure an contiguous allocation. */
 const MAX_NORMAL_MSG_SIZE: usize = 1 << 18;
 
 impl ReadBuffer {
+    /** Create a new ReadBuffer */
     pub fn new() -> Self {
         let chunksize = 4 * MAX_NORMAL_MSG_SIZE;
 
@@ -254,7 +262,10 @@ impl ReadBuffer {
         Ok(eof)
     }
 
-    /* Returns 'true' iff source has no more data */
+    /** Try to read more input. Returns `true` iff source has no more data.
+     *
+     * Use `pop_next_msg()` to get the complete messages read, if there are any.
+     */
     pub fn read_more(&mut self, src_fd: &OwnedFd) -> Result<bool, String> {
         if self.old.is_some() {
             return self.read_with_old(src_fd);
@@ -335,12 +346,14 @@ impl ReadBuffer {
         Ok(eof)
     }
 
-    pub fn get_next_msg(&mut self) -> Option<ReadBufferView> {
+    /** If there is a complete message available, extract and return it */
+    pub fn pop_next_msg(&mut self) -> Option<ReadBufferView> {
         self.msg_queue.pop_front()
     }
 }
 
 impl ReadBufferView {
+    /** Get an &mut-reference to the data of this buffer */
     pub fn get_mut(&mut self) -> &mut [u8] {
         unsafe {
             // SAFETY: ReadBufferView has exclusive access to the portion
@@ -352,6 +365,8 @@ impl ReadBufferView {
             &mut *dst
         }
     }
+
+    /** Get an &-reference to the data of this buffer */
     pub fn get(&self) -> &[u8] {
         unsafe {
             // SAFETY: ReadBufferView has exclusive access to the portion
@@ -364,7 +379,9 @@ impl ReadBufferView {
         }
     }
 
-    /* Move the start of the chunk forward; panic if this moves the start beyond the end */
+    /** Move the start of the buffer forward by the indicated amount
+     *
+     * This will panic if skip is larger than the remaining buffer size. */
     pub fn advance(&mut self, skip: usize) {
         assert!(skip % 4 == 0); // preserve alignment
         assert!(skip <= self.data_len, "{} <?= {}", skip, self.data_len);
@@ -468,7 +485,7 @@ fn test_read_buffer() {
 
             read_all(&mut rb, &pipe_r);
 
-            let nxt = rb.get_next_msg().unwrap();
+            let nxt = rb.pop_next_msg().unwrap();
             assert!(nxt.get() == small_msg);
         }
     }
@@ -497,7 +514,7 @@ fn test_read_buffer() {
         /* Read remainder of data in case writing outpaced reads */
         read_all(&mut rb, &pipe_r);
         for i in 0..(2 * MAX_NORMAL_MSG_SIZE) {
-            let nxt = rb.get_next_msg().unwrap();
+            let nxt = rb.pop_next_msg().unwrap();
             let val = u32::from_le_bytes(nxt.get()[4..].try_into().unwrap());
             assert!(val == i as u32);
         }
@@ -523,7 +540,7 @@ fn test_read_buffer() {
             rb.read_more(&pipe_r).unwrap();
         }
         read_all(&mut rb, &pipe_r);
-        assert!(rb.get_next_msg().unwrap().get_mut().len() == len);
+        assert!(rb.pop_next_msg().unwrap().get_mut().len() == len);
     }
 
     /* This has the side effect of clearing out the overcapacity buffer */
@@ -551,7 +568,7 @@ fn test_read_buffer() {
         read_all(&mut rb, &pipe_r);
         let mut concat = Vec::<u8>::new();
         while concat.len() < long_block_input.len() {
-            concat.extend_from_slice(rb.get_next_msg().unwrap().get());
+            concat.extend_from_slice(rb.pop_next_msg().unwrap().get());
         }
         assert!(concat == long_block_input);
     }
@@ -588,7 +605,7 @@ fn test_read_buffer() {
         read_all(&mut rb, &pipe_r);
         let mut concat = Vec::<u8>::new();
         while concat.len() < long_mixed_input.len() {
-            let mut nxt = rb.get_next_msg().unwrap();
+            let mut nxt = rb.pop_next_msg().unwrap();
             concat.extend_from_slice(&nxt.get()[..4]);
             nxt.advance(4);
             concat.extend_from_slice(nxt.get());
