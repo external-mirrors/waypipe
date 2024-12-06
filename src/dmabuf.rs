@@ -2495,11 +2495,13 @@ impl Vulkan {
         let Some(vk_format) = drm_to_vulkan(drm_format) else {
             return false;
         };
-        let mod_data = self.formats[&vk_format]
+        let Some(mod_data) = self.formats[&vk_format]
             .modifiers
             .iter()
             .find(|x| x.modifier == modifier)
-            .unwrap();
+        else {
+            return false;
+        };
         let max_size = if can_store_and_sample {
             mod_data.max_size_store_and_sample.unwrap()
         } else {
