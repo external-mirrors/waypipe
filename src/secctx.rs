@@ -106,7 +106,7 @@ pub fn provide_secctx(
     let tmp_len = tmp.len();
     let mut dst = &mut tmp[..];
     write_req_wl_registry_bind(&mut dst, registry, secctx_name, sec_man_name, 1, manager);
-    write_req_wp_security_context_manager_v1_create_listener(&mut dst, manager, true, context);
+    write_req_wp_security_context_manager_v1_create_listener(&mut dst, manager, false, context);
     write_req_wp_security_context_v1_set_app_id(&mut dst, context, app_id.as_bytes());
     /* Set the instance id to indicate the root process */
     let pid = std::process::id();
