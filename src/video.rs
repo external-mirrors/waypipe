@@ -350,7 +350,7 @@ unsafe fn avcodec_receive_packet(
         let mut err_buf = [0_u8; 1024];
         let err = av_strerror(bindings, &mut err_buf, ret);
         let name = CStr::from_ptr((*(*avctx).codec).name);
-        if name == CStr::from_bytes_with_nul(b"libsvtav1\0").unwrap() {
+        if name == c"libsvtav1" {
             debug!("Note: libsvtav1 version > 2.3.0 is required for low delay encoding to work");
         }
         return Err(tag!(
@@ -523,7 +523,7 @@ fn create_compute_pipeline(
             .create_pipeline_layout(&pipeline_layout_info, None)
             .map_err(|_| "Failed to create pipeline layout")?;
 
-        let entrypoint = CStr::from_bytes_with_nul("main\0".as_bytes()).unwrap();
+        let entrypoint = c"main";
         let pipeline_shader_create = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(shader_module)

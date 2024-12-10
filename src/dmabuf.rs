@@ -590,14 +590,13 @@ pub fn setup_vulkan(
     can_hw_enc: bool,
 ) -> Result<Arc<Vulkan>, String> {
     let app_name = CString::new(env!("CARGO_PKG_NAME")).unwrap();
-    let engine_name = CString::new("waypipe").unwrap();
     let version: u32 = env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap() << 24
         | env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap() << 16;
 
     let info = vk::ApplicationInfo::default()
         .application_name(&app_name)
         .application_version(version)
-        .engine_name(&engine_name)
+        .engine_name(c"waypipe")
         .engine_version(0)
         .api_version(if can_hw_dec || can_hw_enc {
             // TODO: get best API version available, and turn off video enc/decoding if not?
@@ -723,8 +722,8 @@ pub fn setup_vulkan(
         .enabled_extension_names(&exts)
         .flags(vk::InstanceCreateFlags::default());
 
-    let validation = CStr::from_bytes_with_nul("VK_LAYER_KHRONOS_validation\0".as_bytes()).unwrap();
-    // let dump = CStr::from_bytes_with_nul("VK_LAYER_LUNARG_api_dump\0".as_bytes()).unwrap();
+    let validation = c"VK_LAYER_KHRONOS_validation";
+    // let dump = c"VK_LAYER_LUNARG_api_dump";
     let debug_layers = &[validation.as_ptr()];
 
     unsafe {
