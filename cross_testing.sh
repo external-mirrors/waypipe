@@ -1,6 +1,7 @@
 #!/bin/sh
 
 # WARNING: cross may download target-specific images from the internet
+# WARNING: cargo msrv may install toolchains via rustup
 set -ex
 
 cargo fmt --check
@@ -24,3 +25,6 @@ cross test --target powerpc64-unknown-linux-gnu --no-default-features
 # FreeBSD support (testing not available, needs full emulation?)
 cross build --target x86_64-unknown-freebsd --no-default-features
 cross build --target i686-unknown-freebsd --no-default-features
+
+# Check that the build still works with older Rust versions
+cargo msrv verify

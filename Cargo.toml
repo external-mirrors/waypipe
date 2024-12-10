@@ -1,7 +1,10 @@
 [package]
 name = "waypipe"
 version = "0.9.2"
+# To ensure Waypipe can still be built on older/unupdated systems, do
+# not update the edition or version unless necessary.
 edition = "2021"
+rust-version = "1.77.0"
 
 [profile.release]
 debug = "full"

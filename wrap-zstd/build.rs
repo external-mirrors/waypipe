@@ -29,7 +29,8 @@ fn main() {
                 .map(|x| format!("-I{}", x.to_string_lossy())),
         )
         .header("wrapper.h")
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .rust_target(bindgen::RustTarget::Stable_1_77);
     for f in functions {
         bindings = bindings.allowlist_function(f);
     }

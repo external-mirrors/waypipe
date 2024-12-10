@@ -69,6 +69,7 @@ fn main() {
         )
         .header("wrapper.h")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .rust_target(bindgen::RustTarget::Stable_1_77)
         .dynamic_library_name("ffmpeg")
         .dynamic_link_require_all(true);
     for f in functions {
