@@ -2369,7 +2369,7 @@ pub fn process_way_msg(
                 TranslationInfo::FromChannel((x, y)) => {
                     let sfd = &x.front().ok_or_else(|| tag!("Missing fd"))?;
                     let rid = sfd.borrow().remote_id;
-                    if file_has_pending_apply_tasks(&sfd)? {
+                    if file_has_pending_apply_tasks(sfd)? {
                         return Ok(ProcMsg::WaitFor(rid));
                     }
                     y.push_back(x.pop_front().unwrap());

@@ -154,14 +154,14 @@ impl Log for Logger {
         if str_end >= MAX_LOG_LEN - 9 {
             /* Assume message was truncated */
             assert!(str_end <= MAX_LOG_LEN - 5, "{} {}", str_end, MAX_LOG_LEN);
-            buf[str_end..str_end + 3].fill(b'.' as u8);
+            buf[str_end..str_end + 3].fill(b'.');
             if self.anti_staircase {
-                buf[str_end + 3] = b'\r' as u8;
-                buf[str_end + 4] = b'\n' as u8;
-                str_end = str_end + 5;
+                buf[str_end + 3] = b'\r';
+                buf[str_end + 4] = b'\n';
+                str_end += 5;
             } else {
-                buf[str_end + 3] = b'\n' as u8;
-                str_end = str_end + 4;
+                buf[str_end + 3] = b'\n';
+                str_end += 4;
             }
         }
         let handle = &mut std::io::stderr().lock();
@@ -657,7 +657,7 @@ fn connect_to_display_at(cwd: &OwnedFd, path: &Path) -> Result<OwnedFd, String> 
 fn connect_to_wayland_display(cwd: &OwnedFd) -> Result<OwnedFd, String> {
     let wayl_disp = std::env::var_os("WAYLAND_DISPLAY")
         .ok_or("Missing environment variable WAYLAND_DISPLAY")?;
-    let leading_slash: &[u8] = &[b'/'];
+    let leading_slash: &[u8] = b"/";
 
     if wayl_disp.as_encoded_bytes().starts_with(leading_slash) {
         connect_to_display_at(cwd, Path::new(&wayl_disp))
@@ -823,7 +823,7 @@ fn spawn_connection_handler(
      * would be to directly use /proc/self/exe, but some tools would end up
      * using the file name 'exe' to label the client process, instead of the
      * value of argv0, which could be confusing. */
-    let mut process = std::process::Command::new(&self_path);
+    let mut process = std::process::Command::new(self_path);
     process
         .arg0(env!("CARGO_PKG_NAME"))
         .args(conn_args)
@@ -1462,7 +1462,7 @@ fn locate_openssh_cmd_hostname(ssh_args: &[&OsStr]) -> Result<(usize, bool), Str
     /* Note: a valid hostname never has a - prefix */
     while dst_idx < ssh_args.len() {
         let base_arg: &[u8] = ssh_args[dst_idx].as_encoded_bytes();
-        if !base_arg.starts_with(&[b'-']) {
+        if !base_arg.starts_with(b"-") {
             /* Not an argument, must be hostname */
             break;
         }
@@ -1494,7 +1494,7 @@ fn locate_openssh_cmd_hostname(ssh_args: &[&OsStr]) -> Result<(usize, bool), Str
         // Eat this argument
         dst_idx += 1;
     }
-    if dst_idx >= ssh_args.len() || ssh_args[dst_idx].as_encoded_bytes().starts_with(&[b'-']) {
+    if dst_idx >= ssh_args.len() || ssh_args[dst_idx].as_encoded_bytes().starts_with(b"-") {
         Err(tag!("Failed to locate ssh hostname in {:?}", ssh_args))
     } else {
         Ok((dst_idx, allocates_pty))

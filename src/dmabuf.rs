@@ -869,7 +869,7 @@ pub fn setup_vulkan(
                 hw_dec_av1,
             };
             if let Some(ref cur) = best_device {
-                if device_rank(&proposed) < device_rank(&cur) {
+                if device_rank(&proposed) < device_rank(cur) {
                     best_device = Some(proposed);
                 }
             } else {
@@ -2518,7 +2518,7 @@ impl Vulkan {
         } else {
             mod_data.max_size_transfer
         };
-        return width as usize <= max_size.0 && height as usize <= max_size.1;
+        width as usize <= max_size.0 && height as usize <= max_size.1
     }
 
     pub fn supports_format(self: &Vulkan, drm_format: u32, drm_modifier: u64) -> bool {

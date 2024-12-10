@@ -436,13 +436,13 @@ fn set_context_extensions(
      * (including strings) must be allocated, as it will be freed with av_free later */
     unsafe {
         let inst_exts: *mut *const c_char =
-            bindings.av_malloc(instance_exts.len() * std::mem::size_of::<*const c_char>()) as _;
+            bindings.av_malloc(std::mem::size_of_val(instance_exts)) as _;
         if inst_exts.is_null() {
             return Err(tag!("failed to allocate instance extensions"));
         }
 
         let dev_exts: *mut *const c_char =
-            bindings.av_malloc(device_exts.len() * std::mem::size_of::<*const c_char>()) as _;
+            bindings.av_malloc(std::mem::size_of_val(device_exts)) as _;
         if dev_exts.is_null() {
             bindings.av_free(inst_exts as _);
             return Err(tag!("failed to allocate device extensions"));

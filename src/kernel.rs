@@ -306,12 +306,10 @@ unsafe fn construct_diff_segment_two_avx2(
             i += 1;
         }
 
-        if !(i < nslabs) {
-            if dc == idc {
-                /* No change detected in this run */
-                dc -= 2;
-                break;
-            }
+        if i >= nslabs && dc == idc {
+            /* No change detected in this run */
+            dc -= 2;
+            break;
         }
 
         // assert!(last_nontrivial_trailing + 16 * nclear == trailing_unchanged);
