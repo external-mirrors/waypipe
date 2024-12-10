@@ -611,10 +611,6 @@ pub fn setup_vulkan(
         vk::KHR_EXTERNAL_MEMORY_CAPABILITIES_NAME.as_ptr(),    // needed for buffer import/export
         vk::KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_NAME.as_ptr(), // needed to export/poll on timeline semaphores
     ];
-    let validation = CString::new("VK_LAYER_KHRONOS_validation").unwrap();
-    // let dump = CString::new("VK_LAYER_LUNARG_api_dump").unwrap();
-    let debug_layers = &[validation.as_ptr()];
-    let layer_names: &[*const c_char] = if debug { debug_layers } else { &[] };
 
     let ext_list: &[(&CStr, u32)] = &[
         (
@@ -722,14 +718,30 @@ pub fn setup_vulkan(
         ),
     ];
 
-    let create = vk::InstanceCreateInfo::default()
+    let mut create = vk::InstanceCreateInfo::default()
         .application_info(&info)
-        .enabled_layer_names(layer_names)
         .enabled_extension_names(&exts)
         .flags(vk::InstanceCreateFlags::default());
 
+    let validation = CStr::from_bytes_with_nul("VK_LAYER_KHRONOS_validation\0".as_bytes()).unwrap();
+    // let dump = CStr::from_bytes_with_nul("VK_LAYER_LUNARG_api_dump\0".as_bytes()).unwrap();
+    let debug_layers = &[validation.as_ptr()];
+
     unsafe {
         let entry = Entry::load().map_err(|x| tag!("Failed to load Vulkan library: {:?}", x))?;
+
+        if debug {
+            /* Only use validation layers with --debug flag if supported */
+            let has_validation = entry
+                .enumerate_instance_layer_properties()
+                .map_err(|x| tag!("Failed to get vulkan layer properties: {:?}", x))?
+                .iter()
+                .any(|layer| CStr::from_ptr(layer.layer_name.as_ptr()) == validation);
+            if has_validation {
+                create = create.enabled_layer_names(debug_layers);
+            }
+        }
+
         let instance: Instance = entry
             .create_instance(&create, None)
             .map_err(|x| tag!("Failed to create Vulkan instance: {}", x))?;

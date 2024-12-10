@@ -76,9 +76,10 @@ Optional linked dependencies, broken out by feature:
 - zstd compression: libzstd (>= 0.4.6)
 - dmabuf support:
   - vulkan (to support programs using GPU rendering and DMABUFs)
+  - vulkan validation layers (optional, used for tests and with --debug flag)
 - video encoding/decoding support:
   - ffmpeg (>=7.1, needs avcodec/avutil for lossy video encoding)
-  - glslc (to compile shaders for image format conversion)
+  - glslc (build, to compile shaders for image format conversion)
 
 [i0]: https://mesonbuild.com/
 [i1]: https://doc.rust-lang.org/cargo/
