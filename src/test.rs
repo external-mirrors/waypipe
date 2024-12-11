@@ -14,7 +14,7 @@ use nix::fcntl;
 use nix::libc;
 use nix::poll;
 use nix::sys::signal;
-use nix::sys::{memfd, socket, time};
+use nix::sys::{memfd, socket, stat, time};
 use nix::unistd;
 use std::io::{IoSlice, IoSliceMut};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
@@ -729,6 +729,25 @@ fn run_protocol_test(test_fn: &dyn Fn(ProtocolTestContext) -> ()) {
     run_protocol_test_with_opts(test_fn, &options, None);
 }
 
+#[cfg(feature = "dmabuf")]
+fn run_protocol_test_with_drm_node(device_id: u64, test_fn: &dyn Fn(ProtocolTestContext) -> ()) {
+    let options = Options {
+        debug: true,
+        compression: Compression::None,
+        video: VideoSetting {
+            format: None,
+            bits_per_frame: None,
+        },
+        threads: 1,
+        title_prefix: String::new(),
+        no_gpu: false,
+        drm_node: Some(device_id_to_node_path(device_id)),
+        force_sw_encoding: false,
+        force_sw_decoding: false,
+    };
+    run_protocol_test_with_opts(test_fn, &options, None);
+}
+
 fn build_msgs<F>(f: F) -> Vec<u8>
 where
     F: FnOnce(&mut &mut [u8]) -> (),
@@ -750,6 +769,37 @@ fn is_plain_msgs(
     } else {
         false
     }
+}
+
+#[cfg(feature = "dmabuf")]
+fn list_possible_device_ids() -> Vec<u64> {
+    let mut dev_ids = Vec::new();
+    let Ok(dir_iter) = std::fs::read_dir("/dev/dri") else {
+        /* On failure, assume Vulkan is not available */
+        return dev_ids;
+    };
+
+    for r in dir_iter {
+        let std::io::Result::Ok(entry) = r else {
+            continue;
+        };
+        if !entry.file_name().as_bytes().starts_with(b"renderD") {
+            continue;
+        }
+        let Ok(result) = stat::stat(&entry.path()) else {
+            continue;
+        };
+        dev_ids.push(result.st_rdev);
+    }
+    dev_ids
+}
+
+#[cfg(feature = "dmabuf")]
+fn device_id_to_node_path(device_id: u64) -> PathBuf {
+    let mut drm_node = OsString::new();
+    drm_node.push("/dev/dri/renderD");
+    drm_node.push(OsString::from((device_id & 0xff).to_string()));
+    drm_node.into()
 }
 
 #[test]
@@ -1656,141 +1706,144 @@ fn setup_linux_dmabuf(
 #[cfg(feature = "dmabuf")]
 #[test]
 fn proto_dmabuf() {
-    let vulk = setup_vulkan(None, false, true, false, false).unwrap();
+    for dev_id in list_possible_device_ids() {
+        let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
 
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
-        let (display, registry, dmabuf, comp, surface, feedback, params, buffer, sbuffer) = (
-            ObjId(1),
-            ObjId(2),
-            ObjId(3),
-            ObjId(4),
-            ObjId(5),
-            ObjId(6),
-            ObjId(7),
-            ObjId(8),
-            ObjId(0xff000000),
-        );
+        run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
+            let (display, registry, dmabuf, comp, surface, feedback, params, buffer, sbuffer) = (
+                ObjId(1),
+                ObjId(2),
+                ObjId(3),
+                ObjId(4),
+                ObjId(5),
+                ObjId(6),
+                ObjId(7),
+                ObjId(8),
+                ObjId(0xff000000),
+            );
 
-        setup_linux_dmabuf(
-            &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
-        );
+            setup_linux_dmabuf(
+                &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
+            );
 
-        for (w, h, immed) in [(3, 4, true), (64, 64, true), (513, 511, false)] {
-            let fmt = wayland_to_drm(WlShmFormat::Rgb565);
-            let bpp = 2;
+            for (w, h, immed) in [(3, 4, true), (64, 64, true), (513, 511, false)] {
+                let fmt = wayland_to_drm(WlShmFormat::Rgb565);
+                let bpp = 2;
 
-            let mut img_data = vec![0u8; (w * h) as usize * bpp];
-            let mut i: u16 = 0x1234;
-            /* Draw a square inside */
-            for y in (h / 3)..(2 * h) / 3 {
-                for x in (w / 3)..(2 * w) / 3 {
-                    img_data[2 * (y * w + x)..2 * (y * w + x) + 2]
-                        .copy_from_slice(&i.to_le_bytes());
-                    i = i.wrapping_add(1);
-                }
-            }
-
-            let modifier_list = vulk.get_supported_modifiers(fmt);
-            let (img, planes) =
-                vulkan_create_dmabuf(&vulk, w as u32, h as u32, fmt, &modifier_list, false)
-                    .unwrap();
-
-            let msgs = build_msgs(|dst| {
-                write_req_zwp_linux_dmabuf_v1_create_params(dst, dmabuf, params);
-                for p in planes.iter() {
-                    let (mod_hi, mod_lo) = split_u64(p.modifier);
-                    write_req_zwp_linux_buffer_params_v1_add(
-                        dst,
-                        params,
-                        false,
-                        p.plane_idx,
-                        p.offset,
-                        p.stride,
-                        mod_hi,
-                        mod_lo,
-                    );
+                let mut img_data = vec![0u8; (w * h) as usize * bpp];
+                let mut i: u16 = 0x1234;
+                /* Draw a square inside */
+                for y in (h / 3)..(2 * h) / 3 {
+                    for x in (w / 3)..(2 * w) / 3 {
+                        img_data[2 * (y * w + x)..2 * (y * w + x) + 2]
+                            .copy_from_slice(&i.to_le_bytes());
+                        i = i.wrapping_add(1);
+                    }
                 }
 
-                if immed {
-                    write_req_zwp_linux_buffer_params_v1_create_immed(
-                        dst, params, buffer, w as i32, h as i32, fmt, 0,
-                    );
-                } else {
-                    write_req_zwp_linux_buffer_params_v1_create(
-                        dst, params, w as i32, h as i32, fmt, 0,
-                    );
-                }
-            });
-            let plane_fds: Vec<&OwnedFd> = planes.iter().map(|p| &p.fd).collect();
-            let (rmsgs, mut rfds) = ctx.prog_write(&msgs[..], &plane_fds[..]).unwrap();
-            drop(planes);
-            let add_msgs = &rmsgs[1..rmsgs.len() - 1];
-            assert!(rfds.len() == add_msgs.len());
-            let create_msg = &rmsgs[rmsgs.len() - 1];
-            let (rw, rh, rfmt) = if immed {
-                let (_rbuf, rw, rh, rfmt, _rflags) =
-                    parse_req_zwp_linux_buffer_params_v1_create_immed(&create_msg[..]).unwrap();
-                (rw, rh, rfmt)
-            } else {
-                let (rw, rh, rfmt, _rflags) =
-                    parse_req_zwp_linux_buffer_params_v1_create(&create_msg[..]).unwrap();
-                (rw, rh, rfmt)
-            };
-            assert!((rw, rh, rfmt) == (w as i32, h as i32, fmt));
+                let modifier_list = vulk.get_supported_modifiers(fmt);
+                let (img, planes) =
+                    vulkan_create_dmabuf(&vulk, w as u32, h as u32, fmt, &modifier_list, false)
+                        .unwrap();
 
-            let mut planes = Vec::new();
-            for (fd, msg) in rfds.drain(..).zip(add_msgs.iter()) {
-                let (plane_idx, offset, stride, mod_hi, mod_lo) =
-                    parse_req_zwp_linux_buffer_params_v1_add(msg).unwrap();
-                let modifier = join_u64(mod_hi, mod_lo);
-                planes.push(AddDmabufPlane {
-                    fd,
-                    plane_idx,
-                    offset,
-                    stride,
-                    modifier,
+                let msgs = build_msgs(|dst| {
+                    write_req_zwp_linux_dmabuf_v1_create_params(dst, dmabuf, params);
+                    for p in planes.iter() {
+                        let (mod_hi, mod_lo) = split_u64(p.modifier);
+                        write_req_zwp_linux_buffer_params_v1_add(
+                            dst,
+                            params,
+                            false,
+                            p.plane_idx,
+                            p.offset,
+                            p.stride,
+                            mod_hi,
+                            mod_lo,
+                        );
+                    }
+
+                    if immed {
+                        write_req_zwp_linux_buffer_params_v1_create_immed(
+                            dst, params, buffer, w as i32, h as i32, fmt, 0,
+                        );
+                    } else {
+                        write_req_zwp_linux_buffer_params_v1_create(
+                            dst, params, w as i32, h as i32, fmt, 0,
+                        );
+                    }
                 });
-            }
-            let mirror =
-                vulkan_import_dmabuf(&vulk, planes, w as u32, h as u32, fmt, false).unwrap();
+                let plane_fds: Vec<&OwnedFd> = planes.iter().map(|p| &p.fd).collect();
+                let (rmsgs, mut rfds) = ctx.prog_write(&msgs[..], &plane_fds[..]).unwrap();
+                drop(planes);
+                let add_msgs = &rmsgs[1..rmsgs.len() - 1];
+                assert!(rfds.len() == add_msgs.len());
+                let create_msg = &rmsgs[rmsgs.len() - 1];
+                let (rw, rh, rfmt) = if immed {
+                    let (_rbuf, rw, rh, rfmt, _rflags) =
+                        parse_req_zwp_linux_buffer_params_v1_create_immed(&create_msg[..]).unwrap();
+                    (rw, rh, rfmt)
+                } else {
+                    let (rw, rh, rfmt, _rflags) =
+                        parse_req_zwp_linux_buffer_params_v1_create(&create_msg[..]).unwrap();
+                    (rw, rh, rfmt)
+                };
+                assert!((rw, rh, rfmt) == (w as i32, h as i32, fmt));
 
-            let tmp = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
-            copy_onto_dmabuf(&img, &tmp, &img_data).unwrap();
-
-            if immed {
-                ctx.prog_write_passthrough(build_msgs(|dst| {
-                    write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
-                    write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
-                    write_req_wl_surface_commit(dst, surface);
-                }));
-            } else {
-                ctx.comp_write_passthrough(build_msgs(|dst| {
-                    write_evt_zwp_linux_buffer_params_v1_created(dst, params, sbuffer);
-                }));
-                ctx.prog_write_passthrough(build_msgs(|dst| {
-                    write_req_wl_surface_attach(dst, surface, sbuffer, 0, 0);
-                    write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
-                    write_req_wl_surface_commit(dst, surface);
-                }));
-            }
-
-            let tmp = Arc::new(vulkan_get_buffer(&vulk, mirror.nominal_size(None), true).unwrap());
-            let mir_data = copy_from_dmabuf(&img, &tmp).unwrap();
-            assert!(img_data == mir_data);
-
-            /* Cleanup buffer and params objects, for reuse with next image */
-            ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
-                write_req_wl_buffer_destroy(dst, if immed { buffer } else { sbuffer });
-            }));
-            ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_wl_display_delete_id(dst, display, params.0);
-                if immed {
-                    write_evt_wl_display_delete_id(dst, display, buffer.0);
+                let mut planes = Vec::new();
+                for (fd, msg) in rfds.drain(..).zip(add_msgs.iter()) {
+                    let (plane_idx, offset, stride, mod_hi, mod_lo) =
+                        parse_req_zwp_linux_buffer_params_v1_add(msg).unwrap();
+                    let modifier = join_u64(mod_hi, mod_lo);
+                    planes.push(AddDmabufPlane {
+                        fd,
+                        plane_idx,
+                        offset,
+                        stride,
+                        modifier,
+                    });
                 }
-            }));
-        }
-    });
+                let mirror =
+                    vulkan_import_dmabuf(&vulk, planes, w as u32, h as u32, fmt, false).unwrap();
+
+                let tmp = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
+                copy_onto_dmabuf(&img, &tmp, &img_data).unwrap();
+
+                if immed {
+                    ctx.prog_write_passthrough(build_msgs(|dst| {
+                        write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
+                        write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
+                        write_req_wl_surface_commit(dst, surface);
+                    }));
+                } else {
+                    ctx.comp_write_passthrough(build_msgs(|dst| {
+                        write_evt_zwp_linux_buffer_params_v1_created(dst, params, sbuffer);
+                    }));
+                    ctx.prog_write_passthrough(build_msgs(|dst| {
+                        write_req_wl_surface_attach(dst, surface, sbuffer, 0, 0);
+                        write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
+                        write_req_wl_surface_commit(dst, surface);
+                    }));
+                }
+
+                let tmp =
+                    Arc::new(vulkan_get_buffer(&vulk, mirror.nominal_size(None), true).unwrap());
+                let mir_data = copy_from_dmabuf(&img, &tmp).unwrap();
+                assert!(img_data == mir_data);
+
+                /* Cleanup buffer and params objects, for reuse with next image */
+                ctx.prog_write_passthrough(build_msgs(|dst| {
+                    write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
+                    write_req_wl_buffer_destroy(dst, if immed { buffer } else { sbuffer });
+                }));
+                ctx.comp_write_passthrough(build_msgs(|dst| {
+                    write_evt_wl_display_delete_id(dst, display, params.0);
+                    if immed {
+                        write_evt_wl_display_delete_id(dst, display, buffer.0);
+                    }
+                }));
+            }
+        });
+    }
 }
 
 #[cfg(feature = "video")]
@@ -2042,7 +2095,7 @@ fn test_video_combo(
         threads: 1,
         title_prefix: String::new(),
         no_gpu: false,
-        drm_node: None,
+        drm_node: Some(device_id_to_node_path(vulk.get_device())),
         force_sw_encoding: !try_hw_enc,
         force_sw_decoding: !try_hw_dec,
     };
@@ -2068,23 +2121,27 @@ fn test_video_combo(
 #[cfg(feature = "video")]
 #[test]
 fn proto_dmavid_vp9() {
-    let vulk = setup_vulkan(None, true, true, false, false).unwrap();
-    test_video_combo(&vulk, VideoFormat::VP9, false, false, false);
+    for dev_id in list_possible_device_ids() {
+        let vulk = setup_vulkan(Some(dev_id), true, true, false, false).unwrap();
+        test_video_combo(&vulk, VideoFormat::VP9, false, false, false);
+    }
 }
 
 #[cfg(feature = "video")]
 #[test]
 fn proto_dmavid_h264() {
-    let vulk = setup_vulkan(None, true, true, false, false).unwrap();
+    for dev_id in list_possible_device_ids() {
+        let vulk = setup_vulkan(Some(dev_id), true, true, false, false).unwrap();
 
-    /* Test all hardware encoding/decoding combinations to sure formats are compatible */
-    for (try_hw_dec, try_hw_enc, allow_fail) in [
-        (false, false, false),
-        (true, false, true),
-        (true, true, true),
-        (false, true, false),
-    ] {
-        test_video_combo(&vulk, VideoFormat::H264, try_hw_dec, try_hw_enc, allow_fail);
+        /* Test all hardware encoding/decoding combinations to sure formats are compatible */
+        for (try_hw_dec, try_hw_enc, allow_fail) in [
+            (false, false, false),
+            (true, false, true),
+            (true, true, true),
+            (false, true, false),
+        ] {
+            test_video_combo(&vulk, VideoFormat::H264, try_hw_dec, try_hw_enc, allow_fail);
+        }
     }
 }
 
@@ -2270,261 +2327,270 @@ fn proto_shm_damage() {
 #[cfg(feature = "dmabuf")]
 #[test]
 fn proto_dmabuf_damage() {
-    let vulk = setup_vulkan(None, false, true, false, false).unwrap();
+    for dev_id in list_possible_device_ids() {
+        let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
 
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
-        let (display, registry, dmabuf, comp, surface, feedback, params, buffer) = (
-            ObjId(1),
-            ObjId(2),
-            ObjId(3),
-            ObjId(4),
-            ObjId(5),
-            ObjId(6),
-            ObjId(7),
-            ObjId(8),
-        );
+        run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
+            let (display, registry, dmabuf, comp, surface, feedback, params, buffer) = (
+                ObjId(1),
+                ObjId(2),
+                ObjId(3),
+                ObjId(4),
+                ObjId(5),
+                ObjId(6),
+                ObjId(7),
+                ObjId(8),
+            );
 
-        setup_linux_dmabuf(
-            &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
-        );
+            setup_linux_dmabuf(
+                &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
+            );
 
-        /* For dmabuf replication, the format (well, texel size) affects diff alignment */
-        for (w, h) in [(64_usize, 64_usize), (257_usize, 257_usize)] {
-            for wl_format in [
-                WlShmFormat::R8,
-                WlShmFormat::Rgb565,
-                WlShmFormat::Argb8888,
-                WlShmFormat::Argb16161616,
-            ] {
-                let bpp = match wl_format {
-                    WlShmFormat::Argb16161616 => 8,
-                    WlShmFormat::Argb8888 => 4,
-                    WlShmFormat::Rgb565 => 2,
-                    WlShmFormat::R8 => 1,
-                    _ => unreachable!(),
-                };
-                let format = wayland_to_drm(wl_format);
-                let stride = bpp * w;
-                let file_sz = h * stride;
-                let mut base = vec![0x80; file_sz];
+            /* For dmabuf replication, the format (well, texel size) affects diff alignment */
+            for (w, h) in [(64_usize, 64_usize), (257_usize, 257_usize)] {
+                for wl_format in [
+                    WlShmFormat::R8,
+                    WlShmFormat::Rgb565,
+                    WlShmFormat::Argb8888,
+                    WlShmFormat::Argb16161616,
+                ] {
+                    let bpp = match wl_format {
+                        WlShmFormat::Argb16161616 => 8,
+                        WlShmFormat::Argb8888 => 4,
+                        WlShmFormat::Rgb565 => 2,
+                        WlShmFormat::R8 => 1,
+                        _ => unreachable!(),
+                    };
+                    let format = wayland_to_drm(wl_format);
+                    let stride = bpp * w;
+                    let file_sz = h * stride;
+                    let mut base = vec![0x80; file_sz];
 
-                let (img, mirror) = create_dmabuf_and_copy(
-                    &vulk, &mut ctx, params, dmabuf, buffer, w, h, format, &base,
-                )
-                .unwrap();
-
-                ctx.prog_write_passthrough(build_msgs(|dst| {
-                    write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
-                    write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
-                    write_req_wl_surface_commit(dst, surface);
-                }));
-
-                let tmp_wr =
-                    Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), false).unwrap());
-                let tmp_rd =
-                    Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
-
-                for iter in 0..3 {
-                    let damage: Vec<(i32, i32, i32, i32)> =
-                        get_diff_damage(iter, &mut base, w, h, stride, bpp);
-                    copy_onto_dmabuf(&img, &tmp_wr, &base).unwrap();
+                    let (img, mirror) = create_dmabuf_and_copy(
+                        &vulk, &mut ctx, params, dmabuf, buffer, w, h, format, &base,
+                    )
+                    .unwrap();
 
                     ctx.prog_write_passthrough(build_msgs(|dst| {
-                        for d in damage {
-                            write_req_wl_surface_damage_buffer(dst, surface, d.0, d.1, d.2, d.3);
-                        }
+                        write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
+                        write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
                         write_req_wl_surface_commit(dst, surface);
                     }));
 
-                    let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
-                    assert!(
-                        dup == base,
-                        "{} {}\n{:?}\n{:?}",
-                        dup.len(),
-                        base.len(),
-                        dup,
-                        base
-                    );
+                    let tmp_wr =
+                        Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), false).unwrap());
+                    let tmp_rd =
+                        Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
 
+                    for iter in 0..3 {
+                        let damage: Vec<(i32, i32, i32, i32)> =
+                            get_diff_damage(iter, &mut base, w, h, stride, bpp);
+                        copy_onto_dmabuf(&img, &tmp_wr, &base).unwrap();
+
+                        ctx.prog_write_passthrough(build_msgs(|dst| {
+                            for d in damage {
+                                write_req_wl_surface_damage_buffer(
+                                    dst, surface, d.0, d.1, d.2, d.3,
+                                );
+                            }
+                            write_req_wl_surface_commit(dst, surface);
+                        }));
+
+                        let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
+                        assert!(
+                            dup == base,
+                            "{} {}\n{:?}\n{:?}",
+                            dup.len(),
+                            base.len(),
+                            dup,
+                            base
+                        );
+
+                        ctx.comp_write_passthrough(build_msgs(|dst| {
+                            write_evt_wl_buffer_release(dst, buffer);
+                        }));
+                    }
+
+                    ctx.prog_write_passthrough(build_msgs(|dst| {
+                        write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
+                        write_req_wl_buffer_destroy(dst, buffer);
+                    }));
                     ctx.comp_write_passthrough(build_msgs(|dst| {
-                        write_evt_wl_buffer_release(dst, buffer);
+                        write_evt_wl_display_delete_id(dst, display, params.0);
+                        write_evt_wl_display_delete_id(dst, display, buffer.0);
                     }));
                 }
-
-                ctx.prog_write_passthrough(build_msgs(|dst| {
-                    write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
-                    write_req_wl_buffer_destroy(dst, buffer);
-                }));
-                ctx.comp_write_passthrough(build_msgs(|dst| {
-                    write_evt_wl_display_delete_id(dst, display, params.0);
-                    write_evt_wl_display_delete_id(dst, display, buffer.0);
-                }));
             }
-        }
-    });
+        });
+    }
 }
 
 #[cfg(feature = "dmabuf")]
 #[test]
 fn proto_explicit_sync() {
-    let vulk = setup_vulkan(None, false, true, false, false).unwrap();
+    for dev_id in list_possible_device_ids() {
+        let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
 
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
-        let (
-            display,
-            registry,
-            dmabuf,
-            comp,
-            surface,
-            feedback,
-            params,
-            manager,
-            sync_surf,
-            timeline,
-            buffer,
-        ) = (
-            ObjId(1),
-            ObjId(2),
-            ObjId(3),
-            ObjId(4),
-            ObjId(5),
-            ObjId(6),
-            ObjId(7),
-            ObjId(8),
-            ObjId(9),
-            ObjId(10),
-            ObjId(11),
-        );
-
-        setup_linux_dmabuf(
-            &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
-        );
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_registry_global(
-                dst,
+        run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
+            let (
+                display,
                 registry,
-                3,
-                "wp_linux_drm_syncobj_manager_v1".as_bytes(),
-                1,
-            );
-        }));
-        let msg = build_msgs(|dst| {
-            write_req_wl_registry_bind(
-                dst,
-                registry,
-                3,
-                "wp_linux_drm_syncobj_manager_v1".as_bytes(),
-                1,
+                dmabuf,
+                comp,
+                surface,
+                feedback,
+                params,
                 manager,
+                sync_surf,
+                timeline,
+                buffer,
+            ) = (
+                ObjId(1),
+                ObjId(2),
+                ObjId(3),
+                ObjId(4),
+                ObjId(5),
+                ObjId(6),
+                ObjId(7),
+                ObjId(8),
+                ObjId(9),
+                ObjId(10),
+                ObjId(11),
             );
-            write_req_wp_linux_drm_syncobj_manager_v1_get_surface(dst, manager, sync_surf, surface);
-            write_req_wp_linux_drm_syncobj_manager_v1_import_timeline(
-                dst, manager, false, timeline,
+
+            setup_linux_dmabuf(
+                &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
             );
-        });
-        let start_pt = 150;
-        let (prog_timeline, timeline_fd) = vulkan_create_timeline(&vulk, start_pt).unwrap();
-
-        let (rmsg, mut rfd) = ctx.prog_write(&msg[..], &[&timeline_fd]).unwrap();
-        assert!(rmsg.concat() == msg);
-        drop(timeline_fd);
-        assert!(rfd.len() == 1);
-        let output_fd = rfd.remove(0);
-
-        let comp_timeline = vulkan_import_timeline(&vulk, output_fd).unwrap();
-
-        let (w, h) = (512, 512);
-        let format = wayland_to_drm(WlShmFormat::R8);
-        let file_sz = h * w;
-        let mut base = vec![0x80; file_sz];
-
-        let (img, mirror) =
-            create_dmabuf_and_copy(&vulk, &mut ctx, params, dmabuf, buffer, w, h, format, &base)
-                .unwrap();
-
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
-            write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
-            write_req_wl_surface_commit(dst, surface);
-        }));
-
-        let tmp_wr = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), false).unwrap());
-        let tmp_rd = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
-
-        for iter in 0..4 {
-            /* Change entire image, except on the second iteration */
-            if iter != 1 {
-                base.fill(iter);
-            }
-            copy_onto_dmabuf(&img, &tmp_wr, &base).unwrap();
-            let acq_pt: u64 = start_pt + 11 + (iter as u64) * 7;
-            let rel_pt = acq_pt + 2;
-
-            if iter == 2 {
-                /* Special case: signal before writing */
-                println!("Signalling acquire {}", acq_pt);
-                prog_timeline.signal_timeline_pt(acq_pt).unwrap();
-            }
-
-            let msg = build_msgs(|dst| {
-                write_req_wl_surface_damage_buffer(dst, surface, 0, 0, w as i32, h as i32);
-                let (acq_hi, acq_lo) = split_u64(acq_pt);
-                let (rel_hi, rel_lo) = split_u64(rel_pt);
-                write_req_wp_linux_drm_syncobj_surface_v1_set_acquire_point(
-                    dst, sync_surf, timeline, acq_hi, acq_lo,
-                );
-                write_req_wp_linux_drm_syncobj_surface_v1_set_release_point(
-                    dst, sync_surf, timeline, rel_hi, rel_lo,
-                );
-                write_req_wl_surface_commit(dst, surface);
-            });
-
-            test_write_msgs(&ctx.sock_prog, &msg, &[]);
-
-            /* Signal after writing; this is safe because the messages sent will at minimum
-             * fit in the pipe buffer */
-            if iter != 2 {
-                println!("Signalling acquire {}", acq_pt);
-                prog_timeline.signal_timeline_pt(acq_pt).unwrap();
-            }
-
-            /* Only start reading messages after signalling; this prevents a possible deadlock,
-             * because the code might wait for the signal before sending messages further */
-            let (rmsg, rfds, err) = test_read_msgs(&ctx.sock_comp, Some(&ctx.sock_prog));
-            assert!(err.is_none());
-            assert!(rfds.is_empty());
-            assert!(rmsg.concat() == msg);
-
-            let max_wait = 1000000000;
-            println!("Waiting for acquire {}", acq_pt);
-            comp_timeline
-                .wait_for_timeline_pt(acq_pt, max_wait)
-                .unwrap();
-
-            let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
-            assert!(dup == base);
-
-            println!("Signalling release {}", rel_pt);
-            comp_timeline.signal_timeline_pt(rel_pt).unwrap();
-            println!("Waiting for release {}", rel_pt);
-            prog_timeline
-                .wait_for_timeline_pt(rel_pt, max_wait)
-                .unwrap();
-
             ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_wl_buffer_release(dst, buffer);
+                write_evt_wl_registry_global(
+                    dst,
+                    registry,
+                    3,
+                    "wp_linux_drm_syncobj_manager_v1".as_bytes(),
+                    1,
+                );
             }));
-        }
+            let msg = build_msgs(|dst| {
+                write_req_wl_registry_bind(
+                    dst,
+                    registry,
+                    3,
+                    "wp_linux_drm_syncobj_manager_v1".as_bytes(),
+                    1,
+                    manager,
+                );
+                write_req_wp_linux_drm_syncobj_manager_v1_get_surface(
+                    dst, manager, sync_surf, surface,
+                );
+                write_req_wp_linux_drm_syncobj_manager_v1_import_timeline(
+                    dst, manager, false, timeline,
+                );
+            });
+            let start_pt = 150;
+            let (prog_timeline, timeline_fd) = vulkan_create_timeline(&vulk, start_pt).unwrap();
 
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
-            write_req_wl_buffer_destroy(dst, buffer);
-        }));
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_display_delete_id(dst, display, params.0);
-            write_evt_wl_display_delete_id(dst, display, buffer.0);
-        }));
-    });
+            let (rmsg, mut rfd) = ctx.prog_write(&msg[..], &[&timeline_fd]).unwrap();
+            assert!(rmsg.concat() == msg);
+            drop(timeline_fd);
+            assert!(rfd.len() == 1);
+            let output_fd = rfd.remove(0);
+
+            let comp_timeline = vulkan_import_timeline(&vulk, output_fd).unwrap();
+
+            let (w, h) = (512, 512);
+            let format = wayland_to_drm(WlShmFormat::R8);
+            let file_sz = h * w;
+            let mut base = vec![0x80; file_sz];
+
+            let (img, mirror) = create_dmabuf_and_copy(
+                &vulk, &mut ctx, params, dmabuf, buffer, w, h, format, &base,
+            )
+            .unwrap();
+
+            ctx.prog_write_passthrough(build_msgs(|dst| {
+                write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
+                write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
+                write_req_wl_surface_commit(dst, surface);
+            }));
+
+            let tmp_wr = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), false).unwrap());
+            let tmp_rd = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
+
+            for iter in 0..4 {
+                /* Change entire image, except on the second iteration */
+                if iter != 1 {
+                    base.fill(iter);
+                }
+                copy_onto_dmabuf(&img, &tmp_wr, &base).unwrap();
+                let acq_pt: u64 = start_pt + 11 + (iter as u64) * 7;
+                let rel_pt = acq_pt + 2;
+
+                if iter == 2 {
+                    /* Special case: signal before writing */
+                    println!("Signalling acquire {}", acq_pt);
+                    prog_timeline.signal_timeline_pt(acq_pt).unwrap();
+                }
+
+                let msg = build_msgs(|dst| {
+                    write_req_wl_surface_damage_buffer(dst, surface, 0, 0, w as i32, h as i32);
+                    let (acq_hi, acq_lo) = split_u64(acq_pt);
+                    let (rel_hi, rel_lo) = split_u64(rel_pt);
+                    write_req_wp_linux_drm_syncobj_surface_v1_set_acquire_point(
+                        dst, sync_surf, timeline, acq_hi, acq_lo,
+                    );
+                    write_req_wp_linux_drm_syncobj_surface_v1_set_release_point(
+                        dst, sync_surf, timeline, rel_hi, rel_lo,
+                    );
+                    write_req_wl_surface_commit(dst, surface);
+                });
+
+                test_write_msgs(&ctx.sock_prog, &msg, &[]);
+
+                /* Signal after writing; this is safe because the messages sent will at minimum
+                 * fit in the pipe buffer */
+                if iter != 2 {
+                    println!("Signalling acquire {}", acq_pt);
+                    prog_timeline.signal_timeline_pt(acq_pt).unwrap();
+                }
+
+                /* Only start reading messages after signalling; this prevents a possible deadlock,
+                 * because the code might wait for the signal before sending messages further */
+                let (rmsg, rfds, err) = test_read_msgs(&ctx.sock_comp, Some(&ctx.sock_prog));
+                assert!(err.is_none());
+                assert!(rfds.is_empty());
+                assert!(rmsg.concat() == msg);
+
+                let max_wait = 1000000000;
+                println!("Waiting for acquire {}", acq_pt);
+                comp_timeline
+                    .wait_for_timeline_pt(acq_pt, max_wait)
+                    .unwrap();
+
+                let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
+                assert!(dup == base);
+
+                println!("Signalling release {}", rel_pt);
+                comp_timeline.signal_timeline_pt(rel_pt).unwrap();
+                println!("Waiting for release {}", rel_pt);
+                prog_timeline
+                    .wait_for_timeline_pt(rel_pt, max_wait)
+                    .unwrap();
+
+                ctx.comp_write_passthrough(build_msgs(|dst| {
+                    write_evt_wl_buffer_release(dst, buffer);
+                }));
+            }
+
+            ctx.prog_write_passthrough(build_msgs(|dst| {
+                write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
+                write_req_wl_buffer_destroy(dst, buffer);
+            }));
+            ctx.comp_write_passthrough(build_msgs(|dst| {
+                write_evt_wl_display_delete_id(dst, display, params.0);
+                write_evt_wl_display_delete_id(dst, display, buffer.0);
+            }));
+        });
+    }
 }
 
 #[test]
@@ -2800,65 +2866,76 @@ fn proto_test_screencopy_shm() {
 #[cfg(feature = "dmabuf")]
 #[test]
 fn proto_test_screencopy_dmabuf() {
-    let vulk = setup_vulkan(None, false, true, false, false).unwrap();
+    for dev_id in list_possible_device_ids() {
+        let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
 
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
-        let [display, reg, dmabuf, screencopy, output, frame, params, buffer, ..] = ID_SEQUENCE;
+        run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
+            let [display, reg, dmabuf, screencopy, output, frame, params, buffer, ..] = ID_SEQUENCE;
 
-        let fmt = wayland_to_drm(WlShmFormat::R8);
-        let bpp = 1;
-        let (w, h) = (8, 8);
-        let img_size = (w * h) as usize * bpp;
-        let img_data = vec![0x33u8; img_size];
-        let mod_data = vec![0x44u8; img_size];
-        let modifier_list = vulk.get_supported_modifiers(fmt);
+            let fmt = wayland_to_drm(WlShmFormat::R8);
+            let bpp = 1;
+            let (w, h) = (8, 8);
+            let img_size = (w * h) as usize * bpp;
+            let img_data = vec![0x33u8; img_size];
+            let mod_data = vec![0x44u8; img_size];
+            let modifier_list = vulk.get_supported_modifiers(fmt);
 
-        let copy_buf = Arc::new(vulkan_get_buffer(&vulk, img_size, true).unwrap());
+            let copy_buf = Arc::new(vulkan_get_buffer(&vulk, img_size, true).unwrap());
 
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_wl_display_get_registry(dst, display, reg);
-        }));
-        let scrcopy_name = "zwlr_screencopy_manager_v1".as_bytes();
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_registry_global(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3);
-            write_evt_wl_registry_global(dst, reg, 2, scrcopy_name, 3);
-            write_evt_wl_registry_global(dst, reg, 3, "wl_output".as_bytes(), 4);
-        }));
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_wl_registry_bind(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3, dmabuf);
-            write_req_wl_registry_bind(dst, reg, 2, scrcopy_name, 3, screencopy);
-            write_req_wl_registry_bind(dst, reg, 3, "wl_output".as_bytes(), 4, output);
-            write_req_zwlr_screencopy_manager_v1_capture_output(dst, screencopy, frame, 0, output);
-        }));
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_zwp_linux_dmabuf_v1_format(dst, dmabuf, fmt);
-            for m in modifier_list {
-                let (mod_hi, mod_lo) = split_u64(m);
-                write_evt_zwp_linux_dmabuf_v1_modifier(dst, dmabuf, fmt, mod_hi, mod_lo);
-            }
-            write_evt_zwlr_screencopy_frame_v1_linux_dmabuf(dst, frame, fmt, w, h);
-            write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
-        }));
+            ctx.prog_write_passthrough(build_msgs(|dst| {
+                write_req_wl_display_get_registry(dst, display, reg);
+            }));
+            let scrcopy_name = "zwlr_screencopy_manager_v1".as_bytes();
+            ctx.comp_write_passthrough(build_msgs(|dst| {
+                write_evt_wl_registry_global(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3);
+                write_evt_wl_registry_global(dst, reg, 2, scrcopy_name, 3);
+                write_evt_wl_registry_global(dst, reg, 3, "wl_output".as_bytes(), 4);
+            }));
+            ctx.prog_write_passthrough(build_msgs(|dst| {
+                write_req_wl_registry_bind(
+                    dst,
+                    reg,
+                    1,
+                    "zwp_linux_dmabuf_v1".as_bytes(),
+                    3,
+                    dmabuf,
+                );
+                write_req_wl_registry_bind(dst, reg, 2, scrcopy_name, 3, screencopy);
+                write_req_wl_registry_bind(dst, reg, 3, "wl_output".as_bytes(), 4, output);
+                write_req_zwlr_screencopy_manager_v1_capture_output(
+                    dst, screencopy, frame, 0, output,
+                );
+            }));
+            ctx.comp_write_passthrough(build_msgs(|dst| {
+                write_evt_zwp_linux_dmabuf_v1_format(dst, dmabuf, fmt);
+                for m in modifier_list {
+                    let (mod_hi, mod_lo) = split_u64(m);
+                    write_evt_zwp_linux_dmabuf_v1_modifier(dst, dmabuf, fmt, mod_hi, mod_lo);
+                }
+                write_evt_zwlr_screencopy_frame_v1_linux_dmabuf(dst, frame, fmt, w, h);
+                write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
+            }));
 
-        let (prog_img, comp_img) = create_dmabuf_and_copy(
-            &vulk, &mut ctx, params, dmabuf, buffer, w as _, h as _, fmt, &img_data,
-        )
-        .unwrap();
+            let (prog_img, comp_img) = create_dmabuf_and_copy(
+                &vulk, &mut ctx, params, dmabuf, buffer, w as _, h as _, fmt, &img_data,
+            )
+            .unwrap();
 
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer);
-        }));
+            ctx.prog_write_passthrough(build_msgs(|dst| {
+                write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer);
+            }));
 
-        copy_onto_dmabuf(&comp_img, &copy_buf, &mod_data).unwrap();
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_zwlr_screencopy_frame_v1_ready(dst, frame, 0, 1, 123456789);
-        }));
+            copy_onto_dmabuf(&comp_img, &copy_buf, &mod_data).unwrap();
+            ctx.comp_write_passthrough(build_msgs(|dst| {
+                write_evt_zwlr_screencopy_frame_v1_ready(dst, frame, 0, 1, 123456789);
+            }));
 
-        let output = copy_from_dmabuf(&prog_img, &copy_buf).unwrap();
-        assert!(output == mod_data);
+            let output = copy_from_dmabuf(&prog_img, &copy_buf).unwrap();
+            assert!(output == mod_data);
 
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_zwlr_screencopy_frame_v1_destroy(dst, frame);
-        }));
-    });
+            ctx.prog_write_passthrough(build_msgs(|dst| {
+                write_req_zwlr_screencopy_frame_v1_destroy(dst, frame);
+            }));
+        });
+    }
 }
