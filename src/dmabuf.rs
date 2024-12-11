@@ -2506,11 +2506,10 @@ impl Vulkan {
         let Some(vk_format) = drm_to_vulkan(drm_format) else {
             return false;
         };
-        let Some(mod_data) = self.formats[&vk_format]
-            .modifiers
-            .iter()
-            .find(|x| x.modifier == modifier)
-        else {
+        let Some(data) = self.formats.get(&vk_format) else {
+            return false;
+        };
+        let Some(mod_data) = data.modifiers.iter().find(|x| x.modifier == modifier) else {
             return false;
         };
         let max_size = if can_store_and_sample {
