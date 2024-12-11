@@ -1950,7 +1950,7 @@ fn create_dmabuf_and_copy(
 
 #[cfg(feature = "video")]
 fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
-    let pass = AtomicBool::new(true);
+    let accurate_replication = AtomicBool::new(true);
     run_protocol_test_with_opts(
         &|mut ctx: ProtocolTestContext| {
             let (display, registry, dmabuf, comp, surface, feedback, params, buffer) = (
@@ -1978,16 +1978,10 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
                 let fmt = wayland_to_drm(WlShmFormat::Xrgb8888);
 
                 let seed = fill_pseudorand_xrgb(w, h);
-                let (img, mirror) = match create_dmabuf_and_copy(
+                let (img, mirror) = create_dmabuf_and_copy(
                     vulk, &mut ctx, params, dmabuf, buffer, w, h, fmt, &seed,
-                ) {
-                    Ok(x) => x,
-                    Err(y) => {
-                        println!("Failed to create and replicate dmabuf: {:?}", y);
-                        pass.store(false, std::sync::atomic::Ordering::SeqCst);
-                        return;
-                    }
-                };
+                )
+                .unwrap();
 
                 let img_data = fill_blocks_xrgb(w, h);
                 let tmp_img =
@@ -2054,9 +2048,9 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
                 }
 
                 if avg_diff > threshold {
-                    pass.store(false, std::sync::atomic::Ordering::SeqCst);
+                    accurate_replication.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
-                // TODO: once video bugs are resolved, set this
+                // TODO: once video library bugs are resolved, set this
                 // assert!(avg_diff < threshold);
 
                 /* Cleanup buffer and params objects, for reuse with next image */
@@ -2074,7 +2068,7 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
         None,
     );
 
-    pass.load(std::sync::atomic::Ordering::SeqCst)
+    accurate_replication.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 #[cfg(feature = "video")]
@@ -2083,7 +2077,7 @@ fn test_video_combo(
     video_format: VideoFormat,
     try_hw_dec: bool,
     try_hw_enc: bool,
-    allow_fail: bool,
+    accurate_video_replication: bool,
 ) {
     let opts = Options {
         debug: false, /* validation layers and libavcodec write some uncaptured logging messages */
@@ -2112,8 +2106,10 @@ fn test_video_combo(
         if pass { "pass" } else { "fail" }
     );
 
-    // TODO: hardware video decoding of w<=32, h<=16 (w=32,h=16) images appears broken
-    if !allow_fail {
+    // NOTE: as of writing, AMD hardware video decoding, and Intel hardware video
+    // encoding, of size w<=32, h<=16 (w=32,h=16) images does not accurately
+    // reproduce colors
+    if accurate_video_replication {
         assert!(pass);
     }
 }
@@ -2134,13 +2130,19 @@ fn proto_dmavid_h264() {
         let vulk = setup_vulkan(Some(dev_id), true, true, false, false).unwrap();
 
         /* Test all hardware encoding/decoding combinations to sure formats are compatible */
-        for (try_hw_dec, try_hw_enc, allow_fail) in [
-            (false, false, false),
-            (true, false, true),
-            (true, true, true),
+        for (try_hw_dec, try_hw_enc, accurate_video_replication) in [
+            (false, false, true),
+            (true, false, false),
+            (true, true, false),
             (false, true, false),
         ] {
-            test_video_combo(&vulk, VideoFormat::H264, try_hw_dec, try_hw_enc, allow_fail);
+            test_video_combo(
+                &vulk,
+                VideoFormat::H264,
+                try_hw_dec,
+                try_hw_enc,
+                accurate_video_replication,
+            );
         }
     }
 }
