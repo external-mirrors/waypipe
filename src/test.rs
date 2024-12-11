@@ -1647,6 +1647,10 @@ fn setup_linux_dmabuf(
     assert!(rfds.len() == 1);
     drop(rfds);
     /* exact replication not guaranteed for these; parsing returned messages is not critical since support _should_ be present */
+
+    // TODO: parse and return the map of format and modifier pairs; this would
+    // make it possible to test mixed gpu scenarios, and to handle cases
+    // where the list of modifiers is restricted when video encoding is enabled
 }
 
 #[cfg(feature = "dmabuf")]
@@ -2061,14 +2065,14 @@ fn test_video_combo(
 #[cfg(feature = "video")]
 #[test]
 fn proto_dmavid_vp9() {
-    let vulk = setup_vulkan(None, false, true, false, false).unwrap();
+    let vulk = setup_vulkan(None, true, true, false, false).unwrap();
     test_video_combo(&vulk, VideoFormat::VP9, false, false, false);
 }
 
 #[cfg(feature = "video")]
 #[test]
 fn proto_dmavid_h264() {
-    let vulk = setup_vulkan(None, false, true, false, false).unwrap();
+    let vulk = setup_vulkan(None, true, true, false, false).unwrap();
 
     /* Test all hardware encoding/decoding combinations to sure formats are compatible */
     for (try_hw_dec, try_hw_enc, allow_fail) in [
