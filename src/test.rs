@@ -1979,20 +1979,23 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
                             threshold,
                     );
                     if avg_diff >= threshold {
-                        println!("Green channel");
-                        for y in 0..h {
-                            for x in 0..w {
-                                let base: [u8; 4] = img_data
-                                    [(4 * y * w + 4 * x)..(4 * y * w + 4 * x + 4)]
-                                    .try_into()
-                                    .unwrap();
-                                let rep: [u8; 4] = mir_data
-                                    [(4 * y * w + 4 * x)..(4 * y * w + 4 * x + 4)]
-                                    .try_into()
-                                    .unwrap();
-                                print!("{:2x}/{:2x} ", base[1], rep[1]);
+                        /* XRGB8888 bytes are ordered: B G R x */
+                        for (i, channel) in ["Blue", "Green", "Red"].iter().enumerate() {
+                            println!("{} channel, original / replicated", channel);
+                            for y in 0..h {
+                                for x in 0..w {
+                                    let base: [u8; 4] = img_data
+                                        [(4 * y * w + 4 * x)..(4 * y * w + 4 * x + 4)]
+                                        .try_into()
+                                        .unwrap();
+                                    let rep: [u8; 4] = mir_data
+                                        [(4 * y * w + 4 * x)..(4 * y * w + 4 * x + 4)]
+                                        .try_into()
+                                        .unwrap();
+                                    print!("{:2x}/{:2x} ", base[i], rep[i]);
+                                }
+                                println!();
                             }
-                            println!();
                         }
                     }
                 }
