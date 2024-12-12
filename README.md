@@ -53,11 +53,11 @@ ninja -C build-waypipe install
 
 Core build requirements:
 
-- [meson][i0] (build, >= 0.57. with dependencies `ninja`, `pkg-config`, `python3`)
+- [meson][i0] (build, ≥ 0.57. with dependencies `ninja`, `pkg-config`, `python3`)
 - [cargo][i1] (build)
-- rust (build, edition 2021)
+- rust (build, edition 2021, version ≥ 1.77)
 - [scdoc][i2] (optional, to generate a man page, )
-- ssh (runtime, OpenSSH >= 6.7, for Unix domain socket forwarding)
+- ssh (runtime, OpenSSH ≥ 6.7, for Unix domain socket forwarding)
 
 Rust library dependencies (can be acquired through `cargo fetch --locked`):
 
@@ -65,20 +65,25 @@ Rust library dependencies (can be acquired through `cargo fetch --locked`):
 - getrandom: picking random socket names
 - log: logging
 - nix: safer libc wrapper
-- ash: (optional, provides vulkan bindings)
-- bindgen (build): for bindings to C libraries
+- ash: (optional, provides vulkan bindings for dmabuf support)
 - libloading: (optional, used by ffmpeg bindings)
 - pkg-config: (optional, used to find libraries to link to)
 
 Optional linked dependencies, broken out by feature:
 
-- lz4 compression: liblz4 (>=1.7.0)
-- zstd compression: libzstd (>= 0.4.6)
+- lz4 compression:
+  - liblz4 (≥ 1.7.0)
+  - bindgen (build, ≥ 0.70.0)
+- zstd compression:
+  - libzstd (≥ 0.4.6)
+  - bindgen (build, ≥ 0.70.0)
 - dmabuf support:
   - vulkan (to support programs using GPU rendering and DMABUFs)
-  - vulkan validation layers (optional, used for tests and with --debug flag)
+  - vulkan validation layers (runtime, optional, used for tests and with --debug flag)
 - video encoding/decoding support:
-  - ffmpeg (>=7.1, needs avcodec/avutil for lossy video encoding)
+  - dmabuf support
+  - ffmpeg (≥ 7.1, needs avcodec/avutil for lossy video encoding)
+  - bindgen (build, ≥ 0.70.0)
   - glslc (build, to compile shaders for image format conversion)
 
 [i0]: https://mesonbuild.com/
@@ -102,7 +107,7 @@ ninja -C build-waypipe install
 or by running the `./minimal_build.sh` script. In addition to `meson`, `python`,
 `liblz4`, `libzstd`, `ssh`, `waypipe-c` requires:
 
-- ffmpeg (>=3.1, needs avcodec/avutil/swscale for lossy video encoding)
+- ffmpeg (≥ 3.1, needs avcodec/avutil/swscale for lossy video encoding)
 - libva (for hardware video encoding and decoding)
 - libgbm (to support programs using OpenGL via DMABUFs)
 - libdrm (same as for libgbm)

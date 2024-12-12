@@ -1,4 +1,44 @@
+fn depfile_to_cargo(path: &std::path::Path) {
+    use std::io::Read;
+
+    let mut depfile = std::fs::File::open(path).unwrap();
+    let mut data = Vec::<u8>::new();
+    depfile.read_to_end(&mut data).unwrap();
+    // depfile contains the dependencies, in Make-style. Spaces in paths are escaped with '\ ',
+    // and backslashes with '\\'. Other escaped chars (newlines, control characters) may break.
+    let mut unescaped = Vec::new();
+    let mut chunks: Vec<String> = Vec::new();
+    assert!(!data.contains(&0));
+    let mut scan = data.into_iter();
+    loop {
+        let Some(c) = scan.next() else {
+            break;
+        };
+        if c == b'\\' {
+            // TODO: how does Cargo handle escapes in path names? Or invalid utf8?
+            let d = scan.next().unwrap();
+            match d {
+                b' ' => unescaped.push(b' '),
+                b'\\' => unescaped.push(b'\\'),
+                _ => panic!(),
+            }
+        } else if c == b' ' {
+            chunks.push(std::str::from_utf8(&unescaped[..]).unwrap().into());
+            unescaped.clear();
+        } else {
+            unescaped.push(c);
+        }
+    }
+    chunks.push(std::str::from_utf8(&unescaped[..]).unwrap().into());
+
+    for file in chunks.iter().skip(1) {
+        println!("cargo::rerun-if-changed={}", file);
+    }
+}
+
 fn main() {
+    use std::ffi::OsStr;
+
     let lib = pkg_config::probe_library("libzstd").unwrap();
 
     println!("cargo:rustc-link-lib=zstd");
@@ -22,26 +62,47 @@ fn main() {
 
     let vars: &[&str] = &[];
 
-    let mut bindings = bindgen::Builder::default()
-        .clang_args(
-            includes
-                .into_iter()
-                .map(|x| format!("-I{}", x.to_string_lossy())),
-        )
-        .header("wrapper.h")
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        .rust_target(bindgen::RustTarget::Stable_1_77);
-    for f in functions {
-        bindings = bindings.allowlist_function(f);
-    }
-    for t in types {
-        bindings = bindings.allowlist_type(t);
-    }
-    for v in vars {
-        bindings = bindings.allowlist_var(v);
-    }
+    let bindgen = "bindgen";
 
-    let builder = bindings.generate().unwrap();
-    let out_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    builder.write_to_file(out_path.join("bindings.rs")).unwrap()
+    let out_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("bindings.rs");
+    let dep_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("depfile");
+
+    let mut args: Vec<&OsStr> = Vec::new();
+    args.push(OsStr::new("--rust-target"));
+    args.push(OsStr::new("1.77"));
+    args.push(OsStr::new("--no-doc-comments"));
+    args.push(OsStr::new("--depfile"));
+    args.push(dep_path.as_os_str());
+    args.push(OsStr::new("--output"));
+    args.push(out_path.as_os_str());
+
+    for f in functions.iter() {
+        args.push(OsStr::new("--allowlist-function"));
+        args.push(OsStr::new(*f));
+    }
+    for f in vars.iter() {
+        args.push(OsStr::new("--allowlist-var"));
+        args.push(OsStr::new(*f));
+    }
+    for f in types.iter() {
+        args.push(OsStr::new("--allowlist-type"));
+        args.push(OsStr::new(*f));
+    }
+    args.push(OsStr::new("wrapper.h"));
+    args.push(OsStr::new("--"));
+    let inc_vec: Vec<String> = includes
+        .iter()
+        .map(|x| format!("-I{}", x.to_string_lossy()))
+        .collect();
+    for x in inc_vec.iter() {
+        args.push(OsStr::new(x));
+    }
+    let mut child = std::process::Command::new(bindgen)
+        .args(args)
+        .spawn()
+        .unwrap();
+    let exit_status = child.wait().unwrap();
+    assert!(exit_status.success());
+
+    depfile_to_cargo(&dep_path);
 }

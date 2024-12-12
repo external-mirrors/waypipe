@@ -30,12 +30,31 @@ if get_option('build_rs')
     # However, to 'autodetect' what features are available, we duplicate some of the build logic
     features = []
 
+    # compute maximum of with_lz4/with_zstd/with_video features
+    max_feature = get_option('with_lz4')
+    if (max_feature.auto() and get_option('with_zstd').enabled()) or (not max_feature.enabled() and get_option(
+        'with_zstd',
+    ).auto())
+        max_feature = get_option('with_zstd')
+    endif
+    if (max_feature.auto() and get_option('with_video').enabled()) or (not max_feature.enabled() and get_option(
+        'with_video',
+    ).auto())
+        max_feature = get_option('with_video')
+    endif
+
+    bindgen = find_program(
+        'bindgen',
+        version: '>= 0.70.0',
+        native: true,
+        required: max_feature,
+    )
     liblz4 = dependency(
         'liblz4',
         version: '>=1.7.0',
         required: get_option('with_lz4'),
     )
-    if liblz4.found()
+    if bindgen.found() and liblz4.found()
         features += ['lz4']
     endif
     libzstd = dependency(
@@ -43,7 +62,7 @@ if get_option('build_rs')
         version: '>=0.4.6',
         required: get_option('with_zstd'),
     )
-    if libzstd.found()
+    if bindgen.found() and libzstd.found()
         features += ['zstd']
     endif
     libvulkan = dependency('vulkan', required: get_option('with_dmabuf'))
@@ -58,7 +77,7 @@ if get_option('build_rs')
     )
     libavutil = dependency('libavutil', required: get_option('with_video'))
     libavcodec = dependency('libavcodec', required: get_option('with_video'))
-    if libavcodec.found() and libavutil.found() and glslc.found()
+    if bindgen.found() and libavcodec.found() and libavutil.found() and glslc.found()
         features += ['video']
     endif
 
