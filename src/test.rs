@@ -2361,6 +2361,16 @@ fn proto_dmabuf_damage() {
                     let tmp_rd =
                         Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
 
+                    let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
+                    assert!(
+                        dup == base,
+                        "initial mismatch {} {}\n{:?}\n{:?}",
+                        dup.len(),
+                        base.len(),
+                        dup,
+                        base
+                    );
+
                     for iter in 0..3 {
                         let damage: Vec<(i32, i32, i32, i32)> =
                             get_diff_damage(iter, &mut base, w, h, stride, bpp);
@@ -2378,7 +2388,8 @@ fn proto_dmabuf_damage() {
                         let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
                         assert!(
                             dup == base,
-                            "{} {}\n{:?}\n{:?}",
+                            "mismatch iter {}, {} {}\n{:?}\n{:?}",
+                            iter,
                             dup.len(),
                             base.len(),
                             dup,
