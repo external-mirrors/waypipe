@@ -1481,7 +1481,7 @@ pub fn process_way_msg(
                         None
                     }
                 } else {
-                    error!("Attached wl_buffer destroyed before commit: is this a protocol error?. Interpreting as null attachment.");
+                    debug!("Attached wl_buffer {} for wl_surface {} destroyed before commit: the result of this is not specified and compositors may do anything. Interpreting as null attachment.", buf_id, object_id);
                     None
                 }
             } else {
