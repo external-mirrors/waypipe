@@ -536,15 +536,6 @@ pub struct ShadowFd {
     pub data: ShadowFdVariant,
 }
 
-/** Format a bool as 'T' or 'F' */
-fn fmt_bool(x: bool) -> char {
-    if x {
-        'T'
-    } else {
-        'F'
-    }
-}
-
 /** Read data and fds from a Wayland socket..
  *
  * Returns true if the Wayland connection fd closed */

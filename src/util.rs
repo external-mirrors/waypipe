@@ -188,6 +188,15 @@ pub fn escape_non_ascii_printable(name: &[u8]) -> String {
     s
 }
 
+/** Format a bool as 'T' or 'F' */
+pub fn fmt_bool(x: bool) -> char {
+    if x {
+        'T'
+    } else {
+        'f'
+    }
+}
+
 /* A heap-allocated 64-aligned array */
 pub struct AlignedArray {
     data: *mut u8,

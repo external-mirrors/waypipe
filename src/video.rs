@@ -571,6 +571,8 @@ pub unsafe fn setup_video(
 
     let hw_video = pdev_info.hw_enc_h264 | pdev_info.hw_dec_h264 | pdev_info.hw_dec_av1;
     let device_ref = if hw_video {
+        debug!("Setting up video hardware device context");
+
         // Option<Video-ptr?>
         let device_ref: *mut AVBufferRef =
             lib.av_hwdevice_ctx_alloc(AVHWDeviceType_AV_HWDEVICE_TYPE_VULKAN);
@@ -669,6 +671,28 @@ pub unsafe fn setup_video(
         sw_encoder: lib
             .avcodec_find_encoder_by_name("libaom-av1\0".as_bytes().as_ptr() as *const _),
     };
+
+    debug!(
+        "H264 support: hwenc {} swenc {} hwdec {} swdec {}",
+        fmt_bool(!codecs_h264.encoder.is_null() && pdev_info.hw_enc_h264),
+        fmt_bool(!codecs_h264.sw_encoder.is_null()),
+        fmt_bool(!codecs_h264.decoder.is_null() && pdev_info.hw_dec_h264),
+        fmt_bool(!codecs_h264.sw_decoder.is_null()),
+    );
+    debug!(
+        "VP9 support:  hwenc {} swenc {} hwdec {} swdec {}",
+        fmt_bool(!codecs_vp9.encoder.is_null() && false),
+        fmt_bool(!codecs_vp9.sw_encoder.is_null()),
+        fmt_bool(!codecs_vp9.decoder.is_null() && false),
+        fmt_bool(!codecs_vp9.sw_decoder.is_null()),
+    );
+    debug!(
+        "AV1 support:  hwenc {} swenc {} hwdec {} swdec {}",
+        fmt_bool(!codecs_av1.encoder.is_null() && false),
+        fmt_bool(!codecs_av1.sw_encoder.is_null()),
+        fmt_bool(!codecs_av1.decoder.is_null() && pdev_info.hw_dec_av1),
+        fmt_bool(!codecs_av1.sw_decoder.is_null()),
+    );
 
     let bindings = &[
         vk::DescriptorSetLayoutBinding::default()
