@@ -643,69 +643,39 @@ pub fn setup_vulkan(
         (
             /* Needed to get drm node details */
             vk::EXT_PHYSICAL_DEVICE_DRM_NAME,
-            vk::EXT_PHYSICAL_DEVICE_DRM_SPEC_VERSION,
+            1,
         ),
         (
             /* This and dependencies needed to import/export dmabufs */
             vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_NAME,
-            vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_SPEC_VERSION,
+            1,
         ),
         (
             /* Used to bind dmabuf memory */
             vk::KHR_BIND_MEMORY2_NAME,
-            vk::KHR_BIND_MEMORY2_SPEC_VERSION,
+            1,
         ),
-        (
-            vk::KHR_SAMPLER_YCBCR_CONVERSION_NAME,
-            vk::KHR_SAMPLER_YCBCR_CONVERSION_SPEC_VERSION,
-        ),
-        (
-            vk::KHR_IMAGE_FORMAT_LIST_NAME,
-            vk::KHR_IMAGE_FORMAT_LIST_SPEC_VERSION,
-        ),
-        (
-            vk::KHR_EXTERNAL_MEMORY_NAME,
-            vk::KHR_EXTERNAL_MEMORY_SPEC_VERSION,
-        ),
-        (
-            vk::EXT_EXTERNAL_MEMORY_DMA_BUF_NAME,
-            vk::EXT_EXTERNAL_MEMORY_DMA_BUF_SPEC_VERSION,
-        ),
-        (
-            vk::KHR_GET_MEMORY_REQUIREMENTS2_NAME,
-            vk::KHR_GET_MEMORY_REQUIREMENTS2_SPEC_VERSION,
-        ),
-        (
-            vk::KHR_EXTERNAL_MEMORY_FD_NAME,
-            vk::KHR_EXTERNAL_MEMORY_FD_SPEC_VERSION,
-        ),
-        (
-            vk::KHR_DEDICATED_ALLOCATION_NAME,
-            vk::KHR_DEDICATED_ALLOCATION_SPEC_VERSION,
-        ),
-        (vk::KHR_MAINTENANCE1_NAME, vk::KHR_MAINTENANCE1_SPEC_VERSION),
+        (vk::KHR_SAMPLER_YCBCR_CONVERSION_NAME, 12),
+        (vk::KHR_IMAGE_FORMAT_LIST_NAME, 1),
+        (vk::KHR_EXTERNAL_MEMORY_NAME, 1),
+        (vk::EXT_EXTERNAL_MEMORY_DMA_BUF_NAME, 1),
+        (vk::KHR_GET_MEMORY_REQUIREMENTS2_NAME, 1),
+        (vk::KHR_EXTERNAL_MEMORY_FD_NAME, 1),
+        (vk::KHR_DEDICATED_ALLOCATION_NAME, 3),
+        (vk::KHR_MAINTENANCE1_NAME, 1),
         /* For synchronization with the client/compositor, which need
          * not be Vulkan programs themselves */
-        (
-            vk::EXT_QUEUE_FAMILY_FOREIGN_NAME,
-            vk::EXT_QUEUE_FAMILY_FOREIGN_SPEC_VERSION,
-        ),
+        (vk::EXT_QUEUE_FAMILY_FOREIGN_NAME, 1),
         /* For timeline semaphores and explicit sync */
-        (
-            vk::KHR_TIMELINE_SEMAPHORE_NAME,
-            vk::KHR_TIMELINE_SEMAPHORE_SPEC_VERSION,
-        ),
+        (vk::KHR_TIMELINE_SEMAPHORE_NAME, 2),
         /* To import/export semaphores to fds, for explicit sync protocols & event loop */
-        (
-            vk::KHR_EXTERNAL_SEMAPHORE_FD_NAME,
-            vk::KHR_EXTERNAL_SEMAPHORE_FD_SPEC_VERSION,
-        ),
+        (vk::KHR_EXTERNAL_SEMAPHORE_FD_NAME, 1),
         /* Needed by external_semaphore_fd */
-        (
-            vk::KHR_EXTERNAL_SEMAPHORE_NAME,
-            vk::KHR_EXTERNAL_SEMAPHORE_SPEC_VERSION,
-        ),
+        (vk::KHR_EXTERNAL_SEMAPHORE_NAME, 1),
     ];
+    /* Require the latest known version for video related extensions,
+     * to be safe, because AVVulkanDeviceContext is only given extension
+     * names and not their versions. */
     let ext_list_video_enc_base: &[(&CStr, u32)] = &[(
         vk::KHR_VIDEO_ENCODE_QUEUE_NAME,
         vk::KHR_VIDEO_ENCODE_QUEUE_SPEC_VERSION,
