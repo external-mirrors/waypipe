@@ -14,7 +14,7 @@ use nix::fcntl;
 use nix::libc;
 use nix::poll;
 use nix::sys::signal;
-use nix::sys::{memfd, socket, stat, time};
+use nix::sys::{memfd, socket, time};
 use nix::unistd;
 use std::io::{IoSlice, IoSliceMut};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
@@ -769,29 +769,6 @@ fn is_plain_msgs(
     } else {
         false
     }
-}
-
-#[cfg(feature = "dmabuf")]
-fn list_possible_device_ids() -> Vec<u64> {
-    let mut dev_ids = Vec::new();
-    let Ok(dir_iter) = std::fs::read_dir("/dev/dri") else {
-        /* On failure, assume Vulkan is not available */
-        return dev_ids;
-    };
-
-    for r in dir_iter {
-        let std::io::Result::Ok(entry) = r else {
-            continue;
-        };
-        if !entry.file_name().as_bytes().starts_with(b"renderD") {
-            continue;
-        }
-        let Ok(result) = stat::stat(&entry.path()) else {
-            continue;
-        };
-        dev_ids.push(result.st_rdev);
-    }
-    dev_ids
 }
 
 #[cfg(feature = "dmabuf")]
@@ -1706,7 +1683,7 @@ fn setup_linux_dmabuf(
 #[cfg(feature = "dmabuf")]
 #[test]
 fn proto_dmabuf() {
-    for dev_id in list_possible_device_ids() {
+    for dev_id in list_vulkan_device_ids() {
         let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
 
         run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
@@ -2117,7 +2094,7 @@ fn test_video_combo(
 #[cfg(feature = "video")]
 #[test]
 fn proto_dmavid_vp9() {
-    for dev_id in list_possible_device_ids() {
+    for dev_id in list_vulkan_device_ids() {
         let vulk = setup_vulkan(Some(dev_id), true, true, false, false).unwrap();
         test_video_combo(&vulk, VideoFormat::VP9, false, false, false);
     }
@@ -2126,7 +2103,7 @@ fn proto_dmavid_vp9() {
 #[cfg(feature = "video")]
 #[test]
 fn proto_dmavid_h264() {
-    for dev_id in list_possible_device_ids() {
+    for dev_id in list_vulkan_device_ids() {
         let vulk = setup_vulkan(Some(dev_id), true, true, false, false).unwrap();
 
         /* Test all hardware encoding/decoding combinations to sure formats are compatible */
@@ -2329,7 +2306,7 @@ fn proto_shm_damage() {
 #[cfg(feature = "dmabuf")]
 #[test]
 fn proto_dmabuf_damage() {
-    for dev_id in list_possible_device_ids() {
+    for dev_id in list_vulkan_device_ids() {
         let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
 
         run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
@@ -2430,7 +2407,7 @@ fn proto_dmabuf_damage() {
 #[cfg(feature = "dmabuf")]
 #[test]
 fn proto_explicit_sync() {
-    for dev_id in list_possible_device_ids() {
+    for dev_id in list_vulkan_device_ids() {
         let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
 
         run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
@@ -2868,7 +2845,7 @@ fn proto_test_screencopy_shm() {
 #[cfg(feature = "dmabuf")]
 #[test]
 fn proto_test_screencopy_dmabuf() {
-    for dev_id in list_possible_device_ids() {
+    for dev_id in list_vulkan_device_ids() {
         let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
 
         run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {

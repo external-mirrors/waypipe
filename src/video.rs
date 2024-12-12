@@ -2749,145 +2749,152 @@ fn get_average_color(w: usize, h: usize, format: u32, data: &[u8]) -> (f32, f32,
 
 #[cfg(test)]
 fn test_video(try_hardware: bool) {
-    // debug disabled as libavcodec logging escapes test framework
-    let debug = false;
-    let vulk = setup_vulkan(None, true, debug, try_hardware, try_hardware).unwrap();
-
-    println!("Setup complete");
-
     /* A crude error metric */
     fn color_error(x: (f32, f32, f32), y: (f32, f32, f32)) -> f32 {
         (x.0 - y.0).abs() + (x.1 - y.1).abs() + (x.2 - y.2).abs()
     }
 
-    /* Test relatively small image sizes, since many formats will be tested */
-    let sizes: [(usize, usize); 2] = [(63, 65), (1, 1)];
+    // debug disabled as libavcodec logging escapes test framework
+    let debug = false;
 
-    for video_format in [VideoFormat::H264, VideoFormat::VP9, VideoFormat::AV1] {
-        let mut format_modifiers = Vec::<(u32, u64, bool)>::new();
-        'scan: for f in DRM_FORMATS {
-            let Some(vkf) = drm_to_vulkan(*f) else {
-                continue;
-            };
-            let Some(data) = vulk.formats.get(&vkf) else {
-                continue;
-            };
-            for s in sizes {
-                if !supports_video_format(&vulk, video_format, *f, s.0 as u32, s.1 as u32) {
-                    continue 'scan;
-                }
-            }
-            let mut first = true;
-            for m in &data.modifiers {
-                if m.modifier != 0 && (video_format != VideoFormat::H264 || try_hardware) {
-                    /* no point in testing all modifiers for all video formats: the intermediate
-                     * copy step should make them orthogonal */
-                    /* if trying hardware enc/dec, skip the non-linear modifiers just to save time */
+    for dev_id in list_vulkan_device_ids() {
+        let vulk = setup_vulkan(Some(dev_id), true, debug, try_hardware, try_hardware).unwrap();
+
+        println!("Setup complete for device id {}", dev_id);
+
+        /* Test relatively small image sizes, since many formats will be tested */
+        let sizes: [(usize, usize); 2] = [(63, 65), (1, 1)];
+
+        for video_format in [VideoFormat::H264, VideoFormat::VP9, VideoFormat::AV1] {
+            let mut format_modifiers = Vec::<(u32, u64, bool)>::new();
+            'scan: for f in DRM_FORMATS {
+                let Some(vkf) = drm_to_vulkan(*f) else {
                     continue;
-                }
-                format_modifiers.push((*f, m.modifier, first));
-                first = false;
-            }
-        }
-
-        let pool = vulkan_get_cmd_pool(&vulk).unwrap();
-
-        for (j, (format, modifier, first)) in format_modifiers.iter().enumerate() {
-            let (format, modifier) = (*format, *modifier);
-            let vkf = drm_to_vulkan(format).unwrap();
-            println!(
-                "\nTesting {:?}, format {}/{} 0x{:x} => {:?}, modifier 0x{:x}",
-                video_format,
-                j + 1,
-                format_modifiers.len(),
-                format,
-                vkf,
-                modifier
-            );
-
-            let start_time = std::time::Instant::now();
-
-            let mut color_errs = Vec::new();
-            let mut elapsed_times = Vec::new();
-            for (w, h) in sizes {
-                let mod_options = &[modifier];
-                let (dmabuf1, planes) =
-                    vulkan_create_dmabuf(&vulk, w as u32, h as u32, format, mod_options, true)
-                        .unwrap();
-                drop(planes);
-
-                let (dmabuf2, planes) =
-                    vulkan_create_dmabuf(&vulk, w as u32, h as u32, format, mod_options, true)
-                        .unwrap();
-                drop(planes);
-
-                let enc_state = Arc::new(setup_video_encode(&dmabuf1, video_format, None).unwrap());
-                let dec_state = Arc::new(setup_video_decode(&dmabuf2, video_format).unwrap());
-
-                println!("Enc is sw: {}, Dec is sw: {}", enc_state.sw, dec_state.sw);
-
-                let copy1 =
-                    Arc::new(vulkan_get_buffer(&vulk, dmabuf1.nominal_size(None), false).unwrap());
-                let copy2 =
-                    Arc::new(vulkan_get_buffer(&vulk, dmabuf2.nominal_size(None), true).unwrap());
-
-                let colors_long = &[
-                    (0.0, 0.0, 0.0),
-                    (0.5, 0.5, 0.5),
-                    (1.0, 0.5, 0.2),
-                    (0.3, 0.0, 0.7),
-                    (0.0, 1.0, 0.0),
-                    (1.0, 1.0, 1.0),
-                ];
-                let colors_short = &[(1.0, 0.5, 0.2), (0.3, 0.0, 0.7)];
-                let colors: &[(f32, f32, f32)] = if *first { colors_long } else { colors_short };
-                let mut net_err = 0.0;
-                for color in colors {
-                    let data = fill_with_color(w, h, format, *color);
-                    let check = get_average_color(w, h, format, &data);
-
-                    copy_onto_dmabuf(&dmabuf1, &copy1, &data).unwrap();
-
-                    let packet = start_dmavid_encode(&enc_state, &pool).unwrap();
-
-                    let vid_op = start_dmavid_apply(&dec_state, &pool, &packet).unwrap();
-                    vid_op.wait_until_done().unwrap();
-
-                    let mirror = copy_from_dmabuf(&dmabuf2, &copy2).unwrap();
-                    let output = get_average_color(w, h, format, &mirror);
-
-                    let check_err = color_error(*color, check);
-                    let rtrip_err = color_error(*color, output);
-
-                    /* Verify that the video encoding gets the color relatively close */
-                    assert!(check_err <= 0.1);
-                    if !try_hardware {
-                        // As of writing, H264+radeon hardware video decoding fails on <=32x32 images
-                        let thresh = if video_format == VideoFormat::AV1 {
-                            0.2
-                        } else {
-                            0.1
-                        };
-                        assert!(
-                            rtrip_err <= thresh,
-                            "size: {:?} color: {:?} output: {:?}",
-                            (w, h),
-                            *color,
-                            output
-                        );
+                };
+                let Some(data) = vulk.formats.get(&vkf) else {
+                    continue;
+                };
+                for s in sizes {
+                    if !supports_video_format(&vulk, video_format, *f, s.0 as u32, s.1 as u32) {
+                        continue 'scan;
                     }
-                    net_err += rtrip_err;
                 }
-
-                let end_time = std::time::Instant::now();
-                let duration = end_time.duration_since(start_time);
-                elapsed_times.push(duration.as_secs_f32());
-                color_errs.push(net_err / (colors.len() as f32));
+                let mut first = true;
+                for m in &data.modifiers {
+                    if m.modifier != 0 && (video_format != VideoFormat::H264 || try_hardware) {
+                        /* no point in testing all modifiers for all video formats: the intermediate
+                         * copy step should make them orthogonal */
+                        /* if trying hardware enc/dec, skip the non-linear modifiers just to save time */
+                        continue;
+                    }
+                    format_modifiers.push((*f, m.modifier, first));
+                    first = false;
+                }
             }
-            println!(
-                "Tested sizes: {:?}; average errors: {:?}; times: {:?}",
-                sizes, color_errs, elapsed_times,
-            );
+
+            let pool = vulkan_get_cmd_pool(&vulk).unwrap();
+
+            for (j, (format, modifier, first)) in format_modifiers.iter().enumerate() {
+                let (format, modifier) = (*format, *modifier);
+                let vkf = drm_to_vulkan(format).unwrap();
+                println!(
+                    "\nTesting {:?}, format {}/{} 0x{:x} => {:?}, modifier 0x{:x}",
+                    video_format,
+                    j + 1,
+                    format_modifiers.len(),
+                    format,
+                    vkf,
+                    modifier
+                );
+
+                let start_time = std::time::Instant::now();
+
+                let mut color_errs = Vec::new();
+                let mut elapsed_times = Vec::new();
+                for (w, h) in sizes {
+                    let mod_options = &[modifier];
+                    let (dmabuf1, planes) =
+                        vulkan_create_dmabuf(&vulk, w as u32, h as u32, format, mod_options, true)
+                            .unwrap();
+                    drop(planes);
+
+                    let (dmabuf2, planes) =
+                        vulkan_create_dmabuf(&vulk, w as u32, h as u32, format, mod_options, true)
+                            .unwrap();
+                    drop(planes);
+
+                    let enc_state =
+                        Arc::new(setup_video_encode(&dmabuf1, video_format, None).unwrap());
+                    let dec_state = Arc::new(setup_video_decode(&dmabuf2, video_format).unwrap());
+
+                    println!("Enc is sw: {}, Dec is sw: {}", enc_state.sw, dec_state.sw);
+
+                    let copy1 = Arc::new(
+                        vulkan_get_buffer(&vulk, dmabuf1.nominal_size(None), false).unwrap(),
+                    );
+                    let copy2 = Arc::new(
+                        vulkan_get_buffer(&vulk, dmabuf2.nominal_size(None), true).unwrap(),
+                    );
+
+                    let colors_long = &[
+                        (0.0, 0.0, 0.0),
+                        (0.5, 0.5, 0.5),
+                        (1.0, 0.5, 0.2),
+                        (0.3, 0.0, 0.7),
+                        (0.0, 1.0, 0.0),
+                        (1.0, 1.0, 1.0),
+                    ];
+                    let colors_short = &[(1.0, 0.5, 0.2), (0.3, 0.0, 0.7)];
+                    let colors: &[(f32, f32, f32)] =
+                        if *first { colors_long } else { colors_short };
+                    let mut net_err = 0.0;
+                    for color in colors {
+                        let data = fill_with_color(w, h, format, *color);
+                        let check = get_average_color(w, h, format, &data);
+
+                        copy_onto_dmabuf(&dmabuf1, &copy1, &data).unwrap();
+
+                        let packet = start_dmavid_encode(&enc_state, &pool).unwrap();
+
+                        let vid_op = start_dmavid_apply(&dec_state, &pool, &packet).unwrap();
+                        vid_op.wait_until_done().unwrap();
+
+                        let mirror = copy_from_dmabuf(&dmabuf2, &copy2).unwrap();
+                        let output = get_average_color(w, h, format, &mirror);
+
+                        let check_err = color_error(*color, check);
+                        let rtrip_err = color_error(*color, output);
+
+                        /* Verify that the video encoding gets the color relatively close */
+                        assert!(check_err <= 0.1);
+                        if !try_hardware {
+                            // As of writing, H264+radeon hardware video decoding fails on <=32x32 images
+                            let thresh = if video_format == VideoFormat::AV1 {
+                                0.2
+                            } else {
+                                0.1
+                            };
+                            assert!(
+                                rtrip_err <= thresh,
+                                "size: {:?} color: {:?} output: {:?}",
+                                (w, h),
+                                *color,
+                                output
+                            );
+                        }
+                        net_err += rtrip_err;
+                    }
+
+                    let end_time = std::time::Instant::now();
+                    let duration = end_time.duration_since(start_time);
+                    elapsed_times.push(duration.as_secs_f32());
+                    color_errs.push(net_err / (colors.len() as f32));
+                }
+                println!(
+                    "Tested sizes: {:?}; average errors: {:?}; times: {:?}",
+                    sizes, color_errs, elapsed_times,
+                );
+            }
         }
     }
 }

@@ -518,6 +518,32 @@ fn drm_syncobj_destroy(drm_fd: &OwnedFd, handle: u32) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
+pub fn list_vulkan_device_ids() -> Vec<u64> {
+    use nix::sys::stat;
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut dev_ids = Vec::new();
+    let Ok(dir_iter) = std::fs::read_dir("/dev/dri") else {
+        /* On failure, assume Vulkan is not available */
+        return dev_ids;
+    };
+
+    for r in dir_iter {
+        let std::io::Result::Ok(entry) = r else {
+            continue;
+        };
+        if !entry.file_name().as_bytes().starts_with(b"renderD") {
+            continue;
+        }
+        let Ok(result) = stat::stat(&entry.path()) else {
+            continue;
+        };
+        dev_ids.push(result.st_rdev);
+    }
+    dev_ids
+}
+
 fn get_max_external_image_size(
     instance: &Instance,
     physdev: vk::PhysicalDevice,
@@ -2861,69 +2887,74 @@ pub const DRM_FORMATS: &[u32] = &[
 
 #[test]
 fn test_dmabuf() {
-    let vulk = setup_vulkan(None, false, true, false, false).unwrap();
+    for dev_id in list_vulkan_device_ids() {
+        let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
 
-    println!("Setup complete");
+        println!("Setup complete for device id {}", dev_id);
 
-    let mut format_modifiers = Vec::<(u32, u64)>::new();
-    for f in DRM_FORMATS {
-        let Some(vkf) = drm_to_vulkan(*f) else {
-            continue;
-        };
-        let Some(data) = vulk.formats.get(&vkf) else {
-            continue;
-        };
-        for m in &data.modifiers {
-            format_modifiers.push((*f, m.modifier));
+        let mut format_modifiers = Vec::<(u32, u64)>::new();
+        for f in DRM_FORMATS {
+            let Some(vkf) = drm_to_vulkan(*f) else {
+                continue;
+            };
+            let Some(data) = vulk.formats.get(&vkf) else {
+                continue;
+            };
+            for m in &data.modifiers {
+                format_modifiers.push((*f, m.modifier));
+            }
         }
-    }
 
-    println!("formats: {:#?}", vulk.formats);
+        println!("formats: {:#?}", vulk.formats);
 
-    for (j, (format, modifier)) in format_modifiers.iter().enumerate() {
-        let (format, modifier) = (*format, *modifier);
-        let vkf = drm_to_vulkan(format).unwrap();
-        println!(
-            "\nTesting format 0x{:x} => {:?}, modifier 0x{:x}",
-            format, vkf, modifier
-        );
-        let (width, height) = (110, 44);
-        let bpp = get_vulkan_info(drm_to_vulkan(format).unwrap()).bpp;
+        for (j, (format, modifier)) in format_modifiers.iter().enumerate() {
+            let (format, modifier) = (*format, *modifier);
+            let vkf = drm_to_vulkan(format).unwrap();
+            println!(
+                "\nTesting format 0x{:x} => {:?}, modifier 0x{:x}",
+                format, vkf, modifier
+            );
+            let (width, height) = (110, 44);
+            let bpp = get_vulkan_info(drm_to_vulkan(format).unwrap()).bpp;
 
-        let start_time = std::time::Instant::now();
+            let start_time = std::time::Instant::now();
 
-        let mod_options = &[modifier];
-        let (dmabuf1, planes) =
-            vulkan_create_dmabuf(&vulk, width, height, format, mod_options, false).unwrap();
+            let mod_options = &[modifier];
+            let (dmabuf1, planes) =
+                vulkan_create_dmabuf(&vulk, width, height, format, mod_options, false).unwrap();
 
-        println!("DMABUF for 0x{:x} created with planes {:?}", format, planes);
+            println!("DMABUF for 0x{:x} created with planes {:?}", format, planes);
 
-        let dmabuf2 = vulkan_import_dmabuf(&vulk, planes, width, height, format, false).unwrap();
+            let dmabuf2 =
+                vulkan_import_dmabuf(&vulk, planes, width, height, format, false).unwrap();
 
-        println!("DMABUF imported");
+            println!("DMABUF imported");
 
-        let mut pattern: Vec<u8> = vec![0; (width * height) as usize * bpp];
-        for x in pattern.iter_mut().enumerate() {
-            *x.1 = (x.0 * (j + 1)) as u8;
-        }
-        let copy1 = Arc::new(vulkan_get_buffer(&vulk, dmabuf1.nominal_size(None), true).unwrap());
-        let copy2 = Arc::new(vulkan_get_buffer(&vulk, dmabuf2.nominal_size(None), true).unwrap());
+            let mut pattern: Vec<u8> = vec![0; (width * height) as usize * bpp];
+            for x in pattern.iter_mut().enumerate() {
+                *x.1 = (x.0 * (j + 1)) as u8;
+            }
+            let copy1 =
+                Arc::new(vulkan_get_buffer(&vulk, dmabuf1.nominal_size(None), true).unwrap());
+            let copy2 =
+                Arc::new(vulkan_get_buffer(&vulk, dmabuf2.nominal_size(None), true).unwrap());
 
-        copy_onto_dmabuf(&dmabuf1, &copy1, &pattern[..]).unwrap();
-        let output = copy_from_dmabuf(&dmabuf2, &copy2).unwrap();
+            copy_onto_dmabuf(&dmabuf1, &copy1, &pattern[..]).unwrap();
+            let output = copy_from_dmabuf(&dmabuf2, &copy2).unwrap();
 
-        let end_time = std::time::Instant::now();
-        let duration = end_time.duration_since(start_time);
+            let end_time = std::time::Instant::now();
+            let duration = end_time.duration_since(start_time);
 
-        println!(
-            "pattern max {} output max {}, {} msec",
-            pattern.iter().max().unwrap(),
-            output.iter().max().unwrap(),
-            duration.as_secs_f32() * 1e3,
-        );
-        if vkf != vk::Format::R16G16B16A16_SFLOAT {
-            // TODO: Nans need not roundtrip exactly, need a check for this
-            assert!(pattern == output);
+            println!(
+                "pattern max {} output max {}, {} msec",
+                pattern.iter().max().unwrap(),
+                output.iter().max().unwrap(),
+                duration.as_secs_f32() * 1e3,
+            );
+            if vkf != vk::Format::R16G16B16A16_SFLOAT {
+                // TODO: Nans need not roundtrip exactly, need a check for this
+                assert!(pattern == output);
+            }
         }
     }
 }
