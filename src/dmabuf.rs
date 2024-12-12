@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #![cfg(feature = "dmabuf")]
 use crate::tag;
+use crate::util::*;
 #[cfg(feature = "video")]
 pub use crate::video::*;
 use crate::wayland_gen::*;
@@ -239,6 +240,7 @@ impl Drop for VulkanCopyHandle {
     }
 }
 
+/** Check whether a given extension is available in the list with the given version. */
 fn exts_has_prop(exts: &[vk::ExtensionProperties], name: &CStr, version: u32) -> bool {
     exts.iter()
         .any(|x| x.extension_name_as_c_str().unwrap() == name && x.spec_version >= version)
@@ -779,13 +781,107 @@ pub fn setup_vulkan(
 
         let mut best_device: Option<DeviceInfo> = None;
         for p in devices {
-            // TODO: need to check extensions of device itself?
-
-            // TODO: are these guaranteed to be provided in sorted order?
-            // also: even if not, sorting them may not be worth it
             let exts = instance
                 .enumerate_device_extension_properties(p)
                 .map_err(|x| tag!("Failed to enumerate device extensions: {:?}", x))?;
+
+            let mut drm_prop = vk::PhysicalDeviceDrmPropertiesEXT::default();
+            let mut prop = vk::PhysicalDeviceProperties2::default();
+            let has_drm_name = exts_has_prop(
+                &exts,
+                vk::EXT_PHYSICAL_DEVICE_DRM_NAME,
+                vk::EXT_PHYSICAL_DEVICE_DRM_SPEC_VERSION,
+            );
+            if has_drm_name {
+                prop = prop.push_next(&mut drm_prop);
+            }
+            instance.get_physical_device_properties2(p, &mut prop);
+            let dev_type = prop.properties.device_type;
+
+            debug!(
+                "Physical device: {}",
+                prop.properties
+                    .device_name_as_c_str()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+            );
+            debug!(
+                "API {}.{}.{}/{} driver {:#x} vendor {:#x} device {:#x} type {:?}",
+                vk::api_version_major(prop.properties.api_version),
+                vk::api_version_minor(prop.properties.api_version),
+                vk::api_version_patch(prop.properties.api_version),
+                vk::api_version_variant(prop.properties.api_version),
+                prop.properties.driver_version,
+                prop.properties.vendor_id,
+                prop.properties.device_id,
+                prop.properties.device_type
+            );
+            if debug {
+                if has_drm_name {
+                    let primary = if drm_prop.has_primary != 0 {
+                        format!("{}.{}", drm_prop.primary_major, drm_prop.primary_minor)
+                    } else {
+                        String::from("none")
+                    };
+                    let render = if drm_prop.has_render != 0 {
+                        format!("{}.{}", drm_prop.primary_major, drm_prop.primary_minor)
+                    } else {
+                        String::from("none")
+                    };
+                    debug!("DRM: primary: {} render: {}", primary, render);
+                }
+
+                fn list_missing(
+                    specs: &[(&CStr, u32)],
+                    exts: &[vk::ExtensionProperties],
+                ) -> Vec<String> {
+                    specs
+                        .iter()
+                        .filter_map(|spec| {
+                            if !exts_has_prop(exts, spec.0, spec.1) {
+                                Some(format!("{}:{}", spec.0.to_str().unwrap(), spec.1))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                }
+                debug!(
+                    "Baseline extensions: missing {:?}",
+                    list_missing(&ext_list, &exts)
+                );
+                debug!(
+                    "Video base extensions: missing {:?}",
+                    list_missing(&ext_list_video_base, &exts)
+                );
+                debug!(
+                    "Video enc extensions: missing {:?}; has {}, {}",
+                    list_missing(&ext_list_video_enc_base, &exts),
+                    ext_video_enc_h264.0.to_str().unwrap(),
+                    fmt_bool(exts_has_prop(
+                        &exts,
+                        ext_video_enc_h264.0,
+                        ext_video_enc_h264.1
+                    ))
+                );
+                debug!(
+                    "Video dec extensions: missing {:?}; has {}, {}; has {}, {}",
+                    list_missing(&ext_list_video_dec_base, &exts),
+                    ext_video_dec_h264.0.to_str().unwrap(),
+                    fmt_bool(exts_has_prop(
+                        &exts,
+                        ext_video_dec_h264.0,
+                        ext_video_dec_h264.1
+                    )),
+                    ext_video_dec_av1.0.to_str().unwrap(),
+                    fmt_bool(exts_has_prop(
+                        &exts,
+                        ext_video_dec_av1.0,
+                        ext_video_dec_av1.1
+                    ))
+                );
+            }
 
             let all_present = ext_list
                 .iter()
@@ -850,19 +946,6 @@ pub fn setup_vulkan(
                 continue;
             }
 
-            let mut drm_prop = vk::PhysicalDeviceDrmPropertiesEXT {
-                ..Default::default()
-            };
-
-            // or KHR version?
-            let mut prop = vk::PhysicalDeviceProperties2 {
-                ..Default::default()
-            }
-            .push_next(&mut drm_prop);
-
-            instance.get_physical_device_properties2(p, &mut prop);
-            let dev_type = prop.properties.device_type;
-
             let render_id = if drm_prop.has_render != 0 {
                 Some(((drm_prop.render_major as u64) << 8) | (drm_prop.render_minor as u64))
             } else {
@@ -906,6 +989,10 @@ pub fn setup_vulkan(
         let Some(dev_info) = best_device else {
             return Err(tag!("Failed to find matching physical device"));
         };
+        debug!(
+            "Chose physical device with device id: {}",
+            dev_info.device_id
+        );
 
         let physdev = dev_info.physdev;
         let using_hw_video = dev_info.hw_enc_h264 | dev_info.hw_dec_h264 | dev_info.hw_dec_av1;
