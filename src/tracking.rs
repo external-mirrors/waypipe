@@ -839,6 +839,8 @@ fn clock_sub(clock_a: u32, clock_b: u32) -> Result<(i64, u32), String> {
         tv_sec: mid_sec,
         tv_nsec: mid_nsec,
     };
+    /* tv_sec is i32 on pre-Y2K38 systems */
+    #[allow(clippy::unnecessary_cast)]
     let mut tv_sec = stamp_avg
         .tv_sec
         .checked_sub(stamp_2.tv_sec)

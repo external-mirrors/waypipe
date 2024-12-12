@@ -243,7 +243,7 @@ impl ReadBuffer {
 
         let ptr = unsafe {
             // SAFETY: old.data + self.last_msg_start is inside allocation of length old.size
-            old.data.add(self.last_msg_start) as *mut u8
+            old.data.add(self.last_msg_start)
         };
 
         let mut tmp = None;
@@ -330,7 +330,7 @@ impl ReadBuffer {
         let (eof, nread) = unsafe {
             // SAFETY: at this point, have self.end < chunk.size, so iov_base is inside
             // chunk's allocation
-            let mut iovs = [libc::iovec {
+            let iovs = [libc::iovec {
                 iov_base: chunk.data.add(self.end) as *mut c_void,
                 iov_len: chunk.size - MAX_NORMAL_MSG_SIZE - self.end,
             }];
@@ -339,7 +339,7 @@ impl ReadBuffer {
             // interval ends at or before chunk.data + chunk.size and is part of chunk's allocation
             // Exclusive access, because data past current.data + self.end has not
             // been shared via ReadBufferView
-            Self::read_inner(&mut iovs, src_fd)?
+            Self::read_inner(&iovs, src_fd)?
         };
         self.end += nread;
         self.extract_messages()?;

@@ -404,10 +404,10 @@ unsafe fn avcodec_receive_frame(
 fn pack_glsl_mat3x4(mtx: &[[f32; 4]; 3]) -> [u8; 48] {
     let mut push_u8 = [0u8; 48];
     // 3 columns, 4 rows, rows packed
-    for i in 0..4 {
-        for j in 0..3 {
+    for (j, col) in mtx.iter().enumerate().take(3) {
+        for (i, px) in col.iter().enumerate().take(4) {
             let k = 4 * j + i;
-            push_u8[k * 4..(k + 1) * 4].copy_from_slice(&mtx[j][i].to_le_bytes());
+            push_u8[k * 4..(k + 1) * 4].copy_from_slice(&px.to_le_bytes());
         }
     }
     push_u8

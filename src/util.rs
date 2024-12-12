@@ -93,8 +93,7 @@ pub fn split_interval(lo: u32, hi: u32, nparts: u32, index: u32) -> u32 {
     lo + index * ((hi - lo) / nparts) + (index * ((hi - lo) % nparts)) / nparts
 }
 pub fn ceildiv(v: u32, u: u32) -> u32 {
-    // todo: bounds checking
-    (v + u - 1) / u
+    v.div_ceil(u)
 }
 /* Split u64 into high (32:63) and low (0:31) parts */
 pub fn split_u64(x: u64) -> (u32, u32) {
