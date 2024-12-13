@@ -680,15 +680,12 @@ pub unsafe fn setup_video(
         fmt_bool(!codecs_h264.sw_decoder.is_null()),
     );
     debug!(
-        "VP9 support:  hwenc {} swenc {} hwdec {} swdec {}",
-        fmt_bool(!codecs_vp9.encoder.is_null() && false),
+        "VP9 support:  hwenc f swenc {} hwdec f swdec {}",
         fmt_bool(!codecs_vp9.sw_encoder.is_null()),
-        fmt_bool(!codecs_vp9.decoder.is_null() && false),
         fmt_bool(!codecs_vp9.sw_decoder.is_null()),
     );
     debug!(
-        "AV1 support:  hwenc {} swenc {} hwdec {} swdec {}",
-        fmt_bool(!codecs_av1.encoder.is_null() && false),
+        "AV1 support:  hwenc f swenc {} hwdec {} swdec {}",
         fmt_bool(!codecs_av1.sw_encoder.is_null()),
         fmt_bool(!codecs_av1.decoder.is_null() && pdev_info.hw_dec_av1),
         fmt_bool(!codecs_av1.sw_decoder.is_null()),

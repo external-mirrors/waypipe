@@ -819,15 +819,15 @@ pub fn setup_vulkan(
                 }
                 debug!(
                     "Baseline extensions: missing {:?}",
-                    list_missing(&ext_list, &exts)
+                    list_missing(ext_list, &exts)
                 );
                 debug!(
                     "Video base extensions: missing {:?}",
-                    list_missing(&ext_list_video_base, &exts)
+                    list_missing(ext_list_video_base, &exts)
                 );
                 debug!(
                     "Video enc extensions: missing {:?}; has {}, {}",
-                    list_missing(&ext_list_video_enc_base, &exts),
+                    list_missing(ext_list_video_enc_base, &exts),
                     ext_video_enc_h264.0.to_str().unwrap(),
                     fmt_bool(exts_has_prop(
                         &exts,
@@ -837,7 +837,7 @@ pub fn setup_vulkan(
                 );
                 debug!(
                     "Video dec extensions: missing {:?}; has {}, {}; has {}, {}",
-                    list_missing(&ext_list_video_dec_base, &exts),
+                    list_missing(ext_list_video_dec_base, &exts),
                     ext_video_dec_h264.0.to_str().unwrap(),
                     fmt_bool(exts_has_prop(
                         &exts,
