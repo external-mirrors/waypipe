@@ -475,11 +475,19 @@ pub fn run_benchmark(opts: &Options, fast_mode: bool) -> Result<(), String> {
 
     let mut cvs = Vec::<Compression>::new();
     cvs.push(Compression::None);
-    for i in -10..=12 {
-        cvs.push(Compression::Lz4(i));
+    if cfg!(feature = "lz4") {
+        for i in -10..=12 {
+            cvs.push(Compression::Lz4(i));
+        }
+    } else {
+        println!("Waypipe was not built with lz4 compression/decompression support, skipping measurements with lz4");
     }
-    for i in -10..=22 {
-        cvs.push(Compression::Zstd(i));
+    if cfg!(feature = "zstd") {
+        for i in -10..=22 {
+            cvs.push(Compression::Zstd(i));
+        }
+    } else {
+        println!("Waypipe was not built with zstd compression/decompression support, skipping measurements with zstd");
     }
 
     let mut text_results = Vec::new();

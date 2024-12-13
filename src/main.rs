@@ -1883,13 +1883,13 @@ fn main() -> Result<(), String> {
 
     if let Compression::Lz4(_) = compression {
         if cfg!(not(feature = "lz4")) {
-            error!("Waypipe was not build with lz4 compression/decompression support, downgrading compression mode to 'none'");
+            error!("Waypipe was not built with lz4 compression/decompression support, downgrading compression mode to 'none'");
             compression = Compression::None;
         }
     }
     if let Compression::Zstd(_) = compression {
         if cfg!(not(feature = "zstd")) {
-            error!("Waypipe was not build with zstd compression/decompression support, downgrading compression mode to 'none'");
+            error!("Waypipe was not built with zstd compression/decompression support, downgrading compression mode to 'none'");
             compression = Compression::None;
         }
     }
