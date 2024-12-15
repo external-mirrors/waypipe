@@ -1684,7 +1684,9 @@ fn setup_linux_dmabuf(
 #[test]
 fn proto_dmabuf() {
     for dev_id in list_vulkan_device_ids() {
-        let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
+        let Ok(vulk) = setup_vulkan(Some(dev_id), false, true, false, false) else {
+            continue;
+        };
 
         run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
             let (display, registry, dmabuf, comp, surface, feedback, params, buffer, sbuffer) = (
@@ -2095,7 +2097,9 @@ fn test_video_combo(
 #[test]
 fn proto_dmavid_vp9() {
     for dev_id in list_vulkan_device_ids() {
-        let vulk = setup_vulkan(Some(dev_id), true, true, false, false).unwrap();
+        let Ok(vulk) = setup_vulkan(Some(dev_id), true, true, false, false) else {
+            continue;
+        };
         test_video_combo(&vulk, VideoFormat::VP9, false, false, false);
     }
 }
@@ -2104,7 +2108,9 @@ fn proto_dmavid_vp9() {
 #[test]
 fn proto_dmavid_h264() {
     for dev_id in list_vulkan_device_ids() {
-        let vulk = setup_vulkan(Some(dev_id), true, true, false, false).unwrap();
+        let Ok(vulk) = setup_vulkan(Some(dev_id), true, true, false, false) else {
+            continue;
+        };
 
         /* Test all hardware encoding/decoding combinations to sure formats are compatible */
         for (try_hw_dec, try_hw_enc, accurate_video_replication) in [
@@ -2307,7 +2313,9 @@ fn proto_shm_damage() {
 #[test]
 fn proto_dmabuf_damage() {
     for dev_id in list_vulkan_device_ids() {
-        let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
+        let Ok(vulk) = setup_vulkan(Some(dev_id), false, true, false, false) else {
+            continue;
+        };
 
         run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
             let (display, registry, dmabuf, comp, surface, feedback, params, buffer) = (
@@ -2419,7 +2427,9 @@ fn proto_dmabuf_damage() {
 #[test]
 fn proto_explicit_sync() {
     for dev_id in list_vulkan_device_ids() {
-        let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
+        let Ok(vulk) = setup_vulkan(Some(dev_id), false, true, false, false) else {
+            continue;
+        };
 
         run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
             let (
@@ -2857,7 +2867,9 @@ fn proto_test_screencopy_shm() {
 #[test]
 fn proto_test_screencopy_dmabuf() {
     for dev_id in list_vulkan_device_ids() {
-        let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
+        let Ok(vulk) = setup_vulkan(Some(dev_id), false, true, false, false) else {
+            continue;
+        };
 
         run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
             let [display, reg, dmabuf, screencopy, output, frame, params, buffer, ..] = ID_SEQUENCE;

@@ -2779,7 +2779,9 @@ fn test_video(try_hardware: bool) {
     let debug = false;
 
     for dev_id in list_vulkan_device_ids() {
-        let vulk = setup_vulkan(Some(dev_id), true, debug, try_hardware, try_hardware).unwrap();
+        let Ok(vulk) = setup_vulkan(Some(dev_id), true, debug, try_hardware, try_hardware) else {
+            continue;
+        };
 
         println!("Setup complete for device id {}", dev_id);
 

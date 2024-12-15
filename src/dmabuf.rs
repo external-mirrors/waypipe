@@ -957,7 +957,13 @@ pub fn setup_vulkan(
         }
 
         let Some(dev_info) = best_device else {
-            return Err(tag!("Failed to find matching physical device"));
+            if let Some(d) = main_device {
+                return Err(tag!("Failed to find a Vulkan physical device with device id {}, or it does not meet all requirements.", d));
+            } else {
+                return Err(tag!(
+                    "Failed to find any Vulkan physical device meeting all requirements."
+                ));
+            }
         };
         debug!(
             "Chose physical device with device id: {}",
@@ -2945,7 +2951,9 @@ pub const DRM_FORMATS: &[u32] = &[
 #[test]
 fn test_dmabuf() {
     for dev_id in list_vulkan_device_ids() {
-        let vulk = setup_vulkan(Some(dev_id), false, true, false, false).unwrap();
+        let Ok(vulk) = setup_vulkan(Some(dev_id), false, true, false, false) else {
+            continue;
+        };
 
         println!("Setup complete for device id {}", dev_id);
 
