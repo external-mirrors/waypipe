@@ -987,8 +987,8 @@ static void queue_fill_transfers(struct thread_pool *threads,
 						       nshards, i);
 		task.zone_end = 64 * split_interval(block_start, block_end,
 						     nshards, i + 1);
-		if (task.zone_start > region_end) {
-			task.zone_start = region_end;
+		if (task.zone_end > region_end) {
+			task.zone_end = region_end;
 		}
 
 		threads->stack[threads->stack_count++] = task;
