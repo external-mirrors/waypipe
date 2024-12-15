@@ -86,6 +86,10 @@ Optional linked dependencies, broken out by feature:
   - bindgen (build, ≥ 0.70.0)
   - glslc (build, to compile shaders for image format conversion)
 
+Note: in practice, bindgen requires certain C library headers from clang, but some
+distributions have not made them a dependency of bindgen. If the build fails
+because `limits.h` or `stddef.h` is missing, try installing `clang`.
+
 [i0]: https://mesonbuild.com/
 [i1]: https://doc.rust-lang.org/cargo/
 [i2]: https://git.sr.ht/~sircmpwn/scdoc
