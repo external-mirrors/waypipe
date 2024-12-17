@@ -19,6 +19,7 @@ use nix::sys::memfd;
 use nix::unistd;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt::{Display, Formatter};
 use std::os::fd::OwnedFd;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -872,6 +873,130 @@ fn time_add(mut a: (u64, u32), b: (i64, u32)) -> Option<(u64, u32)> {
     Some((a.0.checked_add_signed(b.0)?, nsec))
 }
 
+/** A helper structure to print a Wayland method's arguments, on demand */
+struct MethodArguments<'a> {
+    meth: &'a WaylandMethod,
+    msg: &'a [u8],
+}
+/** Display a Wayland method's arguments; error if parsing failed, return true if formatter error */
+fn fmt_method(arg: &MethodArguments, f: &mut Formatter<'_>) -> Result<bool, &'static str> {
+    assert!(arg.msg.len() >= 8);
+    let mut tail: &[u8] = &arg.msg[8..];
+
+    let mut first = true;
+    for op in arg.meth.sig {
+        if !first {
+            if write!(f, ", ").is_err() {
+                return Ok(true);
+            }
+        } else {
+            first = false;
+        }
+        match op {
+            WaylandArgument::Uint => {
+                let v = parse_u32(&mut tail)?;
+                if write!(f, "{}:u", v).is_err() {
+                    return Ok(true);
+                }
+            }
+            WaylandArgument::Int => {
+                let v = parse_i32(&mut tail)?;
+                if write!(f, "{}:i", v).is_err() {
+                    return Ok(true);
+                }
+            }
+            WaylandArgument::Fixed => {
+                let v = parse_i32(&mut tail)?;
+                if write!(f, "{:.8}:f", (v as f64) * 0.00390625).is_err() {
+                    return Ok(true);
+                }
+            }
+            WaylandArgument::Fd => {
+                // do nothing
+                if write!(f, "fd").is_err() {
+                    return Ok(true);
+                }
+            }
+            WaylandArgument::Object(t) => {
+                let id = parse_u32(&mut tail)?;
+                if write!(f, "{}:obj({})", id, INTERFACE_TABLE[*t as usize].name).is_err() {
+                    return Ok(true);
+                }
+            }
+            WaylandArgument::NewId(t) => {
+                let id = parse_u32(&mut tail)?;
+                if write!(f, "{}:new_id({})", id, INTERFACE_TABLE[*t as usize].name).is_err() {
+                    return Ok(true);
+                }
+            }
+            WaylandArgument::GenericObject => {
+                let id = parse_u32(&mut tail)?;
+                if write!(f, "{}:gobj", id).is_err() {
+                    return Ok(true);
+                }
+            }
+            WaylandArgument::GenericNewId => {
+                // order: (string, version, new_id)
+                let ostring = parse_string(&mut tail)?;
+                let version = parse_u32(&mut tail)?;
+                let id = parse_u32(&mut tail)?;
+                if (if let Some(string) = ostring {
+                    write!(
+                        f,
+                        "(\"{}\", {}:u, {}:new_id)",
+                        EscapeAsciiPrintable(string),
+                        version,
+                        id
+                    )
+                } else {
+                    write!(f, "(null_str, {}:u, {}:new_id)", version, id)
+                })
+                .is_err()
+                {
+                    return Ok(true);
+                }
+            }
+            WaylandArgument::String | WaylandArgument::OptionalString => {
+                let ostring = parse_string(&mut tail)?;
+                if (if let Some(string) = ostring {
+                    write!(f, "\"{}\"", EscapeAsciiPrintable(string))
+                } else {
+                    write!(f, "null_str")
+                })
+                .is_err()
+                {
+                    return Ok(true);
+                }
+            }
+            WaylandArgument::Array => {
+                let a = parse_array(&mut tail)?;
+                if write!(f, "{:?}", a).is_err() {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    if !tail.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(false)
+}
+
+impl Display for MethodArguments<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match fmt_method(self, f) {
+            Err(e) => write!(f, "...format error: {}", e),
+            Ok(eof) => {
+                if eof {
+                    Err(std::fmt::Error)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
 /** Result of a message processing attempt */
 #[derive(Debug, Eq, PartialEq)]
 pub enum ProcMsg {
@@ -949,10 +1074,15 @@ pub fn process_way_msg(
 
     let meth = opt_meth.unwrap();
     /* note: this may fail */
-    debug!(
-        "Processing method: {}@{}.{}",
-        &INTERFACE_TABLE[obj.obj_type as usize].name, object_id, meth.name
-    );
+    if log::log_enabled!(log::Level::Debug) {
+        debug!(
+            "Processing method: {}@{}.{}({})",
+            &INTERFACE_TABLE[obj.obj_type as usize].name,
+            object_id,
+            meth.name,
+            MethodArguments { meth, msg }
+        );
+    }
 
     assert!(opcode <= u8::MAX as usize);
     let mod_opcode = if is_req {

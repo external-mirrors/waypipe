@@ -1043,11 +1043,11 @@ fn proto_pipe_write() {
         }),
         build_msgs(|dst| {
             write_evt_wl_registry_global(dst, registry, 1, seat_name, 7);
-            write_evt_wl_registry_global(dst, registry, 2, ddev_name, 1);
+            write_evt_wl_registry_global(dst, registry, 2, ddev_name, 3);
         }),
         build_msgs(|dst| {
             write_req_wl_registry_bind(dst, registry, 1, seat_name, 7, seat);
-            write_req_wl_registry_bind(dst, registry, 2, ddev_name, 1, manager);
+            write_req_wl_registry_bind(dst, registry, 2, ddev_name, 3, manager);
             write_req_wl_data_device_manager_get_data_device(dst, manager, dev, seat);
             write_req_wl_data_device_manager_create_data_source(dst, manager, source);
             write_req_wl_data_source_offer(dst, source, mime);
@@ -1147,16 +1147,16 @@ fn proto_pipe_write() {
         }),
         build_msgs(|dst| {
             write_evt_wl_registry_global(dst, registry, 1, seat_name, 7);
-            write_evt_wl_registry_global(dst, registry, 2, ddev_name, 1);
+            write_evt_wl_registry_global(dst, registry, 2, ddev_name, 3);
         }),
         build_msgs(|dst| {
             write_req_wl_registry_bind(dst, registry, 1, seat_name, 7, seat);
-            write_req_wl_registry_bind(dst, registry, 2, ddev_name, 1, manager);
+            write_req_wl_registry_bind(dst, registry, 2, ddev_name, 3, manager);
             write_req_wl_data_device_manager_get_data_device(dst, manager, dev, seat);
         }),
         build_msgs(|dst| {
             write_evt_wl_data_device_data_offer(dst, dev, offer);
-            write_evt_wl_data_offer_offer(dst, dev, mime);
+            write_evt_wl_data_offer_offer(dst, offer, mime);
             write_evt_wl_data_device_selection(dst, dev, offer);
         }),
         build_msgs(|dst| {
@@ -1178,7 +1178,7 @@ fn proto_pipe_write() {
         }),
         build_msgs(|dst| {
             write_evt_zwp_primary_selection_device_v1_data_offer(dst, dev, offer);
-            write_evt_zwp_primary_selection_offer_v1_offer(dst, dev, mime);
+            write_evt_zwp_primary_selection_offer_v1_offer(dst, offer, mime);
             write_evt_zwp_primary_selection_device_v1_selection(dst, dev, offer);
         }),
         build_msgs(|dst| {
@@ -1200,7 +1200,7 @@ fn proto_pipe_write() {
         }),
         build_msgs(|dst| {
             write_evt_ext_data_control_device_v1_data_offer(dst, dev, offer);
-            write_evt_ext_data_control_offer_v1_offer(dst, dev, mime);
+            write_evt_ext_data_control_offer_v1_offer(dst, offer, mime);
             write_evt_ext_data_control_device_v1_selection(dst, dev, offer);
         }),
         build_msgs(|dst| {
@@ -1222,7 +1222,7 @@ fn proto_pipe_write() {
         }),
         build_msgs(|dst| {
             write_evt_gtk_primary_selection_device_data_offer(dst, dev, offer);
-            write_evt_gtk_primary_selection_offer_offer(dst, dev, mime);
+            write_evt_gtk_primary_selection_offer_offer(dst, offer, mime);
             write_evt_gtk_primary_selection_device_selection(dst, dev, offer);
         }),
         build_msgs(|dst| {
@@ -1244,7 +1244,7 @@ fn proto_pipe_write() {
         }),
         build_msgs(|dst| {
             write_evt_zwlr_data_control_device_v1_data_offer(dst, dev, offer);
-            write_evt_zwlr_data_control_offer_v1_offer(dst, dev, mime);
+            write_evt_zwlr_data_control_offer_v1_offer(dst, offer, mime);
             write_evt_zwlr_data_control_device_v1_selection(dst, dev, offer);
         }),
         build_msgs(|dst| {
@@ -1259,7 +1259,8 @@ fn proto_pipe_write() {
     let lengths = [100_usize, 0_usize, 131073_usize]
         .iter()
         .chain(std::iter::repeat(&256_usize));
-    for (test, length) in test_cases.iter().zip(lengths) {
+    for (test_no, (test, length)) in test_cases.iter().zip(lengths).enumerate() {
+        print!("Test {}.", test_no);
         run_protocol_test(&|mut ctx: ProtocolTestContext| {
             let (pipe_r, pipe_w) =
                 unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK).unwrap();

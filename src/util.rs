@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 use std::fmt;
-use std::fmt::Write;
+use std::fmt::{Display, Formatter, Write};
 use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -175,17 +175,21 @@ pub fn escape_wl_name(name: &[u8]) -> String {
     s
 }
 
-pub fn escape_non_ascii_printable(name: &[u8]) -> String {
-    let mut s = String::new();
-    for c in name {
-        match *c {
-            b' '..=b'~' => s.push(char::from_u32(*c as u32).unwrap()),
-            _ => {
-                write!(s, "\\x{:02x}", *c).unwrap();
-            }
+/** A type to escape all non-ascii-printable characters when Displayed, to leave strings
+ * somewhat legible but make it clear exactly what bytes they contain */
+pub struct EscapeAsciiPrintable<'a>(pub &'a [u8]);
+impl Display for EscapeAsciiPrintable<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for c in self.0 {
+            match *c {
+                b' '..=b'~' => write!(f, "{}", char::from_u32(*c as u32).unwrap()),
+                _ => {
+                    write!(f, "\\x{:02x}", *c)
+                }
+            }?
         }
+        Ok(())
     }
-    s
 }
 
 /** Format a bool as 'T' or 'F' */
