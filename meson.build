@@ -8,18 +8,19 @@ project(
 )
 
 # mention version
-version = '"@0@"'.format(meson.project_version())
+raw_version = '@0@'.format(meson.project_version())
 git = find_program('git', native: true, required: false)
 if git.found()
     dir_arg = '--git-dir=@0@/.git'.format(meson.project_source_root())
     commit = run_command([git, dir_arg, 'rev-parse', '--verify', '-q', 'HEAD'])
     if commit.returncode() == 0
-        version = '"@0@ (commit @1@)"'.format(
+        raw_version = '@0@ (commit @1@)'.format(
             meson.project_version(),
             commit.stdout().strip(),
         )
     endif
 endif
+version = '"@0@"'.format(raw_version)
 
 if get_option('build_rs')
     cargo = find_program('cargo', native: true)
@@ -29,6 +30,10 @@ if get_option('build_rs')
     # Because meson and cargo interact badly, option implementation and dependency resolution are deferred to cargo
     # However, to 'autodetect' what features are available, we duplicate some of the build logic
     features = []
+    has_lz4 = false
+    has_zstd = false
+    has_dmabuf = false
+    has_video = false
 
     # compute maximum of with_lz4/with_zstd/with_video features
     max_feature = get_option('with_lz4')
@@ -55,6 +60,7 @@ if get_option('build_rs')
         required: get_option('with_lz4'),
     )
     if bindgen.found() and liblz4.found()
+        has_lz4 = true
         features += ['lz4']
     endif
     libzstd = dependency(
@@ -63,11 +69,13 @@ if get_option('build_rs')
         required: get_option('with_zstd'),
     )
     if bindgen.found() and libzstd.found()
+        has_zstd = true
         features += ['zstd']
     endif
     libvulkan = dependency('vulkan', required: get_option('with_dmabuf'))
     if libvulkan.found()
         # Note: 'ash' is the vulkan wrapper used, and may require other libraries/programs to be present
+        has_dmabuf = true
         features += ['dmabuf']
     endif
     glslc = find_program(
@@ -78,6 +86,7 @@ if get_option('build_rs')
     libavutil = dependency('libavutil', required: get_option('with_video'))
     libavcodec = dependency('libavcodec', required: get_option('with_video'))
     if bindgen.found() and libavcodec.found() and libavutil.found() and glslc.found()
+        has_video = true
         features += ['video']
     endif
 
@@ -89,7 +98,13 @@ if get_option('build_rs')
         'waypipe-unstripped',
         build_always_stale: true,
         output: 'waypipe-unstripped',
-        env: {'WAYPIPE_GIT_VERSION': version},
+        env: {
+            'WAYPIPE_VERSION': raw_version,
+            'WAYPIPE_FEATURE_LZ4': has_lz4.to_string('true', 'false'),
+            'WAYPIPE_FEATURE_ZSTD': has_zstd.to_string('true', 'false'),
+            'WAYPIPE_FEATURE_DMABUF': has_dmabuf.to_string('true', 'false'),
+            'WAYPIPE_FEATURE_VIDEO': has_video.to_string('true', 'false'),
+        },
         command: [
             sh,
             '@SOURCE_ROOT@' / 'compile_wrapper.sh',

@@ -1591,7 +1591,7 @@ fn main() -> Result<(), String> {
             See `man 1 waypipe` for detailed help.",
         )
         .next_line_help(false)
-        .version(VERSION_STRING);
+        .version(option_env!("WAYPIPE_VERSION").unwrap_or(VERSION_STRING));
     let command = command
         .subcommand(
             Command::new("ssh")
