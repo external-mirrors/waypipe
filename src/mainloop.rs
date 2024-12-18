@@ -4774,11 +4774,6 @@ pub struct Options {
     pub title_prefix: String, // this is valid UTF-8
     pub no_gpu: bool,         /* filter out protocols using dmabufs */
     pub drm_node: Option<PathBuf>,
-
-    /* Test options */
-    /* If true, use software video encoding/decoding even if hardware encoding/decoding is available */
-    pub force_sw_encoding: bool,
-    pub force_sw_decoding: bool,
 }
 
 /** The main entrypoint for Wayland protocol proxying; should be given already opened and connected sockets

@@ -353,29 +353,54 @@ pub enum VideoFormat {
     VP9 = 1,
     AV1 = 2,
 }
-#[derive(Debug, Copy, Clone, PartialEq)]
+/** Whether to prefer software or hardware encoding, when available */
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum CodecPreference {
+    SW = 0,
+    HW = 1,
+}
+
+/** Configuration for video encoding/decoding */
+#[derive(Debug, Copy, Clone, PartialEq, Default)]
 pub struct VideoSetting {
     /* If not set, no video encoding done */
     pub format: Option<VideoFormat>,
     /* If not set, default */
     pub bits_per_frame: Option<f32>,
+    pub enc_pref: Option<CodecPreference>,
+    pub dec_pref: Option<CodecPreference>,
 }
+
 impl FromStr for VideoSetting {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         const FAILURE: &str =
-            "Video spec should be comma-separated with strings: 'none', 'h264', 'bpf=<real>'";
+            "Video spec should be comma-separated list containing any of: 'none', 'h264', 'vp9', 'av1', 'sw', 'hw', 'hwenc', 'swenc', 'hwdec', 'swdec', 'bpf=<real>'";
         let mut f = VideoSetting {
             format: None,
             bits_per_frame: None,
+            enc_pref: None,
+            dec_pref: None,
         };
 
         for chunk in s.split_terminator(',') {
             if chunk == "none" {
                 f.format = None;
-            } else if chunk == "hw" || chunk == "sw" {
-                /* ignore */
+            } else if chunk == "hw" {
+                f.enc_pref = Some(CodecPreference::HW);
+                f.dec_pref = Some(CodecPreference::HW);
+            } else if chunk == "sw" {
+                f.enc_pref = Some(CodecPreference::SW);
+                f.dec_pref = Some(CodecPreference::SW);
+            } else if chunk == "swenc" {
+                f.enc_pref = Some(CodecPreference::SW);
+            } else if chunk == "hwenc" {
+                f.enc_pref = Some(CodecPreference::HW);
+            } else if chunk == "swdec" {
+                f.dec_pref = Some(CodecPreference::SW);
+            } else if chunk == "hwdec" {
+                f.dec_pref = Some(CodecPreference::HW);
             } else if chunk == "h264" {
                 f.format = Some(VideoFormat::H264);
             } else if chunk == "vp9" {
@@ -403,11 +428,33 @@ impl fmt::Display for VideoSetting {
             write!(f, "none")?;
         }
 
-        if let Some(bpf) = self.bits_per_frame {
-            write!(f, ",bpf={}", bpf)
+        if self.enc_pref == Some(CodecPreference::SW) && self.dec_pref == Some(CodecPreference::SW)
+        {
+            write!(f, ",sw")?;
+        } else if self.enc_pref == Some(CodecPreference::HW)
+            && self.dec_pref == Some(CodecPreference::HW)
+        {
+            write!(f, ",hw")?;
         } else {
-            write!(f, "")
+            if let Some(p) = self.enc_pref {
+                match p {
+                    CodecPreference::SW => write!(f, ",swenc")?,
+                    CodecPreference::HW => write!(f, ",hwenc")?,
+                }
+            }
+            if let Some(p) = self.dec_pref {
+                match p {
+                    CodecPreference::SW => write!(f, ",swdec")?,
+                    CodecPreference::HW => write!(f, ",hwdec")?,
+                }
+            }
         }
+
+        if let Some(bpf) = self.bits_per_frame {
+            write!(f, ",bpf={}", bpf)?;
+        }
+
+        Ok(())
     }
 }
 #[test]
@@ -416,29 +463,42 @@ fn video_setting_roundtrip() {
         VideoSetting {
             format: None,
             bits_per_frame: None,
+            enc_pref: None,
+            dec_pref: None,
         },
         VideoSetting {
             format: None,
             bits_per_frame: Some(1e9),
+            enc_pref: Some(CodecPreference::SW),
+            dec_pref: None,
         },
         VideoSetting {
             format: Some(VideoFormat::H264),
             bits_per_frame: Some(100.0),
+            enc_pref: None,
+            dec_pref: Some(CodecPreference::HW),
         },
         VideoSetting {
             format: Some(VideoFormat::VP9),
             bits_per_frame: Some(4321.0),
+            enc_pref: Some(CodecPreference::SW),
+            dec_pref: Some(CodecPreference::HW),
         },
         VideoSetting {
             format: Some(VideoFormat::H264),
             bits_per_frame: None,
+            enc_pref: Some(CodecPreference::SW),
+            dec_pref: Some(CodecPreference::SW),
         },
         VideoSetting {
             format: Some(VideoFormat::AV1),
             bits_per_frame: None,
+            enc_pref: Some(CodecPreference::HW),
+            dec_pref: Some(CodecPreference::HW),
         },
     ];
     for v in examples {
+        println!("{}", VideoSetting::to_string(&v));
         assert_eq!(VideoSetting::from_str(&VideoSetting::to_string(&v)), Ok(v));
     }
 }

@@ -372,12 +372,6 @@ fn build_connection_command<'a>(
     if options.video.format.is_some() {
         args.push(vid_str);
     }
-    if options.force_sw_encoding {
-        args.push(OsStr::new("--test-swenc"));
-    }
-    if options.force_sw_decoding {
-        args.push(OsStr::new("--test-swdec"));
-    }
     if let Some(d) = &options.drm_node {
         assert!(!client);
         args.push(OsStr::new("--drm-node"));
@@ -1769,20 +1763,6 @@ fn main() -> Result<(), String> {
                 .action(ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("test-swenc")
-                .long("test-swenc")
-                .hide(true)
-                .help("Test option: force software video encoding")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("test-swdec")
-                .long("test-swdec")
-                .hide(true)
-                .help("Test option: force software video decoding")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
             Arg::new("trace")
                 .long("trace")
                 .action(ArgAction::SetTrue)
@@ -1846,8 +1826,6 @@ fn main() -> Result<(), String> {
     let drm_node = matches.get_one::<PathBuf>("drm-node");
     let loop_test = matches.get_one::<bool>("test-loop").unwrap();
     let fast_bench = *matches.get_one::<bool>("test-fast-bench").unwrap();
-    let swenc = matches.get_one::<bool>("test-swenc").unwrap();
-    let swdec = matches.get_one::<bool>("test-swdec").unwrap();
     let secctx = matches.get_one::<String>("secctx");
     let vsock = *matches.get_one::<bool>("vsock").unwrap();
 
@@ -1902,8 +1880,6 @@ fn main() -> Result<(), String> {
         threads: *threads,
         title_prefix: (*title_prefix).clone(),
         drm_node: drm_node.cloned(),
-        force_sw_encoding: *swenc,
-        force_sw_decoding: *swdec,
     };
 
     /* Needed to revert back to original cwdir after
@@ -2024,12 +2000,6 @@ fn main() -> Result<(), String> {
             let arg_video = OsString::from(format!("--video={}", video));
             if video.format.is_some() {
                 ssh_cmd.push(&arg_video);
-            }
-            if opts.force_sw_encoding {
-                ssh_cmd.push(OsStr::new("--test-swenc"));
-            }
-            if opts.force_sw_encoding {
-                ssh_cmd.push(OsStr::new("--test-swdec"));
             }
 
             if matches!(client_sock, SocketSpec::VSock(_)) {

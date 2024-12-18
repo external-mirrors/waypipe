@@ -715,16 +715,11 @@ fn run_protocol_test(test_fn: &dyn Fn(ProtocolTestContext) -> ()) {
     let options = Options {
         debug: true,
         compression: Compression::None,
-        video: VideoSetting {
-            format: None,
-            bits_per_frame: None,
-        },
+        video: VideoSetting::default(),
         threads: 1,
         title_prefix: String::new(),
         no_gpu: false,
         drm_node: None,
-        force_sw_encoding: false,
-        force_sw_decoding: false,
     };
     run_protocol_test_with_opts(test_fn, &options, None);
 }
@@ -734,16 +729,11 @@ fn run_protocol_test_with_drm_node(device_id: u64, test_fn: &dyn Fn(ProtocolTest
     let options = Options {
         debug: true,
         compression: Compression::None,
-        video: VideoSetting {
-            format: None,
-            bits_per_frame: None,
-        },
+        video: VideoSetting::default(),
         threads: 1,
         title_prefix: String::new(),
         no_gpu: false,
         drm_node: Some(device_id_to_node_path(device_id)),
-        force_sw_encoding: false,
-        force_sw_decoding: false,
     };
     run_protocol_test_with_opts(test_fn, &options, None);
 }
@@ -805,16 +795,11 @@ fn proto_base_wire() {
     let opts = Options {
         debug: false,
         compression: Compression::None,
-        video: VideoSetting {
-            format: None,
-            bits_per_frame: None,
-        },
+        video: VideoSetting::default(),
         threads: 1,
         title_prefix: String::new(),
         no_gpu: true,
         drm_node: None,
-        force_sw_encoding: false,
-        force_sw_decoding: false,
     };
     run_protocol_test_with_opts(
         &|mut ctx: ProtocolTestContext| {
@@ -1685,7 +1670,7 @@ fn setup_linux_dmabuf(
 #[test]
 fn proto_dmabuf() {
     for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), false, true, false, false) else {
+        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
             continue;
         };
 
@@ -2065,13 +2050,21 @@ fn test_video_combo(
         video: VideoSetting {
             format: Some(video_format),
             bits_per_frame: None, // note: very high/low values can cause codec failure
+            enc_pref: Some(if try_hw_enc {
+                CodecPreference::HW
+            } else {
+                CodecPreference::SW
+            }),
+            dec_pref: Some(if try_hw_dec {
+                CodecPreference::HW
+            } else {
+                CodecPreference::SW
+            }),
         },
         threads: 1,
         title_prefix: String::new(),
         no_gpu: false,
         drm_node: Some(device_id_to_node_path(vulk.get_device())),
-        force_sw_encoding: !try_hw_enc,
-        force_sw_decoding: !try_hw_dec,
     };
     println!(
         "\nTrying combination: video={:?}, try_hw_dec={}, try_hw_enc={}",
@@ -2098,7 +2091,16 @@ fn test_video_combo(
 #[test]
 fn proto_dmavid_vp9() {
     for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), true, true, false, false) else {
+        let Ok(vulk) = setup_vulkan(
+            Some(dev_id),
+            &VideoSetting {
+                format: Some(VideoFormat::VP9),
+                bits_per_frame: None,
+                enc_pref: None,
+                dec_pref: None,
+            },
+            true,
+        ) else {
             continue;
         };
         test_video_combo(&vulk, VideoFormat::VP9, false, false, false);
@@ -2109,7 +2111,17 @@ fn proto_dmavid_vp9() {
 #[test]
 fn proto_dmavid_h264() {
     for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), true, true, false, false) else {
+        // TODO: parse received modifier lists to avoid needing a with-video setup here
+        let Ok(vulk) = setup_vulkan(
+            Some(dev_id),
+            &VideoSetting {
+                format: Some(VideoFormat::VP9),
+                bits_per_frame: None,
+                enc_pref: None,
+                dec_pref: None,
+            },
+            true,
+        ) else {
             continue;
         };
 
@@ -2314,7 +2326,7 @@ fn proto_shm_damage() {
 #[test]
 fn proto_dmabuf_damage() {
     for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), false, true, false, false) else {
+        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
             continue;
         };
 
@@ -2428,7 +2440,7 @@ fn proto_dmabuf_damage() {
 #[test]
 fn proto_explicit_sync() {
     for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), false, true, false, false) else {
+        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
             continue;
         };
 
@@ -2656,16 +2668,11 @@ fn proto_title_prefix() {
         let options = Options {
             debug: true,
             compression: Compression::None,
-            video: VideoSetting {
-                format: None,
-                bits_per_frame: None,
-            },
+            video: VideoSetting::default(),
             threads: 1,
             title_prefix: String::from("a").repeat(prefix_len),
             no_gpu: false,
             drm_node: None,
-            force_sw_encoding: false,
-            force_sw_decoding: false,
         };
         run_protocol_test_with_opts(
             &|mut ctx: ProtocolTestContext| {
@@ -2868,7 +2875,7 @@ fn proto_test_screencopy_shm() {
 #[test]
 fn proto_test_screencopy_dmabuf() {
     for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), false, true, false, false) else {
+        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
             continue;
         };
 

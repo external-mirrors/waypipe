@@ -2779,7 +2779,21 @@ fn test_video(try_hardware: bool) {
     let debug = false;
 
     for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), true, debug, try_hardware, try_hardware) else {
+        let pref = Some(if try_hardware {
+            CodecPreference::HW
+        } else {
+            CodecPreference::SW
+        });
+        let Ok(vulk) = setup_vulkan(
+            Some(dev_id),
+            &VideoSetting {
+                format: Some(VideoFormat::H264), /* the actual format given here does not matter */
+                bits_per_frame: None,
+                enc_pref: pref,
+                dec_pref: pref,
+            },
+            debug,
+        ) else {
             continue;
         };
 

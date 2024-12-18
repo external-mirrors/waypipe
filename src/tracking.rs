@@ -2338,13 +2338,7 @@ pub fn process_way_msg(
                     ));
                 };
 
-                glob.vulkan = Some(setup_vulkan(
-                    Some(dev),
-                    glob.opts.video.format.is_some(),
-                    glob.opts.debug,
-                    !glob.opts.force_sw_decoding,
-                    !glob.opts.force_sw_encoding,
-                )?);
+                glob.vulkan = Some(setup_vulkan(Some(dev), &glob.opts.video, glob.opts.debug)?);
             }
 
             let dev_len = std::mem::size_of::<u64>();
@@ -2891,7 +2885,6 @@ pub fn process_way_msg(
                 /* Client side (or server if version < 4): initialize Vulkan,
                  * choosing best device or specified device. */
                 if glob.vulkan.is_none() && (!glob.on_display_side || version < 4) {
-                    let video = glob.opts.video.format.is_some();
                     let dev = if let Some(node) = &glob.opts.drm_node {
                         /* Pick specified device */
                         Some(get_dev_for_drm_node_path(node)?)
@@ -2899,13 +2892,7 @@ pub fn process_way_msg(
                         /* Pick best device */
                         None
                     };
-                    glob.vulkan = Some(setup_vulkan(
-                        dev,
-                        video,
-                        glob.opts.debug,
-                        !glob.opts.force_sw_decoding,
-                        !glob.opts.force_sw_encoding,
-                    )?);
+                    glob.vulkan = Some(setup_vulkan(dev, &glob.opts.video, glob.opts.debug)?);
                 }
 
                 check_space!(msg.len(), 0, remaining_space);

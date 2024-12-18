@@ -5,6 +5,8 @@ mod dmabuf_stub {
     use std::os::fd::{BorrowedFd, OwnedFd};
     use std::path::PathBuf;
     use std::sync::Arc;
+
+    use crate::VideoSetting;
     pub struct AddDmabufPlane {
         pub fd: OwnedFd,
         pub plane_idx: u32,
@@ -33,10 +35,8 @@ mod dmabuf_stub {
 
     pub fn setup_vulkan(
         main_device: Option<u64>,
-        with_video: bool,
+        video: &VideoSetting,
         debug: bool,
-        can_hw_dec: bool,
-        can_hw_enc: bool,
     ) -> Result<Arc<Vulkan>, String> {
         unreachable!();
     }

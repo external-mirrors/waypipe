@@ -81,8 +81,7 @@ compressible as images containing pictures.
 *--version*
 	Briefly describe Waypipe's version and the features it was built with,
 	then quit. Possible features: LZ4 compression support, ZSTD compression
-	support, ability to transfer DMABUFs, video compression support, VAAPI
-	hardware video de/encoding support.
+	support, ability to transfer DMABUFs, video compression support.
 
 *--display D*
 	For server or ssh mode, provide _WAYLAND_DISPLAY_ and let waypipe configure
@@ -124,15 +123,26 @@ compressible as images containing pictures.
 *--video V*
 	Compress specific DMABUF formats using a lossy video codec. Opaque, 10-bit, and
 	multiplanar formats, among others, are not supported. *V* is a comma separated 
-	list of options to control the video encoding. Using the *--video* flag without
-	setting any options is equivalent to using the default setting of:
-	*--video=h264,bpf=120000*. Later options supersede earlier ones.
+	list of options to control the video encoding. (For example: *--video av1,hw*.)
+	Later options supersede earlier ones.
+
+	*none*
+		Do not use video encoding.
 
 	*h264*
 		Use H.264 encoded video.
 		
 	*vp9*
 		Use VP9 encoded video.
+
+	*av1*
+		Use VP9 encoded video.
+
+	*sw*, *swenc*, *swdec*
+		Use software encoding or decoding, when available.
+
+	*hw*, *hwenc*, *hwdec*
+		Use hardware encoding or decoding, when available.
 		
 	*bpf=B*
 		Set the target bit rate of the video encoder, in units of bits per frame.

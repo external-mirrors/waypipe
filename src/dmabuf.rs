@@ -612,10 +612,8 @@ pub struct DeviceInfo {
 
 pub fn setup_vulkan(
     main_device: Option<u64>,
-    with_video: bool,
+    video: &VideoSetting,
     debug: bool,
-    can_hw_dec: bool,
-    can_hw_enc: bool,
 ) -> Result<Arc<Vulkan>, String> {
     let app_name = CString::new(env!("CARGO_PKG_NAME")).unwrap();
     let version: u32 = env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap() << 24
@@ -626,12 +624,16 @@ pub fn setup_vulkan(
         .application_version(version)
         .engine_name(c"waypipe")
         .engine_version(0)
-        .api_version(if can_hw_dec || can_hw_enc {
-            // TODO: get best API version available, and turn off video enc/decoding if not?
-            vk::make_api_version(0, 1, 3, 0)
-        } else {
-            vk::make_api_version(0, 1, 0, 0)
-        });
+        .api_version(
+            if video.dec_pref == Some(CodecPreference::HW)
+                || video.enc_pref == Some(CodecPreference::HW)
+            {
+                // TODO: get best API version available, and turn off video enc/decoding if not?
+                vk::make_api_version(0, 1, 3, 0)
+            } else {
+                vk::make_api_version(0, 1, 0, 0)
+            },
+        );
 
     let exts = [
         vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME.as_ptr(), // needed to link device and DRM node
@@ -864,13 +866,13 @@ pub fn setup_vulkan(
             let mut hw_dec_h264 = false;
             let mut hw_dec_av1 = false;
 
-            if with_video
+            if video.format.is_some()
                 && ext_list_video_base
                     .iter()
                     .all(|(name, version)| exts_has_prop(&exts, name, *version))
             {
                 // TODO: first verify that libavcodec has the appropriate encoders/decoders available, if possible
-                if can_hw_dec
+                if video.dec_pref == Some(CodecPreference::HW)
                     && ext_list_video_dec_base
                         .iter()
                         .all(|(name, version)| exts_has_prop(&exts, name, *version))
@@ -882,7 +884,7 @@ pub fn setup_vulkan(
                         hw_dec_av1 = true;
                     }
                 }
-                if can_hw_enc
+                if video.enc_pref == Some(CodecPreference::HW)
                     && ext_list_video_enc_base
                         .iter()
                         .all(|(name, version)| exts_has_prop(&exts, name, *version))
@@ -1199,7 +1201,7 @@ pub fn setup_vulkan(
                 });
             }
 
-            if with_video {
+            if video.format.is_some() {
                 // todo: only restrict modifiers when the format is usable for video?
                 // (in general, if a format supports video encoding, clients should preferably use it.)
                 // Alternatively, a preference for video-encodable formats could be made part of dmabuf-feedback,
@@ -1232,7 +1234,7 @@ pub fn setup_vulkan(
 
         // TODO: if video loading fails, post an error here immediately, for now
         #[cfg(feature = "video")]
-        let video = if with_video {
+        let video = if video.format.is_some() {
             Some(setup_video(
                 &entry,
                 &instance,
@@ -2951,7 +2953,7 @@ pub const DRM_FORMATS: &[u32] = &[
 #[test]
 fn test_dmabuf() {
     for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), false, true, false, false) else {
+        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
             continue;
         };
 
