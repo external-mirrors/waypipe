@@ -447,15 +447,23 @@ fn handle_server_conn(link_fd: OwnedFd, wayland_fd: OwnedFd, opts: &Options) -> 
     )
 }
 
-/** Connect to a socket (and possibly unlink it) */
+/** Connect to a socket (and possibly unlink its path); the socket returned is
+ * nonblocking and cloexec. */
 fn socket_connect(
-    socket: &OwnedFd,
     spec: &SocketSpec,
     cwd: &OwnedFd,
     unlink_after: bool, /* Unlink after connecting? */
-) -> Result<(), String> {
+) -> Result<OwnedFd, String> {
     match spec {
         SocketSpec::Unix(path) => {
+            let socket = socket::socket(
+                socket::AddressFamily::Unix,
+                socket::SockType::Stream,
+                socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
+                None,
+            )
+            .map_err(|x| tag!("Failed to create socket: {}", x))?;
+
             let file = path
                 .file_name()
                 .ok_or_else(|| tag!("Socket path {:?} missing file name", path))?;
@@ -484,10 +492,20 @@ fn socket_connect(
                 }
                 x
             };
-            r.map_err(|x| tag!("Failed to connnect to socket at {:?}: {}", path, x))
+            r.map_err(|x| tag!("Failed to connnect to socket at {:?}: {}", path, x))?;
+
+            Ok(socket)
         }
         #[cfg(target_os = "linux")]
         SocketSpec::VSock(v) => {
+            let socket = socket::socket(
+                socket::AddressFamily::Vsock,
+                socket::SockType::Stream,
+                socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
+                None,
+            )
+            .map_err(|x| tag!("Failed to create socket: {}", x))?;
+
             unsafe {
                 /* nix does not yet support svm_flags, so directly use libc */
                 const VMADDR_FLAG_TO_HOST: u8 = 0x1;
@@ -516,7 +534,7 @@ fn socket_connect(
                         Errno::last()
                     ));
                 }
-                Ok(())
+                Ok(socket)
             }
         }
         #[cfg(not(target_os = "linux"))]
@@ -634,16 +652,7 @@ fn socket_create_and_bind(
 
 /** Connect to the Wayland display socket at the given `path` */
 fn connect_to_display_at(cwd: &OwnedFd, path: &Path) -> Result<OwnedFd, String> {
-    let wayland_fd = socket::socket(
-        socket::AddressFamily::Unix,
-        socket::SockType::Stream,
-        socket::SockFlag::SOCK_NONBLOCK,
-        None,
-    )
-    .map_err(|x| tag!("Failed to create socket: {}", x))?;
-    set_cloexec(&wayland_fd, true)?;
-    socket_connect(&wayland_fd, &SocketSpec::Unix(path.into()), cwd, false)?;
-    Ok(wayland_fd)
+    socket_connect(&SocketSpec::Unix(path.into()), cwd, false)
 }
 
 /** Connect to the Wayland display socket indicated by `WAYLAND_DISPLAY` and
@@ -872,17 +881,7 @@ fn run_server_oneshot(
         .map_err(|x| tag!("Failed to run program {:?}: {}", command[0], x))?;
     drop(sock2);
 
-    let link_fd = socket::socket(
-        socket::AddressFamily::Unix,
-        socket::SockType::Stream,
-        socket::SockFlag::SOCK_NONBLOCK,
-        None,
-    )
-    .map_err(|x| tag!("Failed to create socket: {}", x))?;
-
-    socket_connect(&link_fd, socket_path, cwd, unlink_at_end)?;
-
-    set_cloexec(&link_fd, true)?;
+    let link_fd = socket_connect(socket_path, cwd, unlink_at_end)?;
 
     handle_server_conn(link_fd, sock1, options)?;
 
@@ -2126,21 +2125,11 @@ fn main() -> Result<(), String> {
 
             set_cloexec(&wayland_fd, true)?;
 
-            let link_fd = socket::socket(
-                socket::AddressFamily::Unix,
-                socket::SockType::Stream,
-                socket::SockFlag::SOCK_NONBLOCK,
-                None,
-            )
-            .map_err(|x| tag!("Failed to create socket: {}", x))?;
-            socket_connect(
-                &link_fd,
+            let link_fd = socket_connect(
                 &socket.ok_or_else(|| tag!("Socket path not provided"))?,
                 &cwd,
                 false,
             )?;
-
-            set_cloexec(&link_fd, true)?;
 
             handle_server_conn(link_fd, wayland_fd, &opts)
         }
