@@ -625,8 +625,8 @@ pub fn setup_vulkan(
         .engine_name(c"waypipe")
         .engine_version(0)
         .api_version(
-            if video.dec_pref == Some(CodecPreference::HW)
-                || video.enc_pref == Some(CodecPreference::HW)
+            if video.dec_pref != Some(CodecPreference::SW)
+                || video.enc_pref != Some(CodecPreference::SW)
             {
                 // TODO: get best API version available, and turn off video enc/decoding if not?
                 vk::make_api_version(0, 1, 3, 0)
@@ -872,7 +872,7 @@ pub fn setup_vulkan(
                     .all(|(name, version)| exts_has_prop(&exts, name, *version))
             {
                 // TODO: first verify that libavcodec has the appropriate encoders/decoders available, if possible
-                if video.dec_pref == Some(CodecPreference::HW)
+                if video.dec_pref != Some(CodecPreference::SW)
                     && ext_list_video_dec_base
                         .iter()
                         .all(|(name, version)| exts_has_prop(&exts, name, *version))
@@ -884,7 +884,7 @@ pub fn setup_vulkan(
                         hw_dec_av1 = true;
                     }
                 }
-                if video.enc_pref == Some(CodecPreference::HW)
+                if video.enc_pref != Some(CodecPreference::SW)
                     && ext_list_video_enc_base
                         .iter()
                         .all(|(name, version)| exts_has_prop(&exts, name, *version))
