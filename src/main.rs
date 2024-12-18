@@ -496,7 +496,7 @@ fn socket_connect(
                     svm_family: libc::AF_VSOCK as u16,
                     svm_reserved1: 0,
                     svm_port: v.port,
-                    svm_cid: libc::VMADDR_CID_ANY,
+                    svm_cid: v.cid,
                     svm_zero: [svm_flags, 0, 0, 0],
                 };
                 assert!(std::mem::align_of::<libc::sockaddr_vm>() == 4);
