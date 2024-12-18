@@ -454,12 +454,12 @@ fn socket_connect(
     cwd: &OwnedFd,
     unlink_after: bool, /* Unlink after connecting? */
 ) -> Result<OwnedFd, String> {
-    match spec {
+    let socket = match spec {
         SocketSpec::Unix(path) => {
             let socket = socket::socket(
                 socket::AddressFamily::Unix,
                 socket::SockType::Stream,
-                socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
+                socket::SockFlag::SOCK_CLOEXEC,
                 None,
             )
             .map_err(|x| tag!("Failed to create socket: {}", x))?;
@@ -494,14 +494,14 @@ fn socket_connect(
             };
             r.map_err(|x| tag!("Failed to connnect to socket at {:?}: {}", path, x))?;
 
-            Ok(socket)
+            socket
         }
         #[cfg(target_os = "linux")]
         SocketSpec::VSock(v) => {
             let socket = socket::socket(
                 socket::AddressFamily::Vsock,
                 socket::SockType::Stream,
-                socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
+                socket::SockFlag::SOCK_CLOEXEC,
                 None,
             )
             .map_err(|x| tag!("Failed to create socket: {}", x))?;
@@ -534,12 +534,14 @@ fn socket_connect(
                         Errno::last()
                     ));
                 }
-                Ok(socket)
+                socket
             }
         }
         #[cfg(not(target_os = "linux"))]
         SocketSpec::VSock(_) => unreachable!(),
-    }
+    };
+    set_nonblock(&socket)?;
+    Ok(socket)
 }
 
 /** Helper structure to unlink a created file when it Drops.
