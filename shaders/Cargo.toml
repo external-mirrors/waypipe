@@ -2,4 +2,4 @@
 name = "waypipe-shaders"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.77.0"
+rust-version = "1.56.0"

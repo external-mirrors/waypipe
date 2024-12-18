@@ -2,7 +2,7 @@
 name = "waypipe-ffmpeg-wrapper"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.77.0"
+rust-version = "1.65.0"
 
 [dependencies]
 libloading = "0.8.5"

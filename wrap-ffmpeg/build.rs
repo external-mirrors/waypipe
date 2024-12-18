@@ -32,7 +32,7 @@ fn depfile_to_cargo(path: &std::path::Path) {
     chunks.push(std::str::from_utf8(&unescaped[..]).unwrap().into());
 
     for file in chunks.iter().skip(1) {
-        println!("cargo::rerun-if-changed={}", file);
+        println!("cargo:rerun-if-changed={}", file);
     }
 }
 
@@ -111,7 +111,7 @@ fn main() {
     args.push(OsStr::new("ffmpeg"));
     args.push(OsStr::new("--dynamic-link-require-all"));
     args.push(OsStr::new("--rust-target"));
-    args.push(OsStr::new("1.77"));
+    args.push(OsStr::new("1.59"));
     args.push(OsStr::new("--no-doc-comments"));
     args.push(OsStr::new("--depfile"));
     args.push(dep_path.as_os_str());

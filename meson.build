@@ -50,7 +50,7 @@ if get_option('build_rs')
 
     bindgen = find_program(
         'bindgen',
-        version: '>= 0.70.0',
+        version: '>= 0.66.0',
         native: true,
         required: max_feature,
     )
