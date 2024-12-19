@@ -134,7 +134,7 @@ if get_option('build_rs')
             '@OUTPUT@',
         ],
         install: true,
-        install_dir: 'bin',
+        install_dir: get_option('bindir'),
     )
 
     test(
