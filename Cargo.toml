@@ -6,15 +6,6 @@ version = "0.9.2"
 edition = "2021"
 rust-version = "1.77.0"
 
-[profile.release]
-debug = "full"
-# Using split-debuginfo currently leaves much of the debug info in the executable
-# so handle stripping with objcopy in the meson build
-split-debuginfo = "off"
-panic = "abort"
-[profile.dev]
-panic = "abort"
-
 [features]
 default = ["video", "dmabuf", "lz4", "zstd"]
 video = ["dep:waypipe-ffmpeg-wrapper", "dep:waypipe-shaders", "dmabuf"]
@@ -32,3 +23,71 @@ waypipe-ffmpeg-wrapper = { path = "wrap-ffmpeg", optional = true}
 waypipe-lz4-wrapper = { path = "wrap-lz4", optional = true}
 waypipe-zstd-wrapper = { path = "wrap-zstd", optional = true}
 waypipe-shaders= { path = "shaders", optional = true}
+
+# Build profiles. The default 'release' and 'dev' are for use when building
+# waypipe directly with cargo; debug info is _on_ for both. There are also
+# variants used by meson corresponding to each optimization level and debug amount.
+
+# Note: tt is recommended to split debuginfo _after_ building, as Rust's
+# split-debuginfo still keeps a lot of debug info in the executable.
+
+[profile.release]
+opt-level = 3
+debug = "full"
+panic = "abort"
+lto = "thin"
+
+[profile.dev]
+panic = "abort"
+
+[profile.meson-0]
+inherits = "dev"
+opt-level = 0
+
+[profile.meson-1]
+inherits = "release"
+opt-level = 1
+lto = false
+
+[profile.meson-2]
+inherits = "release"
+lto = "thin"
+opt-level = 2
+
+[profile.meson-3]
+inherits = "release"
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.meson-s]
+inherits = "release"
+lto = true
+opt-level = "s"
+codegen-units = 1
+# to shave off ~100kB: -Z build-std="std,panic_abort"
+
+[profile.meson-0-strip]
+inherits = "meson-0"
+debug = false
+strip = "debuginfo"
+
+[profile.meson-1-strip]
+inherits = "meson-1"
+debug = false
+strip = "debuginfo"
+
+[profile.meson-2-strip]
+inherits = "meson-2"
+debug = false
+strip = "debuginfo"
+
+[profile.meson-3-strip]
+inherits = "meson-3"
+debug = false
+strip = "debuginfo"
+
+[profile.meson-s-strip]
+inherits = "meson-s"
+debug = false
+strip = "debuginfo"

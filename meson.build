@@ -93,11 +93,30 @@ if get_option('build_rs')
     target_dir = meson.project_build_root() / 'target'
     output = target_dir / 'release/waypipe'
     manifest = meson.project_source_root() / 'Cargo.toml'
-    profile = 'release'
-    unstripped = custom_target(
-        'waypipe-unstripped',
+
+    # Cargo has no direct analogue for 'g' or 'plain' optimization levels,
+    # so the choices for them are somewhat arbitrary
+    if get_option('optimization') == '0' or get_option('optimization') == 'g'
+        profile = 'meson-0'
+    elif get_option('optimization') == '1' or get_option('optimization') == 'plain'
+        profile = 'meson-1'
+    elif get_option('optimization') == '3'
+        profile = 'meson-3'
+    elif get_option('optimization') == 's'
+        profile = 'meson-s'
+    else
+        profile = 'meson-2'
+    endif
+
+    if get_option('debug') == false
+        profile += '-strip'
+    endif
+    message('Cargo will be run with profile: @0@'.format(profile))
+
+    binary = custom_target(
+        'waypipe',
         build_always_stale: true,
-        output: 'waypipe-unstripped',
+        output: 'waypipe',
         env: {
             'WAYPIPE_VERSION': raw_version,
             'WAYPIPE_FEATURE_LZ4': has_lz4.to_string('true', 'false'),
@@ -112,39 +131,6 @@ if get_option('build_rs')
             manifest,
             target_dir,
             ','.join(features),
-            '@OUTPUT@',
-        ],
-    )
-
-
-    debug_destination = '/usr/debug/waypipe'
-    debug_name = 'waypipe.debug'
-    # TODO: where to install debug info. The current directory works when testing with gdb.
-    debuginfo = custom_target(
-        'waypipe-debuginfo',
-        input: unstripped,
-        output: debug_name,
-        command: [
-            objcopy.full_path(),
-            '--only-keep-debug',
-            unstripped,
-            '@OUTPUT@',
-        ],
-    )
-
-    debuglink = '--add-gnu-debuglink=@0@'.format(debug_name)
-    final_binary = custom_target(
-        'waypipe',
-        input: [unstripped, debuginfo],
-        output: 'waypipe',
-        command: [
-            # Strip (but link) the debuginfo
-            objcopy.full_path(),
-            '--strip-debug',
-            '--strip-unneeded',
-            '--remove-section=".gnu_debuglink"',
-            debuglink,
-            unstripped,
             '@OUTPUT@',
         ],
         install: true,
@@ -167,6 +153,7 @@ if get_option('build_rs')
             ','.join(features),
         ],
         timeout: 200,
+        priority: 100,
     )
 
     test(
@@ -174,9 +161,9 @@ if get_option('build_rs')
         sh,
         args: [
             '-c',
-            ' '.join([final_binary.full_path(), '--test-fast-bench', 'bench']),
+            ' '.join([binary.full_path(), '--test-fast-bench', 'bench']),
         ],
-        depends: final_binary,
+        depends: binary,
     )
 endif
 
