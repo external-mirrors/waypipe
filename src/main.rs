@@ -1035,8 +1035,6 @@ fn run_server_multi(
     display: &OsStr,
     cwd: &OwnedFd,
 ) -> Result<(), String> {
-    debug!("Running server");
-
     let mut connections = BTreeMap::new();
 
     let mut conn_strings = Vec::new();
@@ -1304,8 +1302,6 @@ fn run_client_multi(
     anti_staircase: bool,
     cwd: &OwnedFd,
 ) -> Result<(), String> {
-    debug!("Running client");
-
     let mut conn_strings = Vec::new();
     let conn_args = build_connection_command(
         &mut conn_strings,
@@ -1558,7 +1554,7 @@ const CONN_H264_VIDEO: u32 = 0x3 << 11;
 const CONN_AV1_VIDEO: u32 = 0x4 << 11;
 
 // an available/unavailable list could be constructed if #[cfg] where to apply to expressions
-pub const VERSION_STRING: &str = concat!(
+const VERSION_STRING_CARGO: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     "\nfeatures:",
     "\n  lz4: ",
@@ -1570,6 +1566,10 @@ pub const VERSION_STRING: &str = concat!(
     "\n  video: ",
     cfg!(feature = "video"),
 );
+pub const VERSION_STRING: &str = match option_env!("WAYPIPE_VERSION") {
+    Some(x) => x,
+    None => VERSION_STRING_CARGO,
+};
 
 /** Main entrypoint */
 fn main() -> Result<(), String> {
@@ -1903,8 +1903,13 @@ fn main() -> Result<(), String> {
         None
     };
 
+    debug!(
+        "waypipe version: {}",
+        VERSION_STRING.split_once('\n').unwrap().0
+    );
     match matches.subcommand() {
         Some(("ssh", submatch)) => {
+            debug!("Starting client+ssh main process");
             let subargs = submatch.get_raw("ssh_args");
             let ssh_args: Vec<&std::ffi::OsStr> = subargs.unwrap_or_default().collect();
             let (destination_idx, _) = locate_openssh_cmd_hostname(&ssh_args)?;
@@ -2027,6 +2032,7 @@ fn main() -> Result<(), String> {
             )
         }
         Some(("client", _submatch)) => {
+            debug!("Starting client main process");
             let socket_path: SocketSpec =
                 socket.unwrap_or(SocketSpec::Unix(PathBuf::from("/tmp/waypipe-client.sock")));
 
@@ -2042,6 +2048,7 @@ fn main() -> Result<(), String> {
             )
         }
         Some(("server", submatch)) => {
+            debug!("Starting server main process");
             let subargs = submatch.get_raw("command");
 
             let (shell, shell_argv0) = if let Some(shell) = std::env::var_os("SHELL") {
