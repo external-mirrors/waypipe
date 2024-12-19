@@ -83,8 +83,16 @@ if get_option('build_rs')
         native: true,
         required: get_option('with_video'),
     )
-    libavutil = dependency('libavutil', required: get_option('with_video'))
-    libavcodec = dependency('libavcodec', required: get_option('with_video'))
+    libavutil = dependency(
+        'libavutil',
+        version: '>=59.39.100',
+        required: get_option('with_video'),
+    )
+    libavcodec = dependency(
+        'libavcodec',
+        version: '>=61.19.100',
+        required: get_option('with_video'),
+    )
     if bindgen.found() and libavcodec.found() and libavutil.found() and glslc.found()
         has_video = true
         features += ['video']
