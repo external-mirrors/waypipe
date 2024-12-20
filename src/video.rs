@@ -1612,7 +1612,41 @@ pub fn start_dmavid_decode_sw(
             .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
             .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
             .subresource_range(standard_access_range)];
-        // TODO: buffer memory barriers?
+        let buf_memory_barriers = &[
+            vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::HOST_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .buffer(buf_y.buffer)
+                .offset(0)
+                .size(buf_y.buffer_len)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED),
+            vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::HOST_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .buffer(buf_u.buffer)
+                .offset(0)
+                .size(buf_u.buffer_len)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED),
+            vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::HOST_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .buffer(buf_v.buffer)
+                .offset(0)
+                .size(buf_v.buffer_len)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED),
+        ];
+        vulk.dev.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::HOST,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::DependencyFlags::empty(),
+            &[],
+            buf_memory_barriers,
+            &[],
+        );
         vulk.dev.cmd_pipeline_barrier(
             cb,
             vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -2582,6 +2616,41 @@ pub fn start_dmavid_encode_sw(
             .src_access_mask(vk::AccessFlags::SHADER_WRITE)
             .dst_access_mask(vk::AccessFlags::NONE)
             .subresource_range(standard_access_range)];
+        let buf_memory_barriers = &[
+            vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::HOST_READ)
+                .buffer(buf_y.buffer)
+                .offset(0)
+                .size(buf_y.buffer_len)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED),
+            vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::HOST_READ)
+                .buffer(buf_u.buffer)
+                .offset(0)
+                .size(buf_u.buffer_len)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED),
+            vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::HOST_READ)
+                .buffer(buf_v.buffer)
+                .offset(0)
+                .size(buf_v.buffer_len)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED),
+        ];
+        vulk.dev.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::HOST,
+            vk::DependencyFlags::empty(),
+            &[],
+            buf_memory_barriers,
+            &[],
+        );
         vulk.dev.cmd_pipeline_barrier(
             cb,
             vk::PipelineStageFlags::COMPUTE_SHADER,

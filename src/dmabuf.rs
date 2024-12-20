@@ -127,8 +127,8 @@ pub struct VulkanBuffer {
     pub buffer: vk::Buffer,
     mem: vk::DeviceMemory,
 
-    len: u64,
-    nom_len: usize,
+    pub memory_len: u64,
+    pub buffer_len: u64,
     /* Mutex-wrapped to ensure only one referent can read/write from data at a time */
     inner: Mutex<VulkanBufferInner>,
 }
@@ -1330,6 +1330,7 @@ fn create_cpu_visible_buffer(
             .map_err(|_| "Failed to create buffer")?;
 
         let memreq = vulk.dev.get_buffer_memory_requirements(buffer);
+        assert!(memreq.size >= size as u64);
 
         /* note: not HOST_COHERENT, so memory must be explicitly flushed or invalidated */
         let mem_type = if read_optimized {
@@ -1380,8 +1381,8 @@ pub fn vulkan_get_buffer(
             vulk: vulk.clone(),
             buffer,
             mem,
-            len,
-            nom_len,
+            memory_len: len,
+            buffer_len: nom_len as u64,
             inner: Mutex::new(VulkanBufferInner {
                 data,
                 reader_count: 0,
@@ -1422,7 +1423,7 @@ impl VulkanBuffer {
         unsafe {
             let ranges = &[vk::MappedMemoryRange::default()
                 .offset(0)
-                .size(self.len)
+                .size(self.memory_len)
                 .memory(self.mem)];
 
             self.vulk
@@ -1437,7 +1438,7 @@ impl VulkanBuffer {
         unsafe {
             let ranges = &[vk::MappedMemoryRange::default()
                 .offset(0)
-                .size(self.len)
+                .size(self.memory_len)
                 .memory(self.mem)];
 
             self.vulk
@@ -1450,7 +1451,7 @@ impl VulkanBuffer {
 
     pub fn get_read_view(self: &VulkanBuffer) -> VulkanBufferReadView {
         let mut inner = self.inner.lock().unwrap();
-        let dst = slice_from_raw_parts(inner.data as *const u8, self.nom_len);
+        let dst = slice_from_raw_parts(inner.data as *const u8, self.buffer_len as usize);
         assert!(!inner.has_writer);
         inner.reader_count += 1;
         unsafe {
@@ -1464,7 +1465,7 @@ impl VulkanBuffer {
 
     pub fn get_write_view(self: &VulkanBuffer) -> VulkanBufferWriteView {
         let mut inner = self.inner.lock().unwrap();
-        let dst = slice_from_raw_parts_mut(inner.data as *mut u8, self.nom_len);
+        let dst = slice_from_raw_parts_mut(inner.data as *mut u8, self.buffer_len as usize);
         assert!(inner.reader_count == 0);
         inner.has_writer = true;
         unsafe {
@@ -2182,6 +2183,14 @@ pub fn start_copy_segments_from_dmabuf(
             .src_access_mask(vk::AccessFlags::TRANSFER_READ)
             .dst_access_mask(vk::AccessFlags::NONE)
             .subresource_range(standard_access_range)];
+        let buf_rel_barrier = &[vk::BufferMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::HOST_READ)
+            .buffer(copy.buffer)
+            .offset(0)
+            .size(copy.buffer_len)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)];
 
         // Perform layout transition, even though it is unclear how useful it is for DMABUFs
         vulk.dev.cmd_pipeline_barrier(
@@ -2197,6 +2206,15 @@ pub fn start_copy_segments_from_dmabuf(
         vulk.dev
             .cmd_copy_image_to_buffer(cb, img.image, op_layout, copy.buffer, &regions[..]);
 
+        vulk.dev.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::HOST,
+            vk::DependencyFlags::empty(),
+            &[],
+            buf_rel_barrier,
+            &[],
+        );
         vulk.dev.cmd_pipeline_barrier(
             cb,
             vk::PipelineStageFlags::TRANSFER,
@@ -2442,6 +2460,15 @@ pub fn start_copy_segments_onto_dmabuf(
             .src_access_mask(vk::AccessFlags::NONE)
             .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
             .subresource_range(standard_access_range)];
+        let buf_acq_barrier = &[vk::BufferMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::HOST_WRITE)
+            .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
+            .buffer(copy.buffer)
+            .offset(0)
+            .size(copy.buffer_len)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)];
+
         let rel_barriers = &[vk::ImageMemoryBarrier::default()
         .image(img.image)
         .old_layout(op_layout)
@@ -2461,6 +2488,15 @@ pub fn start_copy_segments_onto_dmabuf(
             &[],
             &[],
             acq_barriers,
+        );
+        vulk.dev.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::HOST,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            buf_acq_barrier,
+            &[],
         );
 
         vulk.dev
@@ -2760,7 +2796,7 @@ pub fn copy_onto_dmabuf(
 
         let ranges = &[vk::MappedMemoryRange::default()
             .offset(0)
-            .size(copy.len)
+            .size(copy.memory_len)
             .memory(copy.mem)];
         let vulk: &Vulkan = &buf.vulk;
         vulk.dev
@@ -2807,13 +2843,13 @@ pub fn copy_from_dmabuf(
     unsafe {
         let ranges = &[vk::MappedMemoryRange::default()
             .offset(0)
-            .size(copy.len)
+            .size(copy.memory_len)
             .memory(copy.mem)];
         vulk.dev
             .invalidate_mapped_memory_ranges(ranges)
             .map_err(|_| "Failed to invalidate mapped memory range")?;
 
-        assert!(nom_len as u64 <= copy.len);
+        assert!(nom_len as u64 <= copy.memory_len);
         // Safety: requires valid region, and no other writers at this time
         let inner = copy.inner.lock().unwrap();
         let src = slice_from_raw_parts(inner.data as *mut u8, nom_len);
