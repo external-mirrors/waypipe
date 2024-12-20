@@ -2876,8 +2876,7 @@ pub fn process_way_msg(
             if name == b"zwp_linux_dmabuf_v1" {
                 if glob.vulkan.is_none() && glob.on_display_side && version < 4 {
                     debug!(
-                        "Client bound zwp_linux_dmabuf_v1 at version {} older than 4,
-                           using best-or-specified drm node",
+                        "Client bound zwp_linux_dmabuf_v1 at version {} older than 4, using best-or-specified drm node",
                         version
                     );
                 }
