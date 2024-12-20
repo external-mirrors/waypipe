@@ -3518,8 +3518,6 @@ fn process_wayland_1(
 
 /** Add RID and protocol transfer messages to send to the channel */
 fn process_wayland_2(way_msg: &mut FromWayland) {
-    debug!("Process wayland 2");
-
     // (todo: dynamically glue on when constructing the iovecs, instead?)
 
     if !way_msg.output.protocol_rids.is_empty() {
@@ -3602,15 +3600,17 @@ fn process_vulkan_updates(
 
             /* The acquire list is provided by protocol processing, after all relevant
              * apply tasks have been sent. */
-            if data.pending_apply_tasks == 0 && !data.acquires.is_empty() {
-                assert!(glob.on_display_side);
+            if data.pending_apply_tasks == 0 {
                 debug!(
                     "Tasks completed, signalling {} acquires for (dmabuf rid={}, wlbuf={})",
                     data.acquires.len(),
                     rid,
                     data.debug_wayland_id
                 );
-                signal_timeline_acquires(&mut data.acquires)?;
+                if !data.acquires.is_empty() {
+                    assert!(glob.on_display_side);
+                    signal_timeline_acquires(&mut data.acquires)?;
+                }
             }
 
             Ok(false)
@@ -3894,6 +3894,8 @@ fn work_thread(tasksys: &TaskSystem, output: Sender<TaskResult>) {
                 if let Ok(TaskOutput::DmabufApplyOp(x)) = y {
                     // Add to list for main thread to act once complete
                     g.apply_operations.push(x);
+                } else if let Ok(TaskOutput::MirrorApply) = y {
+                    // No action
                 } else {
                     // Send to main thread
                     output.send(y).unwrap();
@@ -4018,15 +4020,19 @@ fn loop_inner(
             && (from_chan.state == DirectionState::On || from_chan.state == DirectionState::Drain);
         let work_to_do_now = (work_way && !has_chan_output) || (work_chan && !has_way_output);
 
-        debug!("poll: from_chan (proc {} output {} state {:?} thread {}) from_way (proc {} output {} state {:?} thread {}) work now {}",
-               fmt_bool(is_from_chan_processable(from_chan)), fmt_bool(has_from_chan_output(&from_chan.output)), from_chan.state, from_chan.waiting_for.unwrap_or(Rid(0)),
-               fmt_bool(is_from_way_processable(&from_way.input, glob)), fmt_bool(has_from_way_output(&from_way.output)), from_way.state,
-               from_way.output.expected_recvd_msgs,
-               fmt_bool(work_to_do_now));
         debug!(
-            "read: from_chan {} from_way {}",
-            fmt_bool(read_chan_input),
-            fmt_bool(read_way_input)
+            "poll: from_chan ({:?}{}{}{}; wait={}) from_way ({:?}{}{}{}; wait={}) work now {}",
+            from_chan.state,
+            string_if_bool(is_from_chan_processable(from_chan), ",proc"),
+            string_if_bool(has_from_chan_output(&from_chan.output), ",output"),
+            string_if_bool(read_chan_input, ",read"),
+            from_chan.waiting_for.unwrap_or(Rid(0)),
+            from_way.state,
+            string_if_bool(is_from_way_processable(&from_way.input, glob), ",proc"),
+            string_if_bool(has_from_way_output(&from_way.output), ",output"),
+            string_if_bool(read_way_input, ",read"),
+            from_way.output.expected_recvd_msgs,
+            fmt_bool(work_to_do_now)
         );
 
         // TODO: avoid reallocating pfds. One useful structure:
@@ -4461,11 +4467,12 @@ fn loop_inner(
         /* Process work results */
         if self_wakeup {
             while let Ok(msg) = from_way.output.recv_msgs.try_recv() {
-                debug!("Received off thread work result");
-
                 match msg {
-                    Ok(TaskOutput::MirrorApply) => (), /* safe to ignore */
                     Ok(TaskOutput::Msg(vec)) => {
+                        debug!(
+                            "Received off thread work result: new output message of length: {}",
+                            vec.len()
+                        );
                         from_way.output.expected_recvd_msgs =
                             from_way.output.expected_recvd_msgs.checked_sub(1).unwrap();
 
@@ -4477,6 +4484,10 @@ fn loop_inner(
                         }
                     }
                     Ok(TaskOutput::ApplyDone(rid)) => {
+                        debug!(
+                            "Received off thread work result: completed apply operation for RID={}",
+                            rid
+                        );
                         let Some(wsfd) = glob.map.get(&rid) else {
                             return Err(tag!("Completed apply for RID that no longer exists"));
                         };
@@ -4490,7 +4501,9 @@ fn loop_inner(
                             unreachable!();
                         }
                     }
-                    Ok(TaskOutput::DmabufApplyOp(_)) => unreachable!(),
+                    Ok(TaskOutput::MirrorApply) | Ok(TaskOutput::DmabufApplyOp(_)) => {
+                        unreachable!()
+                    }
                     Err(e) => {
                         error!("worker failed: {}", e);
                         return Err(e.to_string());

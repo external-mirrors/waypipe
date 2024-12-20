@@ -201,6 +201,16 @@ pub fn fmt_bool(x: bool) -> char {
     }
 }
 
+/** Return the string iff `x`, otherwise empty string. Can be efficient
+ * for logging conditions that are rarely true. */
+pub fn string_if_bool(x: bool, y: &str) -> &str {
+    if x {
+        y
+    } else {
+        ""
+    }
+}
+
 /* A heap-allocated 64-aligned array */
 pub struct AlignedArray {
     data: *mut u8,
