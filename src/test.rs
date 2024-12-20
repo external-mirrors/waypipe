@@ -1590,7 +1590,7 @@ fn setup_linux_dmabuf(
     comp: ObjId,
     surface: ObjId,
     feedback: ObjId,
-) {
+) -> BTreeMap<u32, Vec<u64>> {
     ctx.prog_write_passthrough(build_msgs(|dst| {
         write_req_wl_display_get_registry(dst, display, registry);
     }));
@@ -1656,14 +1656,72 @@ fn setup_linux_dmabuf(
         write_evt_zwp_linux_dmabuf_feedback_v1_tranche_done(dst, feedback);
         write_evt_zwp_linux_dmabuf_feedback_v1_done(dst, feedback);
     });
-    let (_rmsgs, rfds) = ctx.comp_write(&msgs[..], &[&table_fd]).unwrap();
-    assert!(rfds.len() == 1);
-    drop(rfds);
-    /* exact replication not guaranteed for these; parsing returned messages is not critical since support _should_ be present */
+    let (rmsgs, mut rfds) = ctx.comp_write(&msgs[..], &[&table_fd]).unwrap();
+    rfds.reverse();
 
-    // TODO: parse and return the map of format and modifier pairs; this would
-    // make it possible to test mixed gpu scenarios, and to handle cases
-    // where the list of modifiers is restricted when video encoding is enabled
+    let mut mod_table: BTreeMap<u32, Vec<u64>> = BTreeMap::new();
+    let mut tranches: Vec<Vec<(u32, u64)>> = Vec::new();
+    let mut current_tranche = Vec::new();
+    let mut format_table: Vec<(u32, u64)> = Vec::new();
+    for msg in rmsgs {
+        let (obj, _len, opcode) = parse_wl_header(&msg);
+        /* Have only send events to this dmabuf_feedback */
+        assert!(obj == feedback);
+        match MethodId::Event(opcode) {
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_MAIN_DEVICE => {
+                /* ignore, Waypipe may choose a different one */
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_TARGET_DEVICE => {
+                /* ignore, Waypipe currently doesn't do anything interesting here */
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_FLAGS => {
+                /* ignore, Waypipe currently doesn't do anything interesting here */
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_FORMATS => {
+                let format_list =
+                    parse_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(&msg).unwrap();
+                /* The indices correspond to the last received format table, and should must be interpreted immediately
+                 * in case the format table is changed later on */
+                for c in format_list.chunks_exact(2) {
+                    let idx = u16::from_le_bytes(c.try_into().unwrap());
+                    let entry: (u32, u64) = *format_table
+                        .get(idx as usize)
+                        .expect("format index out of range");
+                    current_tranche.push(entry);
+                }
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_DONE => {
+                tranches.push(current_tranche.clone());
+                current_tranche = Vec::new();
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_FORMAT_TABLE => {
+                let fd = rfds.pop().unwrap();
+                let len = parse_evt_zwp_linux_dmabuf_feedback_v1_format_table(&msg).unwrap();
+                let table_contents = get_file_contents(&fd, len as usize).unwrap();
+                for chunk in table_contents.chunks_exact(16) {
+                    let format: u32 = u32::from_le_bytes(chunk[..4].try_into().unwrap());
+                    let modifier: u64 = u64::from_le_bytes(chunk[8..].try_into().unwrap());
+                    format_table.push((format, modifier));
+                }
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_DONE => {
+                mod_table = BTreeMap::new();
+                for t in &tranches {
+                    for (fmt, modifier) in t {
+                        mod_table
+                            .entry(*fmt)
+                            .and_modify(|x| x.push(*modifier))
+                            .or_insert(vec![*modifier]);
+                    }
+                }
+            }
+            _ => {
+                panic!("Unexpected opcode: {}", opcode);
+            }
+        }
+    }
+    assert!(rfds.is_empty());
+    mod_table
 }
 
 #[cfg(feature = "dmabuf")]
@@ -1687,14 +1745,17 @@ fn proto_dmabuf() {
                 ObjId(0xff000000),
             );
 
-            setup_linux_dmabuf(
+            let supported_modifier_table = setup_linux_dmabuf(
                 &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
             );
+            let fmt = wayland_to_drm(WlShmFormat::Rgb565);
+            let bpp = 2;
+            let Some(mod_list) = supported_modifier_table.get(&fmt) else {
+                println!("Skipping test, format not supported");
+                return;
+            };
 
             for (w, h, immed) in [(3, 4, true), (64, 64, true), (513, 511, false)] {
-                let fmt = wayland_to_drm(WlShmFormat::Rgb565);
-                let bpp = 2;
-
                 let mut img_data = vec![0u8; (w * h) as usize * bpp];
                 let mut i: u16 = 0x1234;
                 /* Draw a square inside */
@@ -1706,10 +1767,8 @@ fn proto_dmabuf() {
                     }
                 }
 
-                let modifier_list = vulk.get_supported_modifiers(fmt);
                 let (img, planes) =
-                    vulkan_create_dmabuf(&vulk, w as u32, h as u32, fmt, &modifier_list, false)
-                        .unwrap();
+                    vulkan_create_dmabuf(&vulk, w as u32, h as u32, fmt, &mod_list, false).unwrap();
 
                 let msgs = build_msgs(|dst| {
                     write_req_zwp_linux_dmabuf_v1_create_params(dst, dmabuf, params);
@@ -1852,11 +1911,11 @@ fn create_dmabuf_and_copy(
     w: usize,
     h: usize,
     fmt: u32,
+    modifier_list: &[u64],
     initial_data: &[u8],
 ) -> Result<(Arc<VulkanDmabuf>, Arc<VulkanDmabuf>), String> {
-    let modifier_list = vulk.get_supported_modifiers(fmt);
     let (img, planes) =
-        vulkan_create_dmabuf(&vulk, w as u32, h as u32, fmt, &modifier_list, false).unwrap();
+        vulkan_create_dmabuf(&vulk, w as u32, h as u32, fmt, modifier_list, false).unwrap();
 
     /* Initialize the image with garbage data */
     let tmp_img = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), false).unwrap());
@@ -1929,10 +1988,14 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
                 ObjId(8),
             );
 
-            setup_linux_dmabuf(
+            let supported_modifier_table = setup_linux_dmabuf(
                 &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
             );
-
+            let fmt = wayland_to_drm(WlShmFormat::Xrgb8888);
+            let Some(modifier_list) = supported_modifier_table.get(&fmt) else {
+                println!("Skipping test, format {:#08x} not supported", fmt);
+                return;
+            };
             // todo: run these in parallel?
 
             // The small (width <= 32, height <= 16 test sizes fail) with uniform (88)
@@ -1940,11 +2003,18 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
             for (w, h) in [(64, 64), (257, 240), (1, 1), (11, 200), (201, 10)] {
                 println!("Testing image transfer for WxH: {}x{}", w, h);
 
-                let fmt = wayland_to_drm(WlShmFormat::Xrgb8888);
-
                 let seed = fill_pseudorand_xrgb(w, h);
                 let (img, mirror) = create_dmabuf_and_copy(
-                    vulk, &mut ctx, params, dmabuf, buffer, w, h, fmt, &seed,
+                    vulk,
+                    &mut ctx,
+                    params,
+                    dmabuf,
+                    buffer,
+                    w,
+                    h,
+                    fmt,
+                    modifier_list,
+                    &seed,
                 )
                 .unwrap();
 
@@ -2091,16 +2161,7 @@ fn test_video_combo(
 #[test]
 fn proto_dmavid_vp9() {
     for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(
-            Some(dev_id),
-            &VideoSetting {
-                format: Some(VideoFormat::VP9),
-                bits_per_frame: None,
-                enc_pref: None,
-                dec_pref: None,
-            },
-            true,
-        ) else {
+        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
             continue;
         };
         test_video_combo(&vulk, VideoFormat::VP9, false, false, false);
@@ -2111,17 +2172,7 @@ fn proto_dmavid_vp9() {
 #[test]
 fn proto_dmavid_h264() {
     for dev_id in list_vulkan_device_ids() {
-        // TODO: parse received modifier lists to avoid needing a with-video setup here
-        let Ok(vulk) = setup_vulkan(
-            Some(dev_id),
-            &VideoSetting {
-                format: Some(VideoFormat::VP9),
-                bits_per_frame: None,
-                enc_pref: None,
-                dec_pref: None,
-            },
-            true,
-        ) else {
+        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
             continue;
         };
 
@@ -2342,7 +2393,7 @@ fn proto_dmabuf_damage() {
                 ObjId(8),
             );
 
-            setup_linux_dmabuf(
+            let supported_modifier_table = setup_linux_dmabuf(
                 &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
             );
 
@@ -2364,10 +2415,25 @@ fn proto_dmabuf_damage() {
                     let format = wayland_to_drm(wl_format);
                     let stride = bpp * w;
                     let file_sz = h * stride;
+
+                    let Some(modifier_list) = supported_modifier_table.get(&format) else {
+                        println!("Skipping test, format {:#08x} not supported", format);
+                        continue;
+                    };
+
                     let mut base = vec![0x80; file_sz];
 
                     let (img, mirror) = create_dmabuf_and_copy(
-                        &vulk, &mut ctx, params, dmabuf, buffer, w, h, format, &base,
+                        &vulk,
+                        &mut ctx,
+                        params,
+                        dmabuf,
+                        buffer,
+                        w,
+                        h,
+                        format,
+                        modifier_list,
+                        &base,
                     )
                     .unwrap();
 
@@ -2471,7 +2537,7 @@ fn proto_explicit_sync() {
                 ObjId(11),
             );
 
-            setup_linux_dmabuf(
+            let supported_modifier_table = setup_linux_dmabuf(
                 &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
             );
             ctx.comp_write_passthrough(build_msgs(|dst| {
@@ -2515,8 +2581,21 @@ fn proto_explicit_sync() {
             let file_sz = h * w;
             let mut base = vec![0x80; file_sz];
 
+            let Some(modifier_list) = supported_modifier_table.get(&format) else {
+                println!("Skipping test, format {:#08x} not supported", format);
+                return;
+            };
             let (img, mirror) = create_dmabuf_and_copy(
-                &vulk, &mut ctx, params, dmabuf, buffer, w, h, format, &base,
+                &vulk,
+                &mut ctx,
+                params,
+                dmabuf,
+                buffer,
+                w,
+                h,
+                format,
+                modifier_list,
+                &base,
             )
             .unwrap();
 
@@ -2916,10 +2995,13 @@ fn proto_test_screencopy_dmabuf() {
                     dst, screencopy, frame, 0, output,
                 );
             }));
+
+            /* Note: This assumes the Waypipe instance supports all the modifiers that the
+             * test framework does */
             ctx.comp_write_passthrough(build_msgs(|dst| {
                 write_evt_zwp_linux_dmabuf_v1_format(dst, dmabuf, fmt);
-                for m in modifier_list {
-                    let (mod_hi, mod_lo) = split_u64(m);
+                for m in &modifier_list {
+                    let (mod_hi, mod_lo) = split_u64(*m);
                     write_evt_zwp_linux_dmabuf_v1_modifier(dst, dmabuf, fmt, mod_hi, mod_lo);
                 }
                 write_evt_zwlr_screencopy_frame_v1_linux_dmabuf(dst, frame, fmt, w, h);
@@ -2927,7 +3009,16 @@ fn proto_test_screencopy_dmabuf() {
             }));
 
             let (prog_img, comp_img) = create_dmabuf_and_copy(
-                &vulk, &mut ctx, params, dmabuf, buffer, w as _, h as _, fmt, &img_data,
+                &vulk,
+                &mut ctx,
+                params,
+                dmabuf,
+                buffer,
+                w as _,
+                h as _,
+                fmt,
+                &modifier_list,
+                &img_data,
             )
             .unwrap();
 
