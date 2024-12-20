@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+/*! No-op implementations to build with specific features disabled */
 #![allow(unused_variables)]
 #[cfg(not(feature = "dmabuf"))]
 mod dmabuf_stub {

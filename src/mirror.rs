@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-
+/*! Structures to hold copy of a buffer */
 use crate::tag;
 use crate::util::*;
 use nix::errno::Errno;

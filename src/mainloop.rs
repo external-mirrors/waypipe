@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-
+/*! Logic and organization to proxy a single Wayland connection */
 use crate::compress::*;
 #[cfg(feature = "dmabuf")]
 use crate::dmabuf::*;

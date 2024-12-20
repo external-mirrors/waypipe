@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+/*! Support for DMABUFs and timeline semaphores (using Vulkan) */
 #![cfg(feature = "dmabuf")]
 use crate::tag;
 use crate::util::*;

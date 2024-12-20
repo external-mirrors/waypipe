@@ -1,4 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+/*! Tests to verify proxy transforms messages and replicates file descriptors
+ * correctly in response to typical Wayland communication transcripts (and helper functions) */
 #![cfg(test)]
 
 #[cfg(feature = "dmabuf")]

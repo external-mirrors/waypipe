@@ -1,8 +1,21 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-
+/*! Misc utilities and types */
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
 use std::str::FromStr;
+
+/** Like `format!`, but prepends file and line number.
+ *
+ * Example: `tag!("Failed to X: {} {}", arg1, arg2)` */
+#[macro_export]
+macro_rules! tag {
+    ($x:tt) => {
+        format!(concat!(std::file!(), ":", std::line!(), ": ", $x))
+    };
+    ($x:tt, $($arg:tt)+) => {
+        format!(concat!(std::file!(), ":", std::line!(), ": ", $x), $($arg)+)
+    };
+}
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum WmsgType {

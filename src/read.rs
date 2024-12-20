@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-
+/*! Structures to read messages from a socket and keep references to them */
 use crate::tag;
 use crate::util::*;
 use log::debug;

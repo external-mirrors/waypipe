@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-
+/*! `waypipe bench` implementation */
 use crate::compress::*;
 use crate::kernel::{apply_diff_one, construct_diff_segment_two};
 use crate::util::*;

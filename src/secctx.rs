@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-
+/*! Security context setup communication with the Wayland compositor */
 use crate::tag;
 use crate::util::*;
 use crate::wayland::*;

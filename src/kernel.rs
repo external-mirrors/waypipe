@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-
+/*! Fast diff calculation and application code */
 use crate::tag;
 use nix::errno::Errno;
 use nix::libc;

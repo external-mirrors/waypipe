@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+/*! Types and basic parsing/writing code for Wayland protocol */
 use crate::wayland_gen::{WaylandInterface, INTERFACE_TABLE};
 
 pub const PARSE_ERROR: &str = "Failed to parse message";

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-
+/*! Safe LZ4 and ZSTD compression wrappers */
 use core::ffi::{c_char, c_void};
 #[cfg(feature = "lz4")]
 use waypipe_lz4_wrapper::*;

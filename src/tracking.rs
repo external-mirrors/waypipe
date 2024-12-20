@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-
+/*! Wayland protocol message handling and translation logic */
 use crate::damage::*;
 #[cfg(feature = "dmabuf")]
 use crate::dmabuf::*;

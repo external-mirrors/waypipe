@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+/*! Video encoding for dmabufs */
 #![cfg(feature = "video")]
 use crate::dmabuf::*;
+use crate::tag;
 use crate::util::*;
 use crate::wayland_gen::*;
-use crate::{tag, VideoFormat};
 use ash::vk::Handle;
 use ash::*;
 use log::{debug, error};

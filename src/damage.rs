@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+/*! Damage merging logic */
 use log::debug;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
