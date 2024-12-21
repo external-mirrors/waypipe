@@ -1,28 +1,85 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/*! Tests to verify proxy transforms messages and replicates file descriptors
- * correctly in response to typical Wayland communication transcripts (and helper functions) */
-#![cfg(test)]
+/*! Protocol test runner and framework.
+ *
+ * Emulate a Wayland client/compositor pair and verify that Waypipe properly
+ * forwards messages and file descriptors.
+ *
+ * This is needed to:
+ * - Properly capture debug output from processes under test
+ * - Run Waypipe instances as individual processes instead of threads (to avoid
+ *   possible bugs if Vulkan validation layers are used for independent instances)
+ * - Test different versions of Waypipe against each other.
+ * - Break out test variants by the Vulkan physical device being used
+ */
 
-#[cfg(feature = "dmabuf")]
-use crate::dmabuf::*;
-use crate::kernel::*;
-use crate::mainloop::*;
-use crate::util::*;
-use crate::wayland::*;
-use crate::wayland_gen::*;
-use crate::*;
-use nix::errno::Errno;
-use nix::fcntl;
+use clap::{value_parser, Arg, ArgAction, Command as ClapCommand};
 use nix::libc;
-use nix::poll;
-use nix::sys::signal;
-use nix::sys::{memfd, socket, time};
-use nix::unistd;
+use nix::sys::wait::WaitStatus;
+use nix::sys::{memfd, signal, socket, time, wait};
+use nix::{errno::Errno, fcntl, poll, unistd};
+use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::io::{IoSlice, IoSliceMut};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
+
+#[allow(dead_code)]
+mod dmabuf;
+#[allow(dead_code)]
+mod kernel;
+#[allow(dead_code)]
+mod util;
+#[allow(dead_code)]
+mod video; /* Only included because it is required by 'video' */
+#[allow(dead_code)]
+mod wayland;
+mod wayland_gen;
+
+#[cfg(feature = "dmabuf")]
+use dmabuf::*;
+use kernel::*;
+use util::*;
+use wayland::*;
+use wayland_gen::*;
+
+#[derive(Debug)]
+enum StatusOk {
+    Pass,
+    Skipped,
+}
+#[derive(Debug)]
+enum StatusBad {
+    Unclear(String),
+    Fail(String),
+}
+/** Result of a test, organized so that StatusBad can be progated with ? */
+type TestResult = Result<StatusOk, StatusBad>;
+
+#[derive(Debug)]
+enum TestCategory {
+    /** Test passed */
+    Pass,
+    /** Test was skipped. */
+    Skipped,
+    /** Test failed */
+    Fail,
+    /** Something was broken, but it may be an issue in a library used by Waypipe */
+    Unclear,
+}
+/** 77 is the automake return code for a skipped test */
+const EXITCODE_SKIPPED: u8 = 77;
+/** 99 is the automake return code for a hard error (failure of
+ * test set up, segfault, or something else very unexpected) */
+const EXITCODE_UNCLEAR: u8 = 99;
+
+struct TestInfo<'a> {
+    test_name: &'a str,
+    waypipe_client: &'a OsStr,
+    waypipe_server: &'a OsStr,
+}
 
 /* Constant, saves some code when allocating sequence ids */
 const ID_SEQUENCE: [ObjId; 10] = [
@@ -37,78 +94,6 @@ const ID_SEQUENCE: [ObjId; 10] = [
     ObjId(9),
     ObjId(10),
 ];
-
-struct TestLogger {
-    max_level: log::LevelFilter,
-    color_output: bool,
-}
-
-impl log::Log for TestLogger {
-    fn enabled(&self, meta: &log::Metadata<'_>) -> bool {
-        meta.level() <= self.max_level
-    }
-    fn log(&self, record: &log::Record<'_>) {
-        if record.level() > self.max_level {
-            return;
-        }
-
-        let time = SystemTime::now().duration_since(std::time::UNIX_EPOCH);
-        let t = if let Ok(t) = time {
-            (t.as_nanos() % 100000000000u128) / 1000u128
-        } else {
-            0
-        };
-        let b = std::thread::current();
-        let thread_name = b.name().unwrap_or("");
-        let (esc1a, esc1b, esc1c) = if self.color_output {
-            let c = if thread_name == "client" {
-                "34"
-            } else if thread_name == "server" {
-                "36"
-            } else {
-                "35"
-            };
-            if record.level() <= log::Level::Error {
-                ("\x1b[0;", c, ";1m")
-            } else {
-                ("\x1b[0;", c, "m")
-            }
-        } else {
-            ("", "", "")
-        };
-        let esc2 = if self.color_output { "\x1b[0m" } else { "" };
-        let lvl_str: &str = match record.level() {
-            log::Level::Error => "ERR",
-            log::Level::Warn => "Wrn",
-            log::Level::Debug => "dbg",
-            log::Level::Info => "inf",
-            log::Level::Trace => "trc",
-        };
-
-        let msg = format!(
-            "{}{}{}[{:02}.{:06} {}({}) {}:{}]{} {}",
-            esc1a,
-            esc1b,
-            esc1c,
-            t / 1000000u128,
-            t % 1000000u128,
-            lvl_str,
-            thread_name,
-            record
-                .file()
-                .unwrap_or("src/unknown")
-                .strip_prefix("src/")
-                .unwrap(),
-            record.line().unwrap_or(0),
-            esc2,
-            record.args(),
-        );
-        println!("{}", msg);
-    }
-    fn flush(&self) {
-        /* not needed */
-    }
-}
 
 /* Write messages to the Wayland connection, followed by a test message that should directly pass through;
  * possibly stopping early if the connection is closed.
@@ -134,7 +119,7 @@ fn test_interact(
 
     /* Not: libwayland sends up to 28 fds per byte */
     const MAX_FDS_PER_BYTE: usize = 32;
-    assert!(data.len() >= (fds.len() + MAX_FDS_PER_BYTE - 1) / MAX_FDS_PER_BYTE);
+    assert!(data.len() >= fds.len().div_ceil(MAX_FDS_PER_BYTE));
 
     struct ReadState {
         data: Vec<u8>,
@@ -291,7 +276,7 @@ fn test_interact(
 
                 let r = nix::sys::socket::sendmsg::<()>(
                     pfd.as_fd().as_raw_fd(),
-                    &iovs,
+                    iovs,
                     if sfds.is_empty() { &[] } else { &cmsgs },
                     nix::sys::socket::MsgFlags::empty(),
                     None,
@@ -332,7 +317,7 @@ fn test_interact(
             let (obj_id, _length, opcode) = parse_wl_header(msg);
             if obj_id == ObjId(1) && MethodId::Event(opcode) == OPCODE_WL_DISPLAY_ERROR {
                 /* encountered error message; stop and return error */
-                let (obj, code, msg) = parse_evt_wl_display_error(&msg).unwrap();
+                let (obj, code, msg) = parse_evt_wl_display_error(msg).unwrap();
                 err = Some((obj, code, String::from_utf8(Vec::from(msg)).unwrap()));
                 break 'outer;
             }
@@ -413,7 +398,7 @@ fn test_write_msgs(socket: &OwnedFd, data: &[u8], fds: &[&OwnedFd]) {
 
         let r = nix::sys::socket::sendmsg::<()>(
             socket.as_raw_fd(),
-            &iovs,
+            iovs,
             if fds.is_empty() { &[] } else { &cmsgs },
             nix::sys::socket::MsgFlags::empty(),
             None,
@@ -542,7 +527,7 @@ fn test_read_msgs(
         }
 
         if !recv[0].fds.is_empty() {
-            fds.extend(recv[0].fds.drain(..));
+            fds.append(&mut recv[0].fds);
         }
 
         while recv[0].data.len() >= 8 {
@@ -590,6 +575,29 @@ fn test_read_msgs(
     (msgs, fds, err)
 }
 
+fn build_msgs<F>(f: F) -> Vec<u8>
+where
+    F: FnOnce(&mut &mut [u8]),
+{
+    let len = 16384;
+    let mut buf = vec![0u8; len];
+    let mut rest = &mut buf[..];
+    f(&mut rest);
+    let nwritten = len - rest.len();
+    Vec::from(&buf[..nwritten])
+}
+
+fn is_plain_msgs(
+    x: Result<(Vec<Vec<u8>>, Vec<OwnedFd>), (ObjId, u32, String)>,
+    concat: Vec<u8>,
+) -> bool {
+    if let Ok((msg, fds)) = x {
+        fds.is_empty() && msg.concat() == concat
+    } else {
+        false
+    }
+}
+
 struct ProtocolTestContext {
     sock_prog: OwnedFd,
     sock_comp: OwnedFd,
@@ -629,25 +637,64 @@ impl ProtocolTestContext {
     }
 }
 
-fn run_protocol_test_with_opts(
-    test_fn: &dyn Fn(ProtocolTestContext) -> (),
-    opts: &Options,
+struct WaypipeOptions<'a> {
     wire_version: Option<u32>,
-) {
-    let max_level = log::LevelFilter::Debug;
-    let logger = TestLogger {
-        max_level,
-        color_output: unistd::isatty(2).unwrap(),
-    };
-    log::set_max_level(max_level);
-    // todo: this is global; any way to log per test? (E.g: making cargo test fork?)
-    let _ = log::set_boxed_logger(Box::new(logger));
+    drm_node: Option<u64>,
+    video: VideoSetting,
+    title_prefix: &'a str,
+    compression: Compression,
+}
 
+fn build_arguments(waypipe_bin: &OsStr, opts: &WaypipeOptions, is_client: bool) -> Vec<String> {
+    let mut v = Vec::new();
+
+    let cross_runner = std::env::var_os("CROSS_TARGET_RUNNER");
+    let cx: &OsStr = cross_runner.as_deref().unwrap_or_default();
+    /* note: CROSS_TARGET_RUNNER is typically something like 'CROSS_TARGET_RUNNER=/linux-runner aarch64' */
+    for chunk in cx.as_encoded_bytes().split(|x| *x == b' ') {
+        if !chunk.is_empty() {
+            v.push(std::str::from_utf8(chunk).unwrap().into());
+        }
+    }
+
+    v.push(waypipe_bin.to_str().unwrap().into());
+    v.push("--debug".into());
+    v.push("--threads=1".into());
+    v.push(format!("--compress={}", opts.compression));
+    if !opts.title_prefix.is_empty() {
+        v.push(format!("--title-prefix={}", opts.title_prefix));
+    }
+    if let Some(device_id) = opts.drm_node {
+        v.push(format!("--drm-node=/dev/dri/renderD{}", (device_id & 0xff)));
+    } else {
+        v.push("--no-gpu".into());
+    }
+    if opts.video.format.is_some() {
+        v.push(format!("--video={}", opts.video));
+    }
+    if let Some(ver) = opts.wire_version {
+        v.push(format!("--test-wire-version={}", ver));
+    }
+
+    if is_client {
+        v.push("client-conn".into());
+    } else {
+        v.push("server-conn".into());
+    }
+    v
+}
+
+fn run_protocol_test_with_opts(
+    info: &TestInfo,
+    opts_client: &WaypipeOptions,
+    opts_server: &WaypipeOptions,
+    test_fn: &dyn Fn(ProtocolTestContext),
+) -> Result<(), StatusBad> {
     let (channel1, channel2) = socket::socketpair(
         socket::AddressFamily::Unix,
         socket::SockType::Stream,
         None,
-        socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
+        socket::SockFlag::SOCK_CLOEXEC,
     )
     .unwrap();
     let (prog_appl1, prog_appl2) = socket::socketpair(
@@ -665,163 +712,95 @@ fn run_protocol_test_with_opts(
     )
     .unwrap();
 
-    let opt_ref = opts;
-    let wire_version = wire_version.unwrap_or(WAYPIPE_PROTOCOL_VERSION);
-    let sigint_received = AtomicBool::new(false);
-    let mut sigmask = signal::SigSet::empty();
-    signal::pthread_sigmask(signal::SigmaskHow::SIG_SETMASK, None, Some(&mut sigmask)).unwrap();
-    let sigrec_ref = &sigint_received;
+    let client_args = build_arguments(info.waypipe_client, opts_client, true);
+    let server_args = build_arguments(info.waypipe_server, opts_server, false);
 
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .name("client".into())
-            .spawn_scoped(scope, move || {
-                main_interface_loop(
-                    channel1,
-                    prog_comp2,
-                    opt_ref,
-                    wire_version,
-                    true,
-                    sigmask,
-                    sigrec_ref,
-                )
-            })
-            .unwrap();
+    set_cloexec(&prog_comp2, false).unwrap();
+    set_cloexec(&channel1, false).unwrap();
+    let mut client: Child = Command::new(&client_args[0])
+        .args(&client_args[1..])
+        .env("WAYLAND_SOCKET", format!("{}", prog_comp2.as_raw_fd()))
+        .env("WAYPIPE_CONNECTION_FD", format!("{}", channel1.as_raw_fd()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    drop(prog_comp2);
+    drop(channel1);
 
-        std::thread::Builder::new()
-            .name("server".into())
-            .spawn_scoped(scope, move || {
-                main_interface_loop(
-                    channel2,
-                    prog_appl2,
-                    opt_ref,
-                    MIN_PROTOCOL_VERSION,
-                    false,
-                    sigmask,
-                    sigrec_ref,
-                )
-            })
-            .unwrap();
+    set_cloexec(&prog_appl2, false).unwrap();
+    set_cloexec(&channel2, false).unwrap();
+    let mut server: Child = Command::new(&server_args[0])
+        .args(&server_args[1..])
+        .env("WAYLAND_SOCKET", format!("{}", channel2.as_raw_fd()))
+        .env(
+            "WAYPIPE_CONNECTION_FD",
+            format!("{}", prog_appl2.as_raw_fd()),
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    drop(prog_appl2);
+    drop(channel2);
 
-        let ctx = ProtocolTestContext {
-            sock_prog: prog_appl1,
-            sock_comp: prog_comp1,
-        };
-        test_fn(ctx)
-    });
-
-    log::set_max_level(log::LevelFilter::Off);
-}
-
-fn run_protocol_test(test_fn: &dyn Fn(ProtocolTestContext) -> ()) {
-    let options = Options {
-        debug: true,
-        compression: Compression::None,
-        video: VideoSetting::default(),
-        threads: 1,
-        title_prefix: String::new(),
-        no_gpu: false,
-        drm_node: None,
+    let ctx = ProtocolTestContext {
+        sock_prog: prog_appl1,
+        sock_comp: prog_comp1,
     };
-    run_protocol_test_with_opts(test_fn, &options, None);
-}
+    test_fn(ctx);
 
-#[cfg(feature = "dmabuf")]
-fn run_protocol_test_with_drm_node(device_id: u64, test_fn: &dyn Fn(ProtocolTestContext) -> ()) {
-    let options = Options {
-        debug: true,
-        compression: Compression::None,
-        video: VideoSetting::default(),
-        threads: 1,
-        title_prefix: String::new(),
-        no_gpu: false,
-        drm_node: Some(device_id_to_node_path(device_id)),
-    };
-    run_protocol_test_with_opts(test_fn, &options, None);
-}
-
-fn build_msgs<F>(f: F) -> Vec<u8>
-where
-    F: FnOnce(&mut &mut [u8]) -> (),
-{
-    let len = 16384;
-    let mut buf = vec![0u8; len];
-    let mut rest = &mut buf[..];
-    f(&mut rest);
-    let nwritten = len - rest.len();
-    Vec::from(&buf[..nwritten])
-}
-
-fn is_plain_msgs(
-    x: Result<(Vec<Vec<u8>>, Vec<OwnedFd>), (ObjId, u32, String)>,
-    concat: Vec<u8>,
-) -> bool {
-    if let Ok((msg, fds)) = x {
-        fds.is_empty() && msg.concat() == concat
-    } else {
-        false
+    /* Wait for processes to die */
+    // todo: this needs a 1 second timeout to properly catch deadlocked processes
+    let exit_c = client.wait().unwrap();
+    let exit_s = server.wait().unwrap();
+    if !exit_s.success() || !exit_c.success() {
+        let msg = tag!(
+            "Waypipe connection handlers for {} did not exit cleanly: client {} server {}",
+            info.test_name,
+            exit_c.success(),
+            exit_s.success()
+        );
+        return Err(StatusBad::Fail(msg));
     }
+
+    Ok(())
 }
 
 #[cfg(feature = "dmabuf")]
-fn device_id_to_node_path(device_id: u64) -> PathBuf {
-    let mut drm_node = OsString::new();
-    drm_node.push("/dev/dri/renderD");
-    drm_node.push(OsString::from((device_id & 0xff).to_string()));
-    drm_node.into()
-}
-
-#[test]
-fn proto_basic() {
-    /* Test to verify that a simple message exchange behaves as expected */
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
-        let write_prog = build_msgs(|dst| {
-            write_req_wl_display_get_registry(dst, ObjId(1), ObjId(2));
-            write_req_wl_display_sync(dst, ObjId(1), ObjId(3));
-        });
-        let (resp, resp_fds) = ctx.prog_write(&write_prog, &[]).unwrap();
-        assert!(resp_fds.is_empty());
-        assert!(resp.concat() == write_prog);
-
-        let write_comp = build_msgs(|dst| {
-            write_evt_wl_registry_global(dst, ObjId(2), 1, "wl_compositor".as_bytes(), 3);
-            write_evt_wl_callback_done(dst, ObjId(3), 0);
-        });
-        assert!(is_plain_msgs(ctx.comp_write(&write_comp, &[]), write_comp));
-    });
-}
-
-#[test]
-fn proto_base_wire() {
-    /* Test that using the base protocol version still works, for basic operations */
-    let opts = Options {
-        debug: false,
+fn run_protocol_test_with_drm_node(
+    info: &TestInfo,
+    device: &RenderDevice,
+    test_fn: &dyn Fn(ProtocolTestContext),
+) -> Result<(), StatusBad> {
+    let options = WaypipeOptions {
+        wire_version: None,
+        drm_node: Some(device.id),
         compression: Compression::None,
+        title_prefix: "",
         video: VideoSetting::default(),
-        threads: 1,
-        title_prefix: String::new(),
-        no_gpu: true,
-        drm_node: None,
     };
-    run_protocol_test_with_opts(
-        &|mut ctx: ProtocolTestContext| {
-            ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_wl_display_get_registry(dst, ObjId(1), ObjId(2));
-                write_req_wl_display_sync(dst, ObjId(1), ObjId(3));
-            }));
-            ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_wl_callback_done(dst, ObjId(3), 0);
-            }));
-            ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_wl_display_sync(dst, ObjId(1), ObjId(3));
-            }));
-            ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_wl_callback_done(dst, ObjId(3), 0);
-            }));
-        },
-        &opts,
-        Some(MIN_PROTOCOL_VERSION),
-    );
+    run_protocol_test_with_opts(info, &options, &options, test_fn)
+}
+
+fn run_protocol_test(
+    info: &TestInfo,
+    test_fn: &dyn Fn(ProtocolTestContext),
+) -> Result<(), StatusBad> {
+    let options = WaypipeOptions {
+        wire_version: None,
+        drm_node: None,
+        compression: Compression::None,
+        title_prefix: "",
+        video: VideoSetting::default(),
+    };
+    run_protocol_test_with_opts(info, &options, &options, test_fn)
+}
+
+fn get_intf_name(intf: WaylandInterface) -> &'static [u8] {
+    INTERFACE_TABLE[intf as usize].name.as_bytes()
 }
 
 fn make_file_with_contents(data: &[u8]) -> Result<OwnedFd, String> {
@@ -845,9 +824,9 @@ fn update_file_contents(fd: &OwnedFd, data: &[u8]) -> Result<(), String> {
     Ok(())
 }
 fn resize_file_with_contents(fd: &OwnedFd, data: &[u8]) -> Result<(), String> {
-    unistd::ftruncate(&fd, data.len().try_into().unwrap())
+    unistd::ftruncate(fd, data.len().try_into().unwrap())
         .map_err(|x| tag!("Failed to resize memfd: {:?}", x))?;
-    let mapping = ExternalMapping::new(&fd, data.len(), false)?;
+    let mapping = ExternalMapping::new(fd, data.len(), false)?;
     copy_onto_mapping(data, &mapping, 0);
     Ok(())
 }
@@ -859,11 +838,148 @@ fn get_file_contents(fd: &OwnedFd, len: usize) -> Result<Vec<u8>, String> {
     Ok(data)
 }
 
-#[test]
-fn proto_keymap() {
+fn test_is_included(name: &str, filter: &[&str]) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    for x in filter {
+        if name.contains(x) {
+            return true;
+        }
+    }
+    false
+}
+
+fn register_single<'a>(
+    tests: &mut Vec<(String, Box<dyn Fn(TestInfo) -> TestResult + 'a>)>,
+    filter: &[&str],
+    name: &str,
+    func: fn(TestInfo) -> TestResult,
+) {
+    if !test_is_included(name, filter) {
+        return;
+    }
+
+    tests.push((format!("proto::{}", name), Box::new(func)));
+}
+
+fn register_per_device<'a>(
+    tests: &mut Vec<(String, Box<dyn Fn(TestInfo) -> TestResult + 'a>)>,
+    filter: &[&str],
+    devices: &[(String, u64)],
+    name: &str,
+    func: fn(TestInfo, RenderDevice) -> TestResult,
+) {
+    for (dev_name, dev_id) in devices {
+        let ext_name = format!("proto::{}::{}", name, dev_name);
+        if !test_is_included(&ext_name, filter) {
+            return;
+        }
+        let m: (String, u64) = (dev_name.clone(), *dev_id);
+        tests.push((
+            ext_name,
+            Box::new(move |info| {
+                let s = &m;
+                let dev = RenderDevice {
+                    name: &s.0,
+                    id: s.1,
+                };
+                func(info, dev)
+            }),
+        ));
+    }
+}
+
+struct RenderDevice<'a> {
+    #[allow(unused)]
+    name: &'a str,
+    id: u64,
+}
+
+pub fn list_vulkan_device_ids() -> Vec<(String, u64)> {
+    use nix::sys::stat;
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut dev_ids = Vec::new();
+    let Ok(dir_iter) = std::fs::read_dir("/dev/dri") else {
+        /* On failure, assume Vulkan is not available */
+        return dev_ids;
+    };
+
+    for r in dir_iter {
+        let std::io::Result::Ok(entry) = r else {
+            continue;
+        };
+        if !entry.file_name().as_bytes().starts_with(b"renderD") {
+            continue;
+        }
+        let Ok(result) = stat::stat(&entry.path()) else {
+            continue;
+        };
+        /* st_rdev may be u32 on old architectures */
+        #[allow(clippy::unnecessary_cast)]
+        dev_ids.push((
+            entry.file_name().into_string().unwrap(),
+            result.st_rdev as u64,
+        ));
+    }
+    dev_ids
+}
+
+/** No-op signal handler (used to ensure SIGCHLD interrupts poll) */
+extern "C" fn noop_signal_handler(_: i32) {}
+
+fn proto_basic(info: TestInfo) -> TestResult {
+    /* Test to verify that a simple message exchange behaves as expected */
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
+        let write_prog = build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, ObjId(1), ObjId(2));
+            write_req_wl_display_sync(dst, ObjId(1), ObjId(3));
+        });
+        let (resp, resp_fds) = ctx.prog_write(&write_prog, &[]).unwrap();
+        assert!(resp_fds.is_empty());
+        assert!(resp.concat() == write_prog);
+
+        let write_comp = build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, ObjId(2), 1, "wl_compositor".as_bytes(), 3);
+            write_evt_wl_callback_done(dst, ObjId(3), 0);
+        });
+        assert!(is_plain_msgs(ctx.comp_write(&write_comp, &[]), write_comp));
+    })?;
+    Ok(StatusOk::Pass)
+}
+
+fn proto_base_wire(info: TestInfo) -> TestResult {
+    /* Test that using the base protocol version still works, for basic operations */
+    let opts = WaypipeOptions {
+        wire_version: Some(MIN_PROTOCOL_VERSION),
+        drm_node: None,
+        title_prefix: "",
+        compression: Compression::None,
+        video: VideoSetting::default(),
+    };
+    run_protocol_test_with_opts(&info, &opts, &opts, &|mut ctx: ProtocolTestContext| {
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, ObjId(1), ObjId(2));
+            write_req_wl_display_sync(dst, ObjId(1), ObjId(3));
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_callback_done(dst, ObjId(3), 0);
+        }));
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_sync(dst, ObjId(1), ObjId(3));
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_callback_done(dst, ObjId(3), 0);
+        }));
+    })?;
+    Ok(StatusOk::Pass)
+}
+
+fn proto_keymap(info: TestInfo) -> TestResult {
     /* Test to verify that keymap files can be transferred reliably */
     for length in [0, 9, 4096, 300001] {
-        run_protocol_test(&|mut ctx: ProtocolTestContext| {
+        run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
             let source_text = "test data ".as_bytes();
             let mut source_data =
                 source_text.repeat(align(length, source_text.len()) / source_text.len());
@@ -895,7 +1011,7 @@ fn proto_keymap() {
                 write_req_wl_seat_get_keyboard(dst, seat, keyboard);
             }));
 
-            let (mut msgs, mut fds) = ctx
+            let (msgs, mut fds) = ctx
                 .comp_write(
                     &build_msgs(|dst| {
                         write_evt_wl_keyboard_keymap(
@@ -911,13 +1027,14 @@ fn proto_keymap() {
                 .unwrap();
             drop(source_fd);
 
-            let (_format, keymap_length) = parse_evt_wl_keyboard_keymap(&mut msgs[0]).unwrap();
+            let (_format, keymap_length) = parse_evt_wl_keyboard_keymap(&msgs[0]).unwrap();
 
             let new_kb_fd = fds.remove(0);
             let new_data = get_file_contents(&new_kb_fd, keymap_length as usize).unwrap();
             assert!(new_data == source_data);
-        });
+        })?;
     }
+    Ok(StatusOk::Pass)
 }
 
 /* Send `data` into `src` and check that it comes out of `dst` */
@@ -928,7 +1045,7 @@ fn check_pipe_transfer(pipe_w: OwnedFd, pipe_r: OwnedFd, data: &[u8]) {
 
     let mut ord = Some(pipe_r);
     let mut owr = Some(pipe_w);
-    if data.len() == 0 {
+    if data.is_empty() {
         owr = None;
     }
 
@@ -937,13 +1054,13 @@ fn check_pipe_transfer(pipe_w: OwnedFd, pipe_r: OwnedFd, data: &[u8]) {
     let mut tmp = vec![0; 4096];
     while ord.is_some() || owr.is_some() {
         let mut pfds = Vec::new();
-        let wr_idx = owr.as_ref().and_then(|x| {
+        let wr_idx = owr.as_ref().map(|x| {
             pfds.push(poll::PollFd::new(x.as_fd(), poll::PollFlags::POLLOUT));
-            Some(pfds.len() - 1)
+            pfds.len() - 1
         });
-        let rd_idx = ord.as_ref().and_then(|x| {
+        let rd_idx = ord.as_ref().map(|x| {
             pfds.push(poll::PollFd::new(x.as_fd(), poll::PollFlags::POLLIN));
-            Some(pfds.len() - 1)
+            pfds.len() - 1
         });
         let current = Instant::now();
         let elapsed = current.duration_since(start);
@@ -955,8 +1072,8 @@ fn check_pipe_transfer(pipe_w: OwnedFd, pipe_r: OwnedFd, data: &[u8]) {
         if let Err(e) = ret {
             assert!(e == Errno::EINTR);
         }
-        let rev_wr = wr_idx.and_then(|i| Some(pfds[i].revents().unwrap()));
-        let rev_rd = rd_idx.and_then(|i| Some(pfds[i].revents().unwrap()));
+        let rev_wr = wr_idx.map(|i| pfds[i].revents().unwrap());
+        let rev_rd = rd_idx.map(|i| pfds[i].revents().unwrap());
 
         if let Some(evts) = rev_rd {
             assert!(!evts.contains(poll::PollFlags::POLLERR));
@@ -1007,12 +1124,7 @@ fn check_pipe_transfer(pipe_w: OwnedFd, pipe_r: OwnedFd, data: &[u8]) {
     assert!(recv == data);
 }
 
-fn get_intf_name(intf: WaylandInterface) -> &'static [u8] {
-    INTERFACE_TABLE[intf as usize].name.as_bytes()
-}
-
-#[test]
-fn proto_pipe_write() {
+fn proto_pipe_write(info: TestInfo) -> TestResult {
     let (display, registry, manager, seat, dev, source) =
         (ObjId(1), ObjId(2), ObjId(3), ObjId(4), ObjId(5), ObjId(6));
     let seat_name = get_intf_name(WaylandInterface::WlSeat);
@@ -1110,7 +1222,7 @@ fn proto_pipe_write() {
         }),
         build_msgs(|dst| {
             write_evt_wl_registry_global(dst, registry, 1, seat_name, 7);
-            write_evt_wl_registry_global(dst, registry, 2, &wlr_name, 1);
+            write_evt_wl_registry_global(dst, registry, 2, wlr_name, 1);
         }),
         build_msgs(|dst| {
             write_req_wl_registry_bind(dst, registry, 1, seat_name, 7, seat);
@@ -1222,7 +1334,7 @@ fn proto_pipe_write() {
         }),
         build_msgs(|dst| {
             write_evt_wl_registry_global(dst, registry, 1, seat_name, 7);
-            write_evt_wl_registry_global(dst, registry, 2, &wlr_name, 1);
+            write_evt_wl_registry_global(dst, registry, 2, wlr_name, 1);
         }),
         build_msgs(|dst| {
             write_req_wl_registry_bind(dst, registry, 1, seat_name, 7, seat);
@@ -1248,7 +1360,7 @@ fn proto_pipe_write() {
         .chain(std::iter::repeat(&256_usize));
     for (test_no, (test, length)) in test_cases.iter().zip(lengths).enumerate() {
         print!("Test {}.", test_no);
-        run_protocol_test(&|mut ctx: ProtocolTestContext| {
+        run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
             let (pipe_r, pipe_w) =
                 unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK).unwrap();
             for (i, line) in test.iter().enumerate().take(test.iter().len() - 1) {
@@ -1275,18 +1387,18 @@ fn proto_pipe_write() {
             data.truncate(*length);
 
             check_pipe_transfer(pipe_w, pipe_r, &data);
-        });
+        })?;
     }
+    Ok(StatusOk::Pass)
 }
 
-#[test]
-fn proto_presentation_time() {
+fn proto_presentation_time(info: TestInfo) -> TestResult {
     /* Test to verify that presentation time handling does not introduce major errors */
     for (pres_clock, fast_start) in [
         (libc::CLOCK_MONOTONIC as u32, true),
         (libc::CLOCK_REALTIME as u32, false),
     ] {
-        run_protocol_test(&|mut ctx: ProtocolTestContext| {
+        run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
             let (display, registry, pres, comp, surface, feedback) =
                 (ObjId(1), ObjId(2), ObjId(3), ObjId(4), ObjId(5), ObjId(6));
 
@@ -1351,7 +1463,7 @@ fn proto_presentation_time() {
                 );
             }
             assert!(
-                parse_wl_header(&msgs.last().unwrap())
+                parse_wl_header(msgs.last().unwrap())
                     == (
                         feedback,
                         length_evt_wp_presentation_feedback_presented(),
@@ -1359,7 +1471,7 @@ fn proto_presentation_time() {
                     )
             );
             let (tv_sec_hi, tv_sec_lo, tv_nsec, _refresh, _seq_hi, _seq_lo, _flags) =
-                parse_evt_wp_presentation_feedback_presented(&msgs.last().unwrap()).unwrap();
+                parse_evt_wp_presentation_feedback_presented(msgs.last().unwrap()).unwrap();
             let output_ns =
                 1000000000 * (join_u64(tv_sec_hi, tv_sec_lo) as u128) + (tv_nsec as u128);
 
@@ -1377,13 +1489,13 @@ fn proto_presentation_time() {
             );
 
             assert!(abs_diff < max_time_error.as_nanos());
-        });
+        })?;
     }
+    Ok(StatusOk::Pass)
 }
 
-#[test]
-fn proto_object_collision() {
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
+fn proto_object_collision(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let (display, registry) = (ObjId(1), ObjId(2));
         let msgs = build_msgs(|dst| {
             write_req_wl_display_get_registry(dst, display, registry);
@@ -1394,12 +1506,12 @@ fn proto_object_collision() {
             println!("error: {:?}", e);
         }
         assert!(res.is_err());
-    });
+    })?;
+    Ok(StatusOk::Pass)
 }
 
-#[test]
-fn proto_shm_buffer() {
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
+fn proto_shm_buffer(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let (display, registry, shm, comp, surface, pool, buffer) = (
             ObjId(1),
             ObjId(2),
@@ -1491,12 +1603,12 @@ fn proto_shm_buffer() {
                 write_evt_wl_display_delete_id(dst, display, buffer.0);
             }));
         }
-    });
+    })?;
+    Ok(StatusOk::Pass)
 }
 
-#[test]
-fn proto_shm_extend() {
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
+fn proto_shm_extend(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let (display, registry, shm, comp, surface, pool, buf_a, buf_b, buf_c) = (
             ObjId(1),
             ObjId(2),
@@ -1579,7 +1691,8 @@ fn proto_shm_extend() {
             let mir = get_file_contents(&mirror_fd, new_sz).unwrap();
             assert!(mir == img_data);
         }
-    });
+    })?;
+    Ok(StatusOk::Pass)
 }
 
 #[cfg(feature = "dmabuf")]
@@ -1727,161 +1840,158 @@ fn setup_linux_dmabuf(
 }
 
 #[cfg(feature = "dmabuf")]
-#[test]
-fn proto_dmabuf() {
-    for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
-            continue;
+fn proto_dmabuf(info: TestInfo, device: RenderDevice) -> TestResult {
+    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+        return Ok(StatusOk::Skipped);
+    };
+
+    run_protocol_test_with_drm_node(&info, &device, &|mut ctx: ProtocolTestContext| {
+        let (display, registry, dmabuf, comp, surface, feedback, params, buffer, sbuffer) = (
+            ObjId(1),
+            ObjId(2),
+            ObjId(3),
+            ObjId(4),
+            ObjId(5),
+            ObjId(6),
+            ObjId(7),
+            ObjId(8),
+            ObjId(0xff000000),
+        );
+
+        let supported_modifier_table = setup_linux_dmabuf(
+            &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
+        );
+        let fmt = wayland_to_drm(WlShmFormat::Rgb565);
+        let bpp = 2;
+        let Some(mod_list) = supported_modifier_table.get(&fmt) else {
+            println!("Skipping test, format not supported");
+            return;
         };
 
-        run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
-            let (display, registry, dmabuf, comp, surface, feedback, params, buffer, sbuffer) = (
-                ObjId(1),
-                ObjId(2),
-                ObjId(3),
-                ObjId(4),
-                ObjId(5),
-                ObjId(6),
-                ObjId(7),
-                ObjId(8),
-                ObjId(0xff000000),
-            );
-
-            let supported_modifier_table = setup_linux_dmabuf(
-                &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
-            );
-            let fmt = wayland_to_drm(WlShmFormat::Rgb565);
-            let bpp = 2;
-            let Some(mod_list) = supported_modifier_table.get(&fmt) else {
-                println!("Skipping test, format not supported");
-                return;
-            };
-
-            for (w, h, immed) in [(3, 4, true), (64, 64, true), (513, 511, false)] {
-                let mut img_data = vec![0u8; (w * h) as usize * bpp];
-                let mut i: u16 = 0x1234;
-                /* Draw a square inside */
-                for y in (h / 3)..(2 * h) / 3 {
-                    for x in (w / 3)..(2 * w) / 3 {
-                        img_data[2 * (y * w + x)..2 * (y * w + x) + 2]
-                            .copy_from_slice(&i.to_le_bytes());
-                        i = i.wrapping_add(1);
-                    }
+        for (w, h, immed) in [(3, 4, true), (64, 64, true), (513, 511, false)] {
+            let mut img_data = vec![0u8; w * h * bpp];
+            let mut i: u16 = 0x1234;
+            /* Draw a square inside */
+            for y in (h / 3)..(2 * h) / 3 {
+                for x in (w / 3)..(2 * w) / 3 {
+                    img_data[2 * (y * w + x)..2 * (y * w + x) + 2]
+                        .copy_from_slice(&i.to_le_bytes());
+                    i = i.wrapping_add(1);
                 }
+            }
 
-                let (img, planes) =
-                    vulkan_create_dmabuf(&vulk, w as u32, h as u32, fmt, &mod_list, false).unwrap();
+            let (img, planes) =
+                vulkan_create_dmabuf(&vulk, w as u32, h as u32, fmt, mod_list, false).unwrap();
 
-                let msgs = build_msgs(|dst| {
-                    write_req_zwp_linux_dmabuf_v1_create_params(dst, dmabuf, params);
-                    for p in planes.iter() {
-                        let (mod_hi, mod_lo) = split_u64(p.modifier);
-                        write_req_zwp_linux_buffer_params_v1_add(
-                            dst,
-                            params,
-                            false,
-                            p.plane_idx,
-                            p.offset,
-                            p.stride,
-                            mod_hi,
-                            mod_lo,
-                        );
-                    }
-
-                    if immed {
-                        write_req_zwp_linux_buffer_params_v1_create_immed(
-                            dst, params, buffer, w as i32, h as i32, fmt, 0,
-                        );
-                    } else {
-                        write_req_zwp_linux_buffer_params_v1_create(
-                            dst, params, w as i32, h as i32, fmt, 0,
-                        );
-                    }
-                });
-                let plane_fds: Vec<&OwnedFd> = planes.iter().map(|p| &p.fd).collect();
-                let (rmsgs, mut rfds) = ctx.prog_write(&msgs[..], &plane_fds[..]).unwrap();
-                drop(planes);
-                let add_msgs = &rmsgs[1..rmsgs.len() - 1];
-                assert!(rfds.len() == add_msgs.len());
-                let create_msg = &rmsgs[rmsgs.len() - 1];
-                let (rw, rh, rfmt) = if immed {
-                    let (_rbuf, rw, rh, rfmt, _rflags) =
-                        parse_req_zwp_linux_buffer_params_v1_create_immed(&create_msg[..]).unwrap();
-                    (rw, rh, rfmt)
-                } else {
-                    let (rw, rh, rfmt, _rflags) =
-                        parse_req_zwp_linux_buffer_params_v1_create(&create_msg[..]).unwrap();
-                    (rw, rh, rfmt)
-                };
-                assert!((rw, rh, rfmt) == (w as i32, h as i32, fmt));
-
-                let mut planes = Vec::new();
-                for (fd, msg) in rfds.drain(..).zip(add_msgs.iter()) {
-                    let (plane_idx, offset, stride, mod_hi, mod_lo) =
-                        parse_req_zwp_linux_buffer_params_v1_add(msg).unwrap();
-                    let modifier = join_u64(mod_hi, mod_lo);
-                    planes.push(AddDmabufPlane {
-                        fd,
-                        plane_idx,
-                        offset,
-                        stride,
-                        modifier,
-                    });
+            let msgs = build_msgs(|dst| {
+                write_req_zwp_linux_dmabuf_v1_create_params(dst, dmabuf, params);
+                for p in planes.iter() {
+                    let (mod_hi, mod_lo) = split_u64(p.modifier);
+                    write_req_zwp_linux_buffer_params_v1_add(
+                        dst,
+                        params,
+                        false,
+                        p.plane_idx,
+                        p.offset,
+                        p.stride,
+                        mod_hi,
+                        mod_lo,
+                    );
                 }
-                let mirror =
-                    vulkan_import_dmabuf(&vulk, planes, w as u32, h as u32, fmt, false).unwrap();
-
-                let tmp = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
-                copy_onto_dmabuf(&img, &tmp, &img_data).unwrap();
 
                 if immed {
-                    ctx.prog_write_passthrough(build_msgs(|dst| {
-                        write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
-                        write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
-                        write_req_wl_surface_commit(dst, surface);
-                    }));
+                    write_req_zwp_linux_buffer_params_v1_create_immed(
+                        dst, params, buffer, w as i32, h as i32, fmt, 0,
+                    );
                 } else {
-                    ctx.comp_write_passthrough(build_msgs(|dst| {
-                        write_evt_zwp_linux_buffer_params_v1_created(dst, params, sbuffer);
-                    }));
-                    ctx.prog_write_passthrough(build_msgs(|dst| {
-                        write_req_wl_surface_attach(dst, surface, sbuffer, 0, 0);
-                        write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
-                        write_req_wl_surface_commit(dst, surface);
-                    }));
+                    write_req_zwp_linux_buffer_params_v1_create(
+                        dst, params, w as i32, h as i32, fmt, 0,
+                    );
                 }
+            });
+            let plane_fds: Vec<&OwnedFd> = planes.iter().map(|p| &p.fd).collect();
+            let (rmsgs, mut rfds) = ctx.prog_write(&msgs[..], &plane_fds[..]).unwrap();
+            drop(planes);
+            let add_msgs = &rmsgs[1..rmsgs.len() - 1];
+            assert!(rfds.len() == add_msgs.len());
+            let create_msg = &rmsgs[rmsgs.len() - 1];
+            let (rw, rh, rfmt) = if immed {
+                let (_rbuf, rw, rh, rfmt, _rflags) =
+                    parse_req_zwp_linux_buffer_params_v1_create_immed(&create_msg[..]).unwrap();
+                (rw, rh, rfmt)
+            } else {
+                let (rw, rh, rfmt, _rflags) =
+                    parse_req_zwp_linux_buffer_params_v1_create(&create_msg[..]).unwrap();
+                (rw, rh, rfmt)
+            };
+            assert!((rw, rh, rfmt) == (w as i32, h as i32, fmt));
 
-                let tmp =
-                    Arc::new(vulkan_get_buffer(&vulk, mirror.nominal_size(None), true).unwrap());
-                let mir_data = copy_from_dmabuf(&img, &tmp).unwrap();
-                assert!(img_data == mir_data);
+            let mut planes = Vec::new();
+            for (fd, msg) in rfds.drain(..).zip(add_msgs.iter()) {
+                let (plane_idx, offset, stride, mod_hi, mod_lo) =
+                    parse_req_zwp_linux_buffer_params_v1_add(msg).unwrap();
+                let modifier = join_u64(mod_hi, mod_lo);
+                planes.push(AddDmabufPlane {
+                    fd,
+                    plane_idx,
+                    offset,
+                    stride,
+                    modifier,
+                });
+            }
+            let mirror =
+                vulkan_import_dmabuf(&vulk, planes, w as u32, h as u32, fmt, false).unwrap();
 
-                /* Cleanup buffer and params objects, for reuse with next image */
+            let tmp = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
+            copy_onto_dmabuf(&img, &tmp, &img_data).unwrap();
+
+            if immed {
                 ctx.prog_write_passthrough(build_msgs(|dst| {
-                    write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
-                    write_req_wl_buffer_destroy(dst, if immed { buffer } else { sbuffer });
+                    write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
+                    write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
+                    write_req_wl_surface_commit(dst, surface);
                 }));
+            } else {
                 ctx.comp_write_passthrough(build_msgs(|dst| {
-                    write_evt_wl_display_delete_id(dst, display, params.0);
-                    if immed {
-                        write_evt_wl_display_delete_id(dst, display, buffer.0);
-                    }
+                    write_evt_zwp_linux_buffer_params_v1_created(dst, params, sbuffer);
+                }));
+                ctx.prog_write_passthrough(build_msgs(|dst| {
+                    write_req_wl_surface_attach(dst, surface, sbuffer, 0, 0);
+                    write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
+                    write_req_wl_surface_commit(dst, surface);
                 }));
             }
-        });
-    }
+
+            let tmp = Arc::new(vulkan_get_buffer(&vulk, mirror.nominal_size(None), true).unwrap());
+            let mir_data = copy_from_dmabuf(&img, &tmp).unwrap();
+            assert!(img_data == mir_data);
+
+            /* Cleanup buffer and params objects, for reuse with next image */
+            ctx.prog_write_passthrough(build_msgs(|dst| {
+                write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
+                write_req_wl_buffer_destroy(dst, if immed { buffer } else { sbuffer });
+            }));
+            ctx.comp_write_passthrough(build_msgs(|dst| {
+                write_evt_wl_display_delete_id(dst, display, params.0);
+                if immed {
+                    write_evt_wl_display_delete_id(dst, display, buffer.0);
+                }
+            }));
+        }
+    })?;
+    Ok(StatusOk::Pass)
 }
 
 #[cfg(feature = "video")]
 fn fill_blocks_xrgb(w: usize, h: usize) -> Vec<u8> {
     let bpp = 4;
     let colors: [u32; 4] = [0xaf0080ff, 0xbf00ff00, 0xcf800080, 0xdf808080];
-    let mut img_data = vec![0u8; (w * h) as usize * bpp];
+    let mut img_data = vec![0u8; w * h * bpp];
     for y in 0..h {
         for x in 0..w {
             let by = (2 * y) / h;
             let bx = (2 * x) / w;
-            let c = colors[2 * by + bx] ^ (((x * y) % 2) as u32) * 0x00010101;
+            let c = colors[2 * by + bx] ^ ((((x * y) % 2) as u32) * 0x00010101);
             img_data[bpp * (y * w + x)..bpp * (y * w + x) + bpp].copy_from_slice(&c.to_le_bytes());
         }
     }
@@ -1891,7 +2001,7 @@ fn fill_blocks_xrgb(w: usize, h: usize) -> Vec<u8> {
 #[cfg(feature = "video")]
 fn fill_pseudorand_xrgb(w: usize, h: usize) -> Vec<u8> {
     let bpp = 4;
-    let mut img_data = vec![0u8; (w * h) as usize * bpp];
+    let mut img_data = vec![0u8; w * h * bpp];
     let mut a: u32 = 1;
     for y in 0..h {
         for x in 0..w {
@@ -1917,10 +2027,10 @@ fn create_dmabuf_and_copy(
     initial_data: &[u8],
 ) -> Result<(Arc<VulkanDmabuf>, Arc<VulkanDmabuf>), String> {
     let (img, planes) =
-        vulkan_create_dmabuf(&vulk, w as u32, h as u32, fmt, modifier_list, false).unwrap();
+        vulkan_create_dmabuf(vulk, w as u32, h as u32, fmt, modifier_list, false).unwrap();
 
     /* Initialize the image with garbage data */
-    let tmp_img = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), false).unwrap());
+    let tmp_img = Arc::new(vulkan_get_buffer(vulk, img.nominal_size(None), false).unwrap());
     copy_onto_dmabuf(&img, &tmp_img, initial_data).unwrap();
 
     let msgs = build_msgs(|dst| {
@@ -1970,14 +2080,15 @@ fn create_dmabuf_and_copy(
         });
     }
 
-    let mirror = vulkan_import_dmabuf(&vulk, planes, w as u32, h as u32, fmt, false).unwrap();
+    let mirror = vulkan_import_dmabuf(vulk, planes, w as u32, h as u32, fmt, false).unwrap();
     Ok((img, mirror))
 }
 
 #[cfg(feature = "video")]
-fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
+fn test_dmavid_inner(vulk: &Arc<Vulkan>, info: &TestInfo, opts: &WaypipeOptions) -> bool {
     let accurate_replication = AtomicBool::new(true);
     run_protocol_test_with_opts(
+        info, opts, opts,
         &|mut ctx: ProtocolTestContext| {
             let (display, registry, dmabuf, comp, surface, feedback, params, buffer) = (
                 ObjId(1),
@@ -1991,7 +2102,7 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
             );
 
             let supported_modifier_table = setup_linux_dmabuf(
-                &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
+                &mut ctx, vulk, display, registry, dmabuf, comp, surface, feedback,
             );
             let fmt = wayland_to_drm(WlShmFormat::Xrgb8888);
             let Some(modifier_list) = supported_modifier_table.get(&fmt) else {
@@ -2022,7 +2133,7 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
 
                 let img_data = fill_blocks_xrgb(w, h);
                 let tmp_img =
-                    Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
+                    Arc::new(vulkan_get_buffer(vulk, img.nominal_size(None), true).unwrap());
                 copy_onto_dmabuf(&img, &tmp_img, &img_data).unwrap();
 
                 ctx.prog_write_passthrough(build_msgs(|dst| {
@@ -2032,7 +2143,7 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
                 }));
 
                 let tmp_mirror =
-                    Arc::new(vulkan_get_buffer(&vulk, mirror.nominal_size(None), true).unwrap());
+                    Arc::new(vulkan_get_buffer(vulk, mirror.nominal_size(None), true).unwrap());
                 let mir_data = copy_from_dmabuf(&mirror, &tmp_mirror).unwrap();
 
                 let mut net_diff: u64 = 0;
@@ -2060,7 +2171,7 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
                         w,
                         h,
                         (net_diff as f32) / ((w * h) as f32),
-                            threshold,
+                             threshold,
                     );
                     if avg_diff >= threshold {
                         /* XRGB8888 bytes are ordered: B G R x */
@@ -2100,10 +2211,8 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
                     write_evt_wl_display_delete_id(dst, display, buffer.0);
                 }));
             }
-        },
-        opts,
-        None,
-    );
+        }
+    ).unwrap();
 
     accurate_replication.load(std::sync::atomic::Ordering::SeqCst)
 }
@@ -2111,13 +2220,14 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, opts: &Options) -> bool {
 #[cfg(feature = "video")]
 fn test_video_combo(
     vulk: &Arc<Vulkan>,
+    info: &TestInfo,
+    device: &RenderDevice,
     video_format: VideoFormat,
     try_hw_dec: bool,
     try_hw_enc: bool,
     accurate_video_replication: bool,
-) {
-    let opts = Options {
-        debug: false, /* validation layers and libavcodec write some uncaptured logging messages */
+) -> bool {
+    let opts = WaypipeOptions {
         compression: Compression::None,
         video: VideoSetting {
             format: Some(video_format),
@@ -2133,16 +2243,15 @@ fn test_video_combo(
                 CodecPreference::SW
             }),
         },
-        threads: 1,
-        title_prefix: String::new(),
-        no_gpu: false,
-        drm_node: Some(device_id_to_node_path(vulk.get_device())),
+        title_prefix: "",
+        drm_node: Some(device.id),
+        wire_version: None,
     };
     println!(
         "\nTrying combination: video={:?}, try_hw_dec={}, try_hw_enc={}",
         video_format, try_hw_dec, try_hw_enc
     );
-    let pass = test_dmavid_inner(&vulk, &opts);
+    let pass = test_dmavid_inner(vulk, info, &opts);
     println!(
         "Result for video={:?}, try_hw_dec={}, try_hw_enc={}: {}",
         video_format,
@@ -2157,48 +2266,56 @@ fn test_video_combo(
     if accurate_video_replication {
         assert!(pass);
     }
+    pass
 }
 
 #[cfg(feature = "video")]
-#[test]
-fn proto_dmavid_vp9() {
-    for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
-            continue;
-        };
-        test_video_combo(&vulk, VideoFormat::VP9, false, false, false);
+fn proto_dmavid_vp9(info: TestInfo, device: RenderDevice) -> TestResult {
+    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+        return Ok(StatusOk::Pass);
+    };
+    if test_video_combo(&vulk, &info, &device, VideoFormat::VP9, false, false, false) {
+        Ok(StatusOk::Pass)
+    } else {
+        Err(StatusBad::Unclear("Video replication not exact".into()))
     }
 }
 
 #[cfg(feature = "video")]
-#[test]
-fn proto_dmavid_h264() {
-    for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
-            continue;
-        };
+fn proto_dmavid_h264(info: TestInfo, device: RenderDevice) -> TestResult {
+    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+        return Ok(StatusOk::Pass);
+    };
 
-        /* Test all hardware encoding/decoding combinations to sure formats are compatible */
-        for (try_hw_dec, try_hw_enc, accurate_video_replication) in [
-            (false, false, true),
-            (true, false, false),
-            (true, true, false),
-            (false, true, false),
-        ] {
-            test_video_combo(
-                &vulk,
-                VideoFormat::H264,
-                try_hw_dec,
-                try_hw_enc,
-                accurate_video_replication,
-            );
+    /* Test all hardware encoding/decoding combinations to sure formats are compatible */
+    let mut all_pass = true;
+    for (try_hw_dec, try_hw_enc, accurate_video_replication) in [
+        (false, false, true),
+        (true, false, false),
+        (true, true, false),
+        (false, true, false),
+    ] {
+        if !test_video_combo(
+            &vulk,
+            &info,
+            &device,
+            VideoFormat::H264,
+            try_hw_dec,
+            try_hw_enc,
+            accurate_video_replication,
+        ) {
+            all_pass = false;
         }
     }
+    if all_pass {
+        Ok(StatusOk::Pass)
+    } else {
+        Err(StatusBad::Unclear("Video replication not exact".into()))
+    }
 }
 
-#[test]
-fn proto_oversized() {
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
+fn proto_oversized(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let (display, registry) = (ObjId(1), ObjId(2));
         ctx.prog_write_passthrough(build_msgs(|dst| {
             write_req_wl_display_get_registry(dst, display, registry);
@@ -2220,7 +2337,8 @@ fn proto_oversized() {
         /* Waypipe should either reject or pass the message, but not hang or crash */
         let res = ctx.comp_write(&msg, &[]);
         assert!(res.is_err() || res.is_ok_and(|x| x.0.concat() == msg));
-    });
+    })?;
+    Ok(StatusOk::Pass)
 }
 
 fn get_diff_damage(
@@ -2280,9 +2398,8 @@ fn get_diff_damage(
     }
 }
 
-#[test]
-fn proto_shm_damage() {
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
+fn proto_shm_damage(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let (display, registry, shm, comp, surface, pool, buffer) = (
             ObjId(1),
             ObjId(2),
@@ -2372,323 +2489,316 @@ fn proto_shm_damage() {
                 write_evt_wl_display_delete_id(dst, display, buffer.0);
             }));
         }
-    });
+    })?;
+    Ok(StatusOk::Pass)
 }
 
 #[cfg(feature = "dmabuf")]
-#[test]
-fn proto_dmabuf_damage() {
-    for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
-            continue;
-        };
+fn proto_dmabuf_damage(info: TestInfo, device: RenderDevice) -> TestResult {
+    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+        return Ok(StatusOk::Pass);
+    };
 
-        run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
-            let (display, registry, dmabuf, comp, surface, feedback, params, buffer) = (
-                ObjId(1),
-                ObjId(2),
-                ObjId(3),
-                ObjId(4),
-                ObjId(5),
-                ObjId(6),
-                ObjId(7),
-                ObjId(8),
-            );
+    run_protocol_test_with_drm_node(&info, &device, &|mut ctx: ProtocolTestContext| {
+        let (display, registry, dmabuf, comp, surface, feedback, params, buffer) = (
+            ObjId(1),
+            ObjId(2),
+            ObjId(3),
+            ObjId(4),
+            ObjId(5),
+            ObjId(6),
+            ObjId(7),
+            ObjId(8),
+        );
 
-            let supported_modifier_table = setup_linux_dmabuf(
-                &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
-            );
+        let supported_modifier_table = setup_linux_dmabuf(
+            &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
+        );
 
-            /* For dmabuf replication, the format (well, texel size) affects diff alignment */
-            for (w, h) in [(64_usize, 64_usize), (257_usize, 257_usize)] {
-                for wl_format in [
-                    WlShmFormat::R8,
-                    WlShmFormat::Rgb565,
-                    WlShmFormat::Argb8888,
-                    WlShmFormat::Argb16161616,
-                ] {
-                    let bpp = match wl_format {
-                        WlShmFormat::Argb16161616 => 8,
-                        WlShmFormat::Argb8888 => 4,
-                        WlShmFormat::Rgb565 => 2,
-                        WlShmFormat::R8 => 1,
-                        _ => unreachable!(),
-                    };
-                    let format = wayland_to_drm(wl_format);
-                    let stride = bpp * w;
-                    let file_sz = h * stride;
+        /* For dmabuf replication, the format (well, texel size) affects diff alignment */
+        for (w, h) in [(64_usize, 64_usize), (257_usize, 257_usize)] {
+            for wl_format in [
+                WlShmFormat::R8,
+                WlShmFormat::Rgb565,
+                WlShmFormat::Argb8888,
+                WlShmFormat::Argb16161616,
+            ] {
+                let bpp = match wl_format {
+                    WlShmFormat::Argb16161616 => 8,
+                    WlShmFormat::Argb8888 => 4,
+                    WlShmFormat::Rgb565 => 2,
+                    WlShmFormat::R8 => 1,
+                    _ => unreachable!(),
+                };
+                let format = wayland_to_drm(wl_format);
+                let stride = bpp * w;
+                let file_sz = h * stride;
 
-                    let Some(modifier_list) = supported_modifier_table.get(&format) else {
-                        println!("Skipping test, format {:#08x} not supported", format);
-                        continue;
-                    };
+                let Some(modifier_list) = supported_modifier_table.get(&format) else {
+                    println!("Skipping test, format {:#08x} not supported", format);
+                    continue;
+                };
 
-                    let mut base = vec![0x80; file_sz];
+                let mut base = vec![0x80; file_sz];
 
-                    let (img, mirror) = create_dmabuf_and_copy(
-                        &vulk,
-                        &mut ctx,
-                        params,
-                        dmabuf,
-                        buffer,
-                        w,
-                        h,
-                        format,
-                        modifier_list,
-                        &base,
-                    )
-                    .unwrap();
+                let (img, mirror) = create_dmabuf_and_copy(
+                    &vulk,
+                    &mut ctx,
+                    params,
+                    dmabuf,
+                    buffer,
+                    w,
+                    h,
+                    format,
+                    modifier_list,
+                    &base,
+                )
+                .unwrap();
+
+                ctx.prog_write_passthrough(build_msgs(|dst| {
+                    write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
+                    write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
+                    write_req_wl_surface_commit(dst, surface);
+                }));
+
+                let tmp_wr =
+                    Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), false).unwrap());
+                let tmp_rd =
+                    Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
+
+                let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
+                assert!(
+                    dup == base,
+                    "initial mismatch {} {}\n{:?}\n{:?}",
+                    dup.len(),
+                    base.len(),
+                    dup,
+                    base
+                );
+
+                for iter in 0..3 {
+                    let damage: Vec<(i32, i32, i32, i32)> =
+                        get_diff_damage(iter, &mut base, w, h, stride, bpp);
+                    copy_onto_dmabuf(&img, &tmp_wr, &base).unwrap();
 
                     ctx.prog_write_passthrough(build_msgs(|dst| {
-                        write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
-                        write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
+                        for d in damage {
+                            write_req_wl_surface_damage_buffer(dst, surface, d.0, d.1, d.2, d.3);
+                        }
                         write_req_wl_surface_commit(dst, surface);
                     }));
-
-                    let tmp_wr =
-                        Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), false).unwrap());
-                    let tmp_rd =
-                        Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
 
                     let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
                     assert!(
                         dup == base,
-                        "initial mismatch {} {}\n{:?}\n{:?}",
+                        "mismatch iter {}, {} {}\n{:?}\n{:?}",
+                        iter,
                         dup.len(),
                         base.len(),
                         dup,
                         base
                     );
 
-                    for iter in 0..3 {
-                        let damage: Vec<(i32, i32, i32, i32)> =
-                            get_diff_damage(iter, &mut base, w, h, stride, bpp);
-                        copy_onto_dmabuf(&img, &tmp_wr, &base).unwrap();
-
-                        ctx.prog_write_passthrough(build_msgs(|dst| {
-                            for d in damage {
-                                write_req_wl_surface_damage_buffer(
-                                    dst, surface, d.0, d.1, d.2, d.3,
-                                );
-                            }
-                            write_req_wl_surface_commit(dst, surface);
-                        }));
-
-                        let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
-                        assert!(
-                            dup == base,
-                            "mismatch iter {}, {} {}\n{:?}\n{:?}",
-                            iter,
-                            dup.len(),
-                            base.len(),
-                            dup,
-                            base
-                        );
-
-                        ctx.comp_write_passthrough(build_msgs(|dst| {
-                            write_evt_wl_buffer_release(dst, buffer);
-                        }));
-                    }
-
-                    ctx.prog_write_passthrough(build_msgs(|dst| {
-                        write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
-                        write_req_wl_buffer_destroy(dst, buffer);
-                    }));
                     ctx.comp_write_passthrough(build_msgs(|dst| {
-                        write_evt_wl_display_delete_id(dst, display, params.0);
-                        write_evt_wl_display_delete_id(dst, display, buffer.0);
+                        write_evt_wl_buffer_release(dst, buffer);
                     }));
                 }
+
+                ctx.prog_write_passthrough(build_msgs(|dst| {
+                    write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
+                    write_req_wl_buffer_destroy(dst, buffer);
+                }));
+                ctx.comp_write_passthrough(build_msgs(|dst| {
+                    write_evt_wl_display_delete_id(dst, display, params.0);
+                    write_evt_wl_display_delete_id(dst, display, buffer.0);
+                }));
             }
-        });
-    }
+        }
+    })?;
+    Ok(StatusOk::Pass)
 }
 
 #[cfg(feature = "dmabuf")]
-#[test]
-fn proto_explicit_sync() {
-    for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
-            continue;
-        };
+fn proto_explicit_sync(info: TestInfo, device: RenderDevice) -> TestResult {
+    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+        return Ok(StatusOk::Pass);
+    };
 
-        run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
-            let (
-                display,
+    run_protocol_test_with_drm_node(&info, &device, &|mut ctx: ProtocolTestContext| {
+        let (
+            display,
+            registry,
+            dmabuf,
+            comp,
+            surface,
+            feedback,
+            params,
+            manager,
+            sync_surf,
+            timeline,
+            buffer,
+        ) = (
+            ObjId(1),
+            ObjId(2),
+            ObjId(3),
+            ObjId(4),
+            ObjId(5),
+            ObjId(6),
+            ObjId(7),
+            ObjId(8),
+            ObjId(9),
+            ObjId(10),
+            ObjId(11),
+        );
+
+        let supported_modifier_table = setup_linux_dmabuf(
+            &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
+        );
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(
+                dst,
                 registry,
-                dmabuf,
-                comp,
-                surface,
-                feedback,
-                params,
+                3,
+                "wp_linux_drm_syncobj_manager_v1".as_bytes(),
+                1,
+            );
+        }));
+        let msg = build_msgs(|dst| {
+            write_req_wl_registry_bind(
+                dst,
+                registry,
+                3,
+                "wp_linux_drm_syncobj_manager_v1".as_bytes(),
+                1,
                 manager,
-                sync_surf,
-                timeline,
-                buffer,
-            ) = (
-                ObjId(1),
-                ObjId(2),
-                ObjId(3),
-                ObjId(4),
-                ObjId(5),
-                ObjId(6),
-                ObjId(7),
-                ObjId(8),
-                ObjId(9),
-                ObjId(10),
-                ObjId(11),
             );
-
-            let supported_modifier_table = setup_linux_dmabuf(
-                &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
+            write_req_wp_linux_drm_syncobj_manager_v1_get_surface(dst, manager, sync_surf, surface);
+            write_req_wp_linux_drm_syncobj_manager_v1_import_timeline(
+                dst, manager, false, timeline,
             );
-            ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_wl_registry_global(
-                    dst,
-                    registry,
-                    3,
-                    "wp_linux_drm_syncobj_manager_v1".as_bytes(),
-                    1,
-                );
-            }));
-            let msg = build_msgs(|dst| {
-                write_req_wl_registry_bind(
-                    dst,
-                    registry,
-                    3,
-                    "wp_linux_drm_syncobj_manager_v1".as_bytes(),
-                    1,
-                    manager,
-                );
-                write_req_wp_linux_drm_syncobj_manager_v1_get_surface(
-                    dst, manager, sync_surf, surface,
-                );
-                write_req_wp_linux_drm_syncobj_manager_v1_import_timeline(
-                    dst, manager, false, timeline,
-                );
-            });
-            let start_pt = 150;
-            let (prog_timeline, timeline_fd) = vulkan_create_timeline(&vulk, start_pt).unwrap();
+        });
+        let start_pt = 150;
+        let (prog_timeline, timeline_fd) = vulkan_create_timeline(&vulk, start_pt).unwrap();
 
-            let (rmsg, mut rfd) = ctx.prog_write(&msg[..], &[&timeline_fd]).unwrap();
-            assert!(rmsg.concat() == msg);
-            drop(timeline_fd);
-            assert!(rfd.len() == 1);
-            let output_fd = rfd.remove(0);
+        let (rmsg, mut rfd) = ctx.prog_write(&msg[..], &[&timeline_fd]).unwrap();
+        assert!(rmsg.concat() == msg);
+        drop(timeline_fd);
+        assert!(rfd.len() == 1);
+        let output_fd = rfd.remove(0);
 
-            let comp_timeline = vulkan_import_timeline(&vulk, output_fd).unwrap();
+        let comp_timeline = vulkan_import_timeline(&vulk, output_fd).unwrap();
 
-            let (w, h) = (512, 512);
-            let format = wayland_to_drm(WlShmFormat::R8);
-            let file_sz = h * w;
-            let mut base = vec![0x80; file_sz];
+        let (w, h) = (512, 512);
+        let format = wayland_to_drm(WlShmFormat::R8);
+        let file_sz = h * w;
+        let mut base = vec![0x80; file_sz];
 
-            let Some(modifier_list) = supported_modifier_table.get(&format) else {
-                println!("Skipping test, format {:#08x} not supported", format);
-                return;
-            };
-            let (img, mirror) = create_dmabuf_and_copy(
-                &vulk,
-                &mut ctx,
-                params,
-                dmabuf,
-                buffer,
-                w,
-                h,
-                format,
-                modifier_list,
-                &base,
-            )
-            .unwrap();
+        let Some(modifier_list) = supported_modifier_table.get(&format) else {
+            println!("Skipping test, format {:#08x} not supported", format);
+            return;
+        };
+        let (img, mirror) = create_dmabuf_and_copy(
+            &vulk,
+            &mut ctx,
+            params,
+            dmabuf,
+            buffer,
+            w,
+            h,
+            format,
+            modifier_list,
+            &base,
+        )
+        .unwrap();
 
-            ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
-                write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
-                write_req_wl_surface_commit(dst, surface);
-            }));
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
+            write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
+            write_req_wl_surface_commit(dst, surface);
+        }));
 
-            let tmp_wr = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), false).unwrap());
-            let tmp_rd = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
+        let tmp_wr = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), false).unwrap());
+        let tmp_rd = Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
 
-            for iter in 0..4 {
-                /* Change entire image, except on the second iteration */
-                if iter != 1 {
-                    base.fill(iter);
-                }
-                copy_onto_dmabuf(&img, &tmp_wr, &base).unwrap();
-                let acq_pt: u64 = start_pt + 11 + (iter as u64) * 7;
-                let rel_pt = acq_pt + 2;
+        for iter in 0..4 {
+            /* Change entire image, except on the second iteration */
+            if iter != 1 {
+                base.fill(iter);
+            }
+            copy_onto_dmabuf(&img, &tmp_wr, &base).unwrap();
+            let acq_pt: u64 = start_pt + 11 + (iter as u64) * 7;
+            let rel_pt = acq_pt + 2;
 
-                if iter == 2 {
-                    /* Special case: signal before writing */
-                    println!("Signalling acquire {}", acq_pt);
-                    prog_timeline.signal_timeline_pt(acq_pt).unwrap();
-                }
-
-                let msg = build_msgs(|dst| {
-                    write_req_wl_surface_damage_buffer(dst, surface, 0, 0, w as i32, h as i32);
-                    let (acq_hi, acq_lo) = split_u64(acq_pt);
-                    let (rel_hi, rel_lo) = split_u64(rel_pt);
-                    write_req_wp_linux_drm_syncobj_surface_v1_set_acquire_point(
-                        dst, sync_surf, timeline, acq_hi, acq_lo,
-                    );
-                    write_req_wp_linux_drm_syncobj_surface_v1_set_release_point(
-                        dst, sync_surf, timeline, rel_hi, rel_lo,
-                    );
-                    write_req_wl_surface_commit(dst, surface);
-                });
-
-                test_write_msgs(&ctx.sock_prog, &msg, &[]);
-
-                /* Signal after writing; this is safe because the messages sent will at minimum
-                 * fit in the pipe buffer */
-                if iter != 2 {
-                    println!("Signalling acquire {}", acq_pt);
-                    prog_timeline.signal_timeline_pt(acq_pt).unwrap();
-                }
-
-                /* Only start reading messages after signalling; this prevents a possible deadlock,
-                 * because the code might wait for the signal before sending messages further */
-                let (rmsg, rfds, err) = test_read_msgs(&ctx.sock_comp, Some(&ctx.sock_prog));
-                assert!(err.is_none());
-                assert!(rfds.is_empty());
-                assert!(rmsg.concat() == msg);
-
-                let max_wait = 1000000000;
-                println!("Waiting for acquire {}", acq_pt);
-                comp_timeline
-                    .wait_for_timeline_pt(acq_pt, max_wait)
-                    .unwrap();
-
-                let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
-                assert!(dup == base);
-
-                println!("Signalling release {}", rel_pt);
-                comp_timeline.signal_timeline_pt(rel_pt).unwrap();
-                println!("Waiting for release {}", rel_pt);
-                prog_timeline
-                    .wait_for_timeline_pt(rel_pt, max_wait)
-                    .unwrap();
-
-                ctx.comp_write_passthrough(build_msgs(|dst| {
-                    write_evt_wl_buffer_release(dst, buffer);
-                }));
+            if iter == 2 {
+                /* Special case: signal before writing */
+                println!("Signalling acquire {}", acq_pt);
+                prog_timeline.signal_timeline_pt(acq_pt).unwrap();
             }
 
-            ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
-                write_req_wl_buffer_destroy(dst, buffer);
-            }));
+            let msg = build_msgs(|dst| {
+                write_req_wl_surface_damage_buffer(dst, surface, 0, 0, w as i32, h as i32);
+                let (acq_hi, acq_lo) = split_u64(acq_pt);
+                let (rel_hi, rel_lo) = split_u64(rel_pt);
+                write_req_wp_linux_drm_syncobj_surface_v1_set_acquire_point(
+                    dst, sync_surf, timeline, acq_hi, acq_lo,
+                );
+                write_req_wp_linux_drm_syncobj_surface_v1_set_release_point(
+                    dst, sync_surf, timeline, rel_hi, rel_lo,
+                );
+                write_req_wl_surface_commit(dst, surface);
+            });
+
+            test_write_msgs(&ctx.sock_prog, &msg, &[]);
+
+            /* Signal after writing; this is safe because the messages sent will at minimum
+             * fit in the pipe buffer */
+            if iter != 2 {
+                println!("Signalling acquire {}", acq_pt);
+                prog_timeline.signal_timeline_pt(acq_pt).unwrap();
+            }
+
+            /* Only start reading messages after signalling; this prevents a possible deadlock,
+             * because the code might wait for the signal before sending messages further */
+            let (rmsg, rfds, err) = test_read_msgs(&ctx.sock_comp, Some(&ctx.sock_prog));
+            assert!(err.is_none());
+            assert!(rfds.is_empty());
+            assert!(rmsg.concat() == msg);
+
+            let max_wait = 1000000000;
+            println!("Waiting for acquire {}", acq_pt);
+            comp_timeline
+                .wait_for_timeline_pt(acq_pt, max_wait)
+                .unwrap();
+
+            let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
+            assert!(dup == base);
+
+            println!("Signalling release {}", rel_pt);
+            comp_timeline.signal_timeline_pt(rel_pt).unwrap();
+            println!("Waiting for release {}", rel_pt);
+            prog_timeline
+                .wait_for_timeline_pt(rel_pt, max_wait)
+                .unwrap();
+
             ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_wl_display_delete_id(dst, display, params.0);
-                write_evt_wl_display_delete_id(dst, display, buffer.0);
+                write_evt_wl_buffer_release(dst, buffer);
             }));
-        });
-    }
+        }
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_zwp_linux_buffer_params_v1_destroy(dst, params);
+            write_req_wl_buffer_destroy(dst, buffer);
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_display_delete_id(dst, display, params.0);
+            write_evt_wl_display_delete_id(dst, display, buffer.0);
+        }));
+    })?;
+
+    Ok(StatusOk::Pass)
 }
 
-#[test]
-fn proto_many_fds() {
+fn proto_many_fds(info: TestInfo) -> TestResult {
     /* Check that Waypipe can successfully process a large number of FDS */
 
     let mut files: Vec<(Vec<u8>, OwnedFd)> = Vec::new();
@@ -2701,7 +2811,7 @@ fn proto_many_fds() {
         files.push((x, fd));
     }
 
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         /* Setup a wl_keyboard */
         let (display, registry, seat, keyboard) = (ObjId(1), ObjId(2), ObjId(3), ObjId(4));
         ctx.prog_write_passthrough(build_msgs(|dst| {
@@ -2739,23 +2849,25 @@ fn proto_many_fds() {
             let v = get_file_contents(&rfd, contents.len()).unwrap();
             assert!(v == *contents);
         }
-    });
+    })?;
+    Ok(StatusOk::Pass)
 }
 
-#[test]
-fn proto_title_prefix() {
+fn proto_title_prefix(info: TestInfo) -> TestResult {
     // /* test lengths are: empty, short, too long for small buffers, cannot fit in a Wayland message */
     for (prefix_len, fail) in [(0, false), (100, false), (10000, true), (100000, true)] {
-        let options = Options {
-            debug: true,
-            compression: Compression::None,
-            video: VideoSetting::default(),
-            threads: 1,
-            title_prefix: String::from("a").repeat(prefix_len),
-            no_gpu: false,
+        let prefix = String::from("a").repeat(prefix_len);
+        let options = WaypipeOptions {
+            wire_version: None,
             drm_node: None,
+            video: VideoSetting::default(),
+            title_prefix: &prefix,
+            compression: Compression::None,
         };
         run_protocol_test_with_opts(
+            &info,
+            &options,
+            &options,
             &|mut ctx: ProtocolTestContext| {
                 let [display, reg, compositor, xdg_wm_base, wl_surf, xdg_surf, toplevel, ..] =
                     ID_SEQUENCE;
@@ -2791,7 +2903,7 @@ fn proto_title_prefix() {
                 let title_lengths = [0, 200];
                 let test = build_msgs(|dst| {
                     for title_len in title_lengths {
-                        let title = vec!['b' as u8; title_len];
+                        let title = vec![b'b'; title_len];
                         write_req_xdg_toplevel_set_title(dst, toplevel, &title);
                     }
                 });
@@ -2803,31 +2915,29 @@ fn proto_title_prefix() {
                     Ok((rmsgs, rfds)) => {
                         assert!(!fail);
                         assert!(rfds.is_empty());
-                        for (title_len, mut msg) in title_lengths.iter().zip(rmsgs.iter()) {
+                        for (title_len, msg) in title_lengths.iter().zip(rmsgs.iter()) {
                             assert!(
-                                parse_wl_header(&msg)
+                                parse_wl_header(msg)
                                     == (toplevel, msg.len(), OPCODE_XDG_TOPLEVEL_SET_TITLE.code())
                             );
-                            let title = parse_req_xdg_toplevel_set_title(&mut msg).unwrap();
-                            let orig_title = vec!['b' as u8; *title_len];
+                            let title = parse_req_xdg_toplevel_set_title(msg).unwrap();
+                            let orig_title = vec![b'b'; *title_len];
                             /* The title prefix is added twice, once per main loop instance */
-                            let mut ref_title = vec!['a' as u8; prefix_len * 2];
+                            let mut ref_title = vec![b'a'; prefix_len * 2];
                             ref_title.extend_from_slice(&orig_title);
                             assert!(title == ref_title);
                         }
                     }
                 }
             },
-            &options,
-            None,
-        );
+        )?;
     }
+    Ok(StatusOk::Pass)
 }
 
 /* Test that basic wlr_screencopy operations work with wl_shm buffers */
-#[test]
-fn proto_test_screencopy_shm() {
-    run_protocol_test(&|mut ctx: ProtocolTestContext| {
+fn proto_screencopy_shm(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let [display, reg, shm, screencopy, output, shm_pool, buffer1, buffer2, frame, ..] =
             ID_SEQUENCE;
         ctx.prog_write_passthrough(build_msgs(|dst| {
@@ -2948,97 +3058,449 @@ fn proto_test_screencopy_shm() {
         /* Check that the update is replicated */
         let check2 = get_file_contents(&shm_fd, pool_sz).unwrap();
         assert!(check2 == copy_contents);
-    });
+    })?;
+    Ok(StatusOk::Pass)
 }
 
 /* Test that basic wlr_screencopy operations work with dmabufs */
 #[cfg(feature = "dmabuf")]
-#[test]
-fn proto_test_screencopy_dmabuf() {
-    for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
-            continue;
+fn proto_screencopy_dmabuf(info: TestInfo, device: RenderDevice) -> TestResult {
+    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+        return Ok(StatusOk::Skipped);
+    };
+
+    run_protocol_test_with_drm_node(&info, &device, &|mut ctx: ProtocolTestContext| {
+        let [display, reg, dmabuf, screencopy, output, frame, params, buffer, ..] = ID_SEQUENCE;
+
+        let fmt = wayland_to_drm(WlShmFormat::R8);
+        let bpp = 1;
+        let (w, h) = (8, 8);
+        let img_size = (w * h) as usize * bpp;
+        let img_data = vec![0x33u8; img_size];
+        let mod_data = vec![0x44u8; img_size];
+        let modifier_list = vulk.get_supported_modifiers(fmt);
+
+        let copy_buf = Arc::new(vulkan_get_buffer(&vulk, img_size, true).unwrap());
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, reg);
+        }));
+        let scrcopy_name = "zwlr_screencopy_manager_v1".as_bytes();
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3);
+            write_evt_wl_registry_global(dst, reg, 2, scrcopy_name, 3);
+            write_evt_wl_registry_global(dst, reg, 3, "wl_output".as_bytes(), 4);
+        }));
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3, dmabuf);
+            write_req_wl_registry_bind(dst, reg, 2, scrcopy_name, 3, screencopy);
+            write_req_wl_registry_bind(dst, reg, 3, "wl_output".as_bytes(), 4, output);
+            write_req_zwlr_screencopy_manager_v1_capture_output(dst, screencopy, frame, 0, output);
+        }));
+
+        /* Note: This assumes the Waypipe instance supports all the modifiers that the
+         * test framework does */
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_zwp_linux_dmabuf_v1_format(dst, dmabuf, fmt);
+            for m in &modifier_list {
+                let (mod_hi, mod_lo) = split_u64(*m);
+                write_evt_zwp_linux_dmabuf_v1_modifier(dst, dmabuf, fmt, mod_hi, mod_lo);
+            }
+            write_evt_zwlr_screencopy_frame_v1_linux_dmabuf(dst, frame, fmt, w, h);
+            write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
+        }));
+
+        let (prog_img, comp_img) = create_dmabuf_and_copy(
+            &vulk,
+            &mut ctx,
+            params,
+            dmabuf,
+            buffer,
+            w as _,
+            h as _,
+            fmt,
+            &modifier_list,
+            &img_data,
+        )
+        .unwrap();
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer);
+        }));
+
+        copy_onto_dmabuf(&comp_img, &copy_buf, &mod_data).unwrap();
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_zwlr_screencopy_frame_v1_ready(dst, frame, 0, 1, 123456789);
+        }));
+
+        let output = copy_from_dmabuf(&prog_img, &copy_buf).unwrap();
+        assert!(output == mod_data);
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_zwlr_screencopy_frame_v1_destroy(dst, frame);
+        }));
+    })?;
+    Ok(StatusOk::Pass)
+}
+
+fn main() -> ExitCode {
+    let command = ClapCommand::new(env!("CARGO_BIN_NAME"))
+        .help_expected(true)
+        .flatten_help(false)
+        .about(
+            "A collection of protocol tests to be run against the Waypipe client\n\
+        and server connection subprocesses. This is not expected to be packaged\n\
+        and has no stability guarantee.",
+        )
+        .next_line_help(false)
+        .version(env!("CARGO_PKG_VERSION"))
+        .arg(
+            Arg::new("client-path")
+                .help("waypipe binary to use as client")
+                .required(true)
+                .value_parser(value_parser!(OsString)),
+        )
+        .arg(
+            Arg::new("server-path")
+                .help("waypipe binary to use as server")
+                .required(true)
+                .value_parser(value_parser!(OsString)),
+        )
+        .arg(
+            Arg::new("test-filter")
+                .help("If present, run tests whose names contain any test filter string")
+                .num_args(0..)
+                .action(ArgAction::Append)
+                .value_parser(value_parser!(String)),
+        )
+        .arg(
+            Arg::new("list")
+                .long("list")
+                .action(ArgAction::SetTrue)
+                .conflicts_with_all(["client-path", "server-path", "test-filter"])
+                .help("List available tests"),
+        )
+        .arg(
+            Arg::new("quiet")
+                .long("quiet")
+                .short('q')
+                .action(ArgAction::SetTrue)
+                .help("Hide captured output"),
+        );
+
+    let matches = command.get_matches();
+
+    let f: Vec<&str> = matches
+        .get_many::<String>("test-filter")
+        .map(|x| x.map(|y| y.as_str()).collect())
+        .unwrap_or_default();
+
+    let vk_device_ids = list_vulkan_device_ids();
+
+    /* Construct a list of all tests */
+    let mut tests: Vec<(String, Box<dyn Fn(TestInfo) -> TestResult>)> = Vec::new();
+
+    register_single(&mut tests, &f, "basic", proto_basic);
+    register_single(&mut tests, &f, "base_wire", proto_base_wire);
+    register_single(&mut tests, &f, "keymap", proto_keymap);
+    register_single(&mut tests, &f, "many_fds", proto_many_fds);
+    register_single(&mut tests, &f, "object_collision", proto_object_collision);
+    register_single(&mut tests, &f, "oversized", proto_oversized);
+    register_single(&mut tests, &f, "pipe_write", proto_pipe_write);
+    register_single(&mut tests, &f, "presentation_time", proto_presentation_time);
+    register_single(&mut tests, &f, "screencopy_shm", proto_screencopy_shm);
+    register_single(&mut tests, &f, "shm_buffer", proto_shm_buffer);
+    register_single(&mut tests, &f, "shm_damage", proto_shm_damage);
+    register_single(&mut tests, &f, "shm_extend", proto_shm_extend);
+    register_single(&mut tests, &f, "title_prefix", proto_title_prefix);
+
+    #[cfg(feature = "dmabuf")]
+    {
+        register_per_device(&mut tests, &f, &vk_device_ids, "dmabuf", proto_dmabuf);
+        register_per_device(
+            &mut tests,
+            &f,
+            &vk_device_ids,
+            "dmabuf_damage",
+            proto_dmabuf_damage,
+        );
+        register_per_device(
+            &mut tests,
+            &f,
+            &vk_device_ids,
+            "explicit_sync",
+            proto_explicit_sync,
+        );
+        register_per_device(
+            &mut tests,
+            &f,
+            &vk_device_ids,
+            "screencopy_dmabuf",
+            proto_screencopy_dmabuf,
+        );
+    }
+
+    #[cfg(feature = "video")]
+    {
+        register_per_device(
+            &mut tests,
+            &f,
+            &vk_device_ids,
+            "dmavid_h264",
+            proto_dmavid_h264,
+        );
+        register_per_device(
+            &mut tests,
+            &f,
+            &vk_device_ids,
+            "dmavid_vp9",
+            proto_dmavid_vp9,
+        );
+    }
+
+    if matches.get_flag("list") {
+        for (name, _) in tests {
+            println!("{}", name);
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    let client_file: &OsString = matches.get_one("client-path").unwrap();
+    let server_file: &OsString = matches.get_one("server-path").unwrap();
+    let quiet: bool = matches.get_flag("quiet");
+
+    let mut mask = signal::SigSet::empty();
+    mask.add(signal::SIGCHLD);
+    let mut pollmask = mask
+        .thread_swap_mask(signal::SigmaskHow::SIG_BLOCK)
+        .map_err(|x| tag!("Failed to set sigmask: {}", x))
+        .unwrap();
+    pollmask.remove(signal::SIGCHLD);
+
+    let sigaction = signal::SigAction::new(
+        signal::SigHandler::Handler(noop_signal_handler),
+        signal::SaFlags::SA_NOCLDSTOP,
+        signal::SigSet::empty(),
+    );
+    unsafe {
+        // SAFETY: signal handler installed is trivial and replaces nothing
+        signal::sigaction(signal::Signal::SIGCHLD, &sigaction)
+            .map_err(|x| tag!("Failed to set sigaction: {}", x))
+            .unwrap();
+    }
+
+    let mut nfail: usize = 0;
+    let mut nskip: usize = 0;
+    for (name, func) in &tests {
+        print!("{} ...", name);
+
+        let info = TestInfo {
+            test_name: name,
+            waypipe_client: client_file,
+            waypipe_server: server_file,
         };
 
-        run_protocol_test_with_drm_node(vulk.get_device(), &|mut ctx: ProtocolTestContext| {
-            let [display, reg, dmabuf, screencopy, output, frame, params, buffer, ..] = ID_SEQUENCE;
-
-            let fmt = wayland_to_drm(WlShmFormat::R8);
-            let bpp = 1;
-            let (w, h) = (8, 8);
-            let img_size = (w * h) as usize * bpp;
-            let img_data = vec![0x33u8; img_size];
-            let mod_data = vec![0x44u8; img_size];
-            let modifier_list = vulk.get_supported_modifiers(fmt);
-
-            let copy_buf = Arc::new(vulkan_get_buffer(&vulk, img_size, true).unwrap());
-
-            ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_wl_display_get_registry(dst, display, reg);
-            }));
-            let scrcopy_name = "zwlr_screencopy_manager_v1".as_bytes();
-            ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_wl_registry_global(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3);
-                write_evt_wl_registry_global(dst, reg, 2, scrcopy_name, 3);
-                write_evt_wl_registry_global(dst, reg, 3, "wl_output".as_bytes(), 4);
-            }));
-            ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_wl_registry_bind(
-                    dst,
-                    reg,
-                    1,
-                    "zwp_linux_dmabuf_v1".as_bytes(),
-                    3,
-                    dmabuf,
-                );
-                write_req_wl_registry_bind(dst, reg, 2, scrcopy_name, 3, screencopy);
-                write_req_wl_registry_bind(dst, reg, 3, "wl_output".as_bytes(), 4, output);
-                write_req_zwlr_screencopy_manager_v1_capture_output(
-                    dst, screencopy, frame, 0, output,
-                );
-            }));
-
-            /* Note: This assumes the Waypipe instance supports all the modifiers that the
-             * test framework does */
-            ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_zwp_linux_dmabuf_v1_format(dst, dmabuf, fmt);
-                for m in &modifier_list {
-                    let (mod_hi, mod_lo) = split_u64(*m);
-                    write_evt_zwp_linux_dmabuf_v1_modifier(dst, dmabuf, fmt, mod_hi, mod_lo);
-                }
-                write_evt_zwlr_screencopy_frame_v1_linux_dmabuf(dst, frame, fmt, w, h);
-                write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
-            }));
-
-            let (prog_img, comp_img) = create_dmabuf_and_copy(
-                &vulk,
-                &mut ctx,
-                params,
-                dmabuf,
-                buffer,
-                w as _,
-                h as _,
-                fmt,
-                &modifier_list,
-                &img_data,
+        let (read_out, new_stdouterr) = unistd::pipe2(fcntl::OFlag::empty()).unwrap();
+        let new_stdin = unsafe {
+            /* SAFETY: newly opened file descriptor */
+            OwnedFd::from_raw_fd(
+                fcntl::open(
+                    "/dev/null",
+                    fcntl::OFlag::O_RDONLY,
+                    nix::sys::stat::Mode::empty(),
+                )
+                .unwrap(),
             )
-            .unwrap();
+        };
 
-            ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer);
-            }));
+        let res = match unsafe {
+            /* SAFETY: this program is not multi-threaded at this point.
+             * (No vulkan setup or initialization has been done.) */
+            unistd::fork().unwrap()
+        } {
+            unistd::ForkResult::Child => {
+                /* Blocking wait for child to complete */
+                #[allow(unused_unsafe)] /* dup2 is file-descriptor-unsafe */
+                unsafe {
+                    /* Atomically replace STDOUT, STDERR, STDIN; this may break library code which
+                     * incorrectly assumes standard io file descriptors never change properties
+                     * (e.g., by caching isatty()). */
+                    unistd::dup2(new_stdouterr.as_raw_fd(), libc::STDOUT_FILENO).unwrap();
+                    unistd::dup2(new_stdouterr.as_raw_fd(), libc::STDERR_FILENO).unwrap();
+                    unistd::dup2(new_stdin.as_raw_fd(), libc::STDIN_FILENO).unwrap();
+                }
+                drop(read_out);
 
-            copy_onto_dmabuf(&comp_img, &copy_buf, &mod_data).unwrap();
-            ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_zwlr_screencopy_frame_v1_ready(dst, frame, 0, 1, 123456789);
-            }));
+                // TODO: add option to disable this if nontrivial errors ever need to
+                // be debugged.
 
-            let output = copy_from_dmabuf(&prog_img, &copy_buf).unwrap();
-            assert!(output == mod_data);
+                /* Disable core dumps for child process, because the tests report errors
+                 * using using panic! or a failed assert!, and core dumps should not need
+                 * recording. However: this _also_ prevents the Waypipe instances from
+                 * making a core dump */
+                assert!(
+                    unsafe {
+                        let x = libc::rlimit {
+                            rlim_cur: 0,
+                            rlim_max: 0,
+                        };
+                        /* SAFETY: x is properly aligned, is not captured by setrlimit, and lives until end of scope */
+                        libc::setrlimit(libc::RLIMIT_CORE, &x)
+                    } != -1
+                );
 
-            ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_zwlr_screencopy_frame_v1_destroy(dst, frame);
-            }));
-        });
+                // TODO: process group configuration to kill the child process and
+                // everything it spawns on timeout events?
+
+                let ret = func(info);
+                return match ret {
+                    Ok(StatusOk::Pass) => ExitCode::SUCCESS,
+                    Ok(StatusOk::Skipped) => ExitCode::from(EXITCODE_SKIPPED),
+                    Err(StatusBad::Fail(msg)) => {
+                        println!("Test {} failed with error: {}", name, msg);
+                        ExitCode::FAILURE
+                    }
+                    Err(StatusBad::Unclear(msg)) => {
+                        println!("Test {} unclear, with error: {}", name, msg);
+                        ExitCode::from(EXITCODE_UNCLEAR)
+                    }
+                };
+            }
+            unistd::ForkResult::Parent { child } => {
+                drop(new_stdin);
+                drop(new_stdouterr);
+
+                set_nonblock(&read_out).unwrap();
+
+                /* Wait for the child to complete, and capture its output */
+                let mut log = Vec::new();
+                let mut tmp = vec![0u8; 1 << 18];
+                let child_status: WaitStatus;
+                loop {
+                    let status = wait::waitpid(child, Some(wait::WaitPidFlag::WNOHANG)).unwrap();
+                    match status {
+                        wait::WaitStatus::Exited(..) | wait::WaitStatus::Signaled(..) => {
+                            println!("Status change");
+                            child_status = status;
+                            break;
+                        }
+                        _ => (),
+                    }
+
+                    let mut pfds = [poll::PollFd::new(read_out.as_fd(), poll::PollFlags::POLLIN)];
+                    let res = poll::ppoll(&mut pfds, None, Some(pollmask));
+                    if let Err(errno) = res {
+                        assert!(errno == Errno::EINTR || errno == Errno::EAGAIN);
+                        continue;
+                    }
+
+                    let rev = pfds[0].revents().unwrap();
+                    if rev.contains(poll::PollFlags::POLLERR)
+                        || rev.contains(poll::PollFlags::POLLHUP)
+                    {
+                        /* Child closed connection (or more likely, died).
+                         * Data remaining in pipe will be read. */
+                        child_status = wait::waitpid(child, None).unwrap();
+                        break;
+                    }
+
+                    if !rev.contains(poll::PollFlags::POLLIN) {
+                        continue;
+                    }
+
+                    let eof_or_err = match unistd::read(read_out.as_raw_fd(), &mut tmp) {
+                        Ok(n) => {
+                            if n == 0 {
+                                true
+                            } else {
+                                log.extend_from_slice(&tmp[..n]);
+                                false
+                            }
+                        }
+                        Err(Errno::EAGAIN) => false,
+                        Err(Errno::EINTR) => false,
+                        Err(_) => true,
+                    };
+                    if eof_or_err {
+                        child_status = wait::waitpid(child, None).unwrap();
+                        break;
+                    }
+                }
+
+                /* Read all remaining data in the pipe, dropping anything
+                 * that was read after receipt of the information of test process death */
+                loop {
+                    match unistd::read(read_out.as_raw_fd(), &mut tmp) {
+                        Ok(n) => {
+                            if n == 0 {
+                                break;
+                            }
+                            log.extend_from_slice(&tmp[..n]);
+                        }
+                        Err(Errno::EINTR) => continue,
+                        Err(_) => break,
+                    }
+                }
+
+                if !quiet {
+                    println!("captured output:");
+                    println!("{}", String::from_utf8_lossy(&log));
+                }
+
+                match child_status {
+                    wait::WaitStatus::Exited(pid, exit_code) => {
+                        assert!(pid == child);
+                        let e = if exit_code > (u8::MAX as i32) || exit_code < 0 {
+                            u8::MAX
+                        } else {
+                            exit_code as u8
+                        };
+                        match e {
+                            0 => TestCategory::Pass,
+                            EXITCODE_SKIPPED => TestCategory::Skipped,
+                            EXITCODE_UNCLEAR => TestCategory::Unclear,
+                            _ => TestCategory::Fail,
+                        }
+                    }
+                    wait::WaitStatus::Signaled(pid, signal, dump) => {
+                        if false {
+                            println!(
+                                "Test process {} crashed with signal={}; coredump={}",
+                                pid, signal, dump
+                            );
+                        }
+                        /* The test process aborting signals either the Waypipe instance
+                         * failing (making the test panic) or a major bug in the test. */
+                        TestCategory::Fail
+                    }
+                    _ => {
+                        todo!("Unexpected exit status");
+                    }
+                }
+            }
+        };
+
+        let s = match res {
+            TestCategory::Pass => "ok",
+            TestCategory::Fail => {
+                nfail += 1;
+                "FAILED"
+            }
+            TestCategory::Skipped => {
+                nskip += 1;
+                "skipped"
+            }
+            TestCategory::Unclear => "UNCLEAR",
+        };
+
+        println!(" {}", s);
+    }
+
+    if nfail > 0 {
+        ExitCode::FAILURE
+    } else if nskip == tests.len() {
+        ExitCode::from(EXITCODE_SKIPPED)
+    } else {
+        ExitCode::SUCCESS
     }
 }

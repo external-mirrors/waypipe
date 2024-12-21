@@ -19,5 +19,5 @@ features:
   dmabuf: $WAYPIPE_FEATURE_DMABUF
   video: $WAYPIPE_FEATURE_VIDEO"
 
-env WAYPIPE_VERSION="$version" cargo build --frozen -v --profile "$1" --manifest-path "$2" --no-default-features --target-dir "$3" --features "$4"
+env WAYPIPE_VERSION="$version" cargo build --frozen -v --bin waypipe --profile "$1" --manifest-path "$2" --no-default-features --target-dir "$3" --features "$4"
 cp "$3/$1/waypipe" "$5"

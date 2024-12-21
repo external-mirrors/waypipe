@@ -28,7 +28,6 @@ mod mirror;
 mod read;
 mod secctx;
 mod stub;
-mod test;
 mod tracking;
 mod util;
 mod video;
@@ -249,30 +248,6 @@ impl fmt::Display for VSockConfig {
     }
 }
 
-/** Set the close-on-exec flag for a file descriptor */
-fn set_cloexec(fd: &OwnedFd, cloexec: bool) -> Result<(), String> {
-    fcntl::fcntl(
-        fd.as_raw_fd(),
-        fcntl::FcntlArg::F_SETFD(if cloexec {
-            nix::fcntl::FdFlag::FD_CLOEXEC
-        } else {
-            nix::fcntl::FdFlag::empty()
-        }),
-    )
-    .map_err(|x| tag!("Failed to set cloexec flag: {:?}", x))?;
-    Ok(())
-}
-
-/** Set the O_NONBLOCK flag for the file description */
-fn set_nonblock(fd: &OwnedFd) -> Result<(), String> {
-    fcntl::fcntl(
-        fd.as_raw_fd(),
-        fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
-    )
-    .map_err(|x| tag!("Failed to set nonblocking: {:?}", x))?;
-    Ok(())
-}
-
 /** Remove the dead child indicated by `pid` from the connection set */
 fn prune_connections(connections: &mut BTreeMap<u32, std::process::Child>, pid: nix::unistd::Pid) {
     if let Some(mut child) = connections.remove(&(pid.as_raw() as u32)) {
@@ -361,14 +336,23 @@ fn build_connection_command<'a>(
 /** Send connection header and run the main proxy loop for a new
  * `waypipe server` connection
  */
-fn handle_server_conn(link_fd: OwnedFd, wayland_fd: OwnedFd, opts: &Options) -> Result<(), String> {
+fn handle_server_conn(
+    link_fd: OwnedFd,
+    wayland_fd: OwnedFd,
+    opts: &Options,
+    wire_version_override: Option<u32>,
+) -> Result<(), String> {
     /* Note: the last 12 bytes of the header will stay at zero. They would
      * only need be set to a unique (random) value if reconnection support were
      * implemented. */
     let mut header: [u8; 16] = [0_u8; 16];
 
-    let ver_hi = WAYPIPE_PROTOCOL_VERSION >> 4;
-    let ver_lo = WAYPIPE_PROTOCOL_VERSION & ((1 << 4) - 1);
+    let ver = wire_version_override
+        .map(|x| x.clamp(MIN_PROTOCOL_VERSION, WAYPIPE_PROTOCOL_VERSION))
+        .unwrap_or(WAYPIPE_PROTOCOL_VERSION);
+
+    let ver_hi = ver >> 4;
+    let ver_lo = ver & ((1 << 4) - 1);
 
     let mut lead: u32 = (ver_hi << 16) | (ver_lo << 3) | CONN_FIXED_BIT;
     match opts.compression {
@@ -697,8 +681,11 @@ fn setup_sigint_handler() -> Result<(signal::SigSet, &'static AtomicBool), Strin
  * `waypipe client` connection. */
 fn handle_client_conn(link_fd: OwnedFd, wayland_fd: OwnedFd, opts: &Options) -> Result<(), String> {
     let mut buf = [0_u8; 16];
-    nix::unistd::read(link_fd.as_raw_fd(), &mut buf)
-        .map_err(|x| tag!("Failed to write connection header: {}", x))?;
+    let nr = nix::unistd::read(link_fd.as_raw_fd(), &mut buf)
+        .map_err(|x| tag!("Failed to read connection header: {}", x))?;
+    if nr != buf.len() {
+        return Err(tag!("Connection header not completely sent ({} bytes)", nr));
+    }
 
     let header = u32::from_le_bytes(buf[..4].try_into().unwrap());
     debug!("Connection header: 0x{:08x}", header);
@@ -855,7 +842,7 @@ fn run_server_oneshot(
 
     let link_fd = socket_connect(socket_path, cwd, unlink_at_end)?;
 
-    handle_server_conn(link_fd, sock1, options)?;
+    handle_server_conn(link_fd, sock1, options, None)?;
 
     debug!("Waiting for only child {} to reveal status", cmd_child.id());
     let _ = cmd_child.wait();
@@ -1480,49 +1467,6 @@ fn test_ssh_parsing() {
     }
 }
 
-/* Connection header constants. The original header layout is:
- *
- * 0: set iff reconnectable
- * 1: set iff update for reconnectable connection
- * 2: no dmabuf support (can be ignored as we lazily initialize)
- * 3-6: ignored
- * 7: fixed to 1
- * 8-10: compression type
- * 11-13: video type
- * 14-15: ignored
- * 16-30: version field, original Waypipe only accepts 0x1
- * 31: fixed to 0
- *
- * Waypipe's protocol does not use any interesting features early on;
- * the application side always starts by sending a Protocol-type message.
- *
- * To allow for a "silent" version upgrade, where a new version is
- * only used if acknowledged, the version field will now be interpreted as
- * follows:
- *
- * 3-6: lower bits of version
- * 16-23: upper bits of version
- *
- * All versions from 16 (=1) to 31 to should be able to interoperate
- * with original Waypipe.
- */
-pub const MIN_PROTOCOL_VERSION: u32 = 0x10;
-pub const WAYPIPE_PROTOCOL_VERSION: u32 = 0x11;
-const CONN_FIXED_BIT: u32 = 0x1 << 7;
-const CONN_UNSET_BIT: u32 = 0x1 << 31;
-const _CONN_RECONNECTABLE_BIT: u32 = 0x1 << 0;
-const _CONN_UPDATE_BIT: u32 = 0x1 << 1;
-const CONN_NO_DMABUF_SUPPORT: u32 = 0x1 << 2;
-const CONN_COMPRESSION_MASK: u32 = 0x7 << 8;
-const CONN_NO_COMPRESSION: u32 = 0x1 << 8;
-const CONN_LZ4_COMPRESSION: u32 = 0x2 << 8;
-const CONN_ZSTD_COMPRESSION: u32 = 0x3 << 8;
-const CONN_VIDEO_MASK: u32 = 0x7 << 11;
-const CONN_NO_VIDEO: u32 = 0x1 << 11;
-const CONN_VP9_VIDEO: u32 = 0x2 << 11;
-const CONN_H264_VIDEO: u32 = 0x3 << 11;
-const CONN_AV1_VIDEO: u32 = 0x4 << 11;
-
 // an available/unavailable list could be constructed if #[cfg] where to apply to expressions
 const VERSION_STRING_CARGO: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -1727,6 +1671,13 @@ fn main() -> Result<(), String> {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("test-wire-version")
+            .long("test-wire-version")
+            .hide(true)
+            .help("Test option: set the wire protocol version tried for `waypipe server`; must be >= 16")
+            .value_parser(value_parser!(u32)),
+        )
+        .arg(
             Arg::new("test-fast-bench")
                 .long("test-fast-bench")
                 .hide(true)
@@ -1797,6 +1748,7 @@ fn main() -> Result<(), String> {
     let drm_node = matches.get_one::<PathBuf>("drm-node");
     let loop_test = matches.get_one::<bool>("test-loop").unwrap();
     let fast_bench = *matches.get_one::<bool>("test-fast-bench").unwrap();
+    let test_wire_version: Option<u32> = matches.get_one::<u32>("test-wire-version").copied();
     let secctx = matches.get_one::<String>("secctx");
     let vsock = *matches.get_one::<bool>("vsock").unwrap();
 
@@ -2104,13 +2056,20 @@ fn main() -> Result<(), String> {
 
             set_cloexec(&wayland_fd, true)?;
 
-            let link_fd = socket_connect(
-                &socket.ok_or_else(|| tag!("Socket path not provided"))?,
-                &cwd,
-                false,
-            )?;
+            let link_fd = if let Some(s) = wayland_socket {
+                /* For test use: provide the upstream Waypipe connection through WAYLAND_SOCKET.
+                 * (To reduce the risk of unexpected connections, the downstream Wayland connection
+                 * used WAYPIPE_CONNECTION_FD.) */
+                s
+            } else {
+                socket_connect(
+                    &socket.ok_or_else(|| tag!("Socket path not provided"))?,
+                    &cwd,
+                    false,
+                )?
+            };
 
-            handle_server_conn(link_fd, wayland_fd, &opts)
+            handle_server_conn(link_fd, wayland_fd, &opts, test_wire_version)
         }
         Some(("client-conn", _)) => {
             debug!("Starting client connection process");
@@ -2129,8 +2088,12 @@ fn main() -> Result<(), String> {
                 OwnedFd::from_raw_fd(RawFd::from(opt_fd))
             };
 
-            let wayland_fd = connect_to_wayland_display(&cwd)?;
-
+            let wayland_fd = if let Some(s) = wayland_socket {
+                /* For test use: provide the Wayland connection through WAYLAND_SOCKET */
+                s
+            } else {
+                connect_to_wayland_display(&cwd)?
+            };
             debug!("have read initial bytes");
 
             handle_client_conn(link_fd, wayland_fd, &opts)

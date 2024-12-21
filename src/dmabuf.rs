@@ -317,7 +317,8 @@ pub fn drm_to_wayland(drm_format: u32) -> u32 {
     }
 }
 
-#[cfg(test)]
+#[allow(dead_code)]
+#[cfg(any(test, feature = "test_proto"))]
 pub const fn wayland_to_drm(wl_format: WlShmFormat) -> u32 {
     match wl_format {
         WlShmFormat::Argb8888 => fourcc('A', 'R', '2', '4'),
@@ -2559,7 +2560,7 @@ pub fn start_copy_segments_onto_dmabuf(
 
 impl VulkanCopyHandle {
     /* Not recommended in general -- blocks the thread. Returns true if point reached. */
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test_proto"))]
     pub fn wait_until_done(self: &VulkanCopyHandle) -> Result<(), String> {
         self.vulk
             .wait_for_timeline_pt(self.completion_time_point, u64::MAX)
@@ -2723,7 +2724,8 @@ impl VulkanDmabuf {
 }
 
 impl VulkanTimelineSemaphore {
-    #[cfg(test)]
+    #[allow(dead_code)]
+    #[cfg(any(test, feature = "test_proto"))]
     pub fn wait_for_timeline_pt(
         self: &VulkanTimelineSemaphore,
         pt: u64,
@@ -2781,7 +2783,8 @@ impl VulkanTimelineSemaphore {
     }
 }
 
-#[cfg(test)]
+#[allow(dead_code)]
+#[cfg(any(test, feature = "test_proto"))]
 pub fn copy_onto_dmabuf(
     buf: &Arc<VulkanDmabuf>,
     copy: &Arc<VulkanBuffer>,
@@ -2820,7 +2823,8 @@ pub fn copy_onto_dmabuf(
     Ok(())
 }
 
-#[cfg(test)]
+#[allow(dead_code)]
+#[cfg(any(test, feature = "test_proto"))]
 pub fn copy_from_dmabuf(
     buf: &Arc<VulkanDmabuf>,
     copy: &Arc<VulkanBuffer>,

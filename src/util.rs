@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*! Misc utilities and types */
+use nix::fcntl;
 use std::fmt;
 use std::fmt::{Display, Formatter, Write};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::str::FromStr;
 
 /** Like `format!`, but prepends file and line number.
@@ -16,6 +18,49 @@ macro_rules! tag {
         format!(concat!(std::file!(), ":", std::line!(), ": ", $x), $($arg)+)
     };
 }
+
+/* Connection header constants. The original header layout is:
+ *
+ * 0: set iff reconnectable
+ * 1: set iff update for reconnectable connection
+ * 2: no dmabuf support (can be ignored as we lazily initialize)
+ * 3-6: ignored
+ * 7: fixed to 1
+ * 8-10: compression type
+ * 11-13: video type
+ * 14-15: ignored
+ * 16-30: version field, original Waypipe only accepts 0x1
+ * 31: fixed to 0
+ *
+ * Waypipe's protocol does not use any interesting features early on;
+ * the application side always starts by sending a Protocol-type message.
+ *
+ * To allow for a "silent" version upgrade, where a new version is
+ * only used if acknowledged, the version field will now be interpreted as
+ * follows:
+ *
+ * 3-6: lower bits of version
+ * 16-23: upper bits of version
+ *
+ * All versions from 16 (=1) to 31 to should be able to interoperate
+ * with original Waypipe.
+ */
+pub const MIN_PROTOCOL_VERSION: u32 = 0x10;
+pub const WAYPIPE_PROTOCOL_VERSION: u32 = 0x11;
+pub const CONN_FIXED_BIT: u32 = 0x1 << 7;
+pub const CONN_UNSET_BIT: u32 = 0x1 << 31;
+pub const _CONN_RECONNECTABLE_BIT: u32 = 0x1 << 0;
+pub const _CONN_UPDATE_BIT: u32 = 0x1 << 1;
+pub const CONN_NO_DMABUF_SUPPORT: u32 = 0x1 << 2;
+pub const CONN_COMPRESSION_MASK: u32 = 0x7 << 8;
+pub const CONN_NO_COMPRESSION: u32 = 0x1 << 8;
+pub const CONN_LZ4_COMPRESSION: u32 = 0x2 << 8;
+pub const CONN_ZSTD_COMPRESSION: u32 = 0x3 << 8;
+pub const CONN_VIDEO_MASK: u32 = 0x7 << 11;
+pub const CONN_NO_VIDEO: u32 = 0x1 << 11;
+pub const CONN_VP9_VIDEO: u32 = 0x2 << 11;
+pub const CONN_H264_VIDEO: u32 = 0x3 << 11;
+pub const CONN_AV1_VIDEO: u32 = 0x4 << 11;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum WmsgType {
@@ -524,4 +569,28 @@ fn video_setting_roundtrip() {
         println!("{}", VideoSetting::to_string(&v));
         assert_eq!(VideoSetting::from_str(&VideoSetting::to_string(&v)), Ok(v));
     }
+}
+
+/** Set the close-on-exec flag for a file descriptor */
+pub fn set_cloexec(fd: &OwnedFd, cloexec: bool) -> Result<(), String> {
+    fcntl::fcntl(
+        fd.as_raw_fd(),
+        fcntl::FcntlArg::F_SETFD(if cloexec {
+            fcntl::FdFlag::FD_CLOEXEC
+        } else {
+            fcntl::FdFlag::empty()
+        }),
+    )
+    .map_err(|x| tag!("Failed to set cloexec flag: {:?}", x))?;
+    Ok(())
+}
+
+/** Set the O_NONBLOCK flag for the file description */
+pub fn set_nonblock(fd: &OwnedFd) -> Result<(), String> {
+    fcntl::fcntl(
+        fd.as_raw_fd(),
+        fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+    )
+    .map_err(|x| tag!("Failed to set nonblocking: {:?}", x))?;
+    Ok(())
 }
