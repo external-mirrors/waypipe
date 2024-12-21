@@ -2244,7 +2244,7 @@ pub fn start_dmavid_encode_hw(
                 .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
                 .dst_queue_family_index(vulk.queue_family)
                 .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
                 .subresource_range(standard_access_range),
             vk::ImageMemoryBarrier::default()
                 .image(dst_img)
@@ -2303,7 +2303,7 @@ pub fn start_dmavid_encode_hw(
             .new_layout(vk::ImageLayout::GENERAL)
             .src_queue_family_index(vulk.queue_family)
             .dst_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .src_access_mask(vk::AccessFlags::SHADER_READ)
             .dst_access_mask(vk::AccessFlags::NONE)
             .subresource_range(standard_access_range)];
         vulk.dev.cmd_pipeline_barrier(
@@ -2560,7 +2560,7 @@ pub fn start_dmavid_encode_sw(
             .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
             .dst_queue_family_index(vulk.queue_family)
             .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
             .subresource_range(standard_access_range)];
         vulk.dev.cmd_pipeline_barrier(
             cb,
@@ -2614,7 +2614,7 @@ pub fn start_dmavid_encode_sw(
             .new_layout(vk::ImageLayout::GENERAL)
             .src_queue_family_index(vulk.queue_family)
             .dst_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .src_access_mask(vk::AccessFlags::SHADER_READ)
             .dst_access_mask(vk::AccessFlags::NONE)
             .subresource_range(standard_access_range)];
         let buf_memory_barriers = &[
