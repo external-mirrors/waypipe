@@ -72,10 +72,7 @@ struct VulkanSWDecodeData {
     buf_v_view: vk::BufferView,
 }
 
-struct VulkanHWDecodeData {
-    plane_1_image_view: vk::ImageView,
-    plane_2_image_view: vk::ImageView,
-}
+struct VulkanHWDecodeData {}
 
 enum VulkanDecodeOpData {
     Software(VulkanSWDecodeData),
@@ -124,10 +121,7 @@ impl Drop for VulkanDecodeOpHandle {
                     vulk.dev.destroy_buffer_view(x.buf_v_view, None);
                     // VulkanBuffer has Drop impl
                 }
-                VulkanDecodeOpData::Hardware(ref x) => {
-                    vulk.dev.destroy_image_view(x.plane_1_image_view, None);
-                    vulk.dev.destroy_image_view(x.plane_2_image_view, None);
-                }
+                VulkanDecodeOpData::Hardware(_) => {}
             }
 
             vulk.dev
@@ -173,14 +167,40 @@ struct VideoDecodeInner {
 }
 unsafe impl Send for VideoDecodeInner {}
 
+/** Hardware video decoding produces, and encoding uses, a multi-planar image with a
+ * format like G8_B8R8_2PLANE_420_UNORM; however, these typically only have
+ * TRANSFER and various SAMPLED format features, but not BLIT, STORAGE, or
+ * COLOR_ATTACHMENT. (Note: STORAGE sometimes works in practice despite not being
+ * supported; doing this may be faster but is risky and could lead to exciting bugs.)
+ * Also,
+ * Also, aliasing individual planes appears to require ALIAS|DISJOINT which Vulkan
+ * video does not appear to always support (or if so, figuring it out and
+ * integrating it with ffmpeg's code is complicated.) Therefore: To make encoding and
+ * decoding more reliable and symmetric, transfer image data to/from a staging image
+ * before doing the YUV<->RGB conversion.
+ *
+ * This does not hold a reference to the vulkan instance and cleaning up this struct
+ * is the owner's responsibility.
+ */
+struct VideoHWStagingImages {
+    plane_memories: [vk::DeviceMemory; 2],
+    plane_images: [vk::Image; 2],
+    plane_image_views: [vk::ImageView; 2],
+    layout: Mutex<vk::ImageLayout>,
+}
+enum VideoDecodeStateData {
+    SW,
+    HW(VideoHWStagingImages),
+}
+
 pub struct VideoDecodeState {
     // for now, only updating a single dmabuf
     target: Arc<VulkanDmabuf>,
     inner: Mutex<VideoDecodeInner>,
     /* Image view for `target`, type COLOR, entire image */
     output_image_view: vk::ImageView,
-    /* Use software decoding */
-    sw: bool,
+    /* State specific to hardware vs software decoding pathways */
+    data: VideoDecodeStateData,
 }
 
 struct VideoEncodeInner {
@@ -212,6 +232,12 @@ impl Drop for VideoDecodeState {
                 .vulk
                 .dev
                 .destroy_image_view(self.output_image_view, None);
+            match self.data {
+                VideoDecodeStateData::HW(ref data) => {
+                    free_staging_images(&self.target.vulk, data);
+                }
+                VideoDecodeStateData::SW => (),
+            }
         }
     }
 }
@@ -867,6 +893,111 @@ unsafe extern "C" fn pick_video_format_hw(ctx: *mut AVCodecContext, fmts: *const
     AVPixelFormat_AV_PIX_FMT_VULKAN
 }
 
+unsafe fn free_staging_images(vulk: &Vulkan, data: &VideoHWStagingImages) {
+    for i in 0..2 {
+        vulk.dev.destroy_image_view(data.plane_image_views[i], None);
+        vulk.dev.destroy_image(data.plane_images[i], None);
+        vulk.dev.free_memory(data.plane_memories[i], None);
+    }
+}
+
+fn create_staging_images(
+    vulk: &Vulkan,
+    width: u32,
+    height: u32,
+    fmt: vk::Format,
+) -> Result<VideoHWStagingImages, String> {
+    assert!(fmt == vk::Format::G8_B8R8_2PLANE_420_UNORM);
+    assert!(width % 2 == 0 && height % 2 == 0);
+
+    let planes = &[
+        (vk::Format::R8_UNORM, width, height),
+        (vk::Format::R8G8_UNORM, width / 2, height / 2),
+    ];
+
+    let mut plane_images = [vk::Image::null(); 2];
+    let mut plane_memories = [vk::DeviceMemory::null(); 2];
+    let mut plane_image_views = [vk::ImageView::null(); 2];
+
+    unsafe {
+        for plane in 0..=1 {
+            let image_info = vk::ImageCreateInfo::default()
+                .flags(vk::ImageCreateFlags::empty())
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(planes[plane].0)
+                .extent(vk::Extent3D {
+                    width: planes[plane].1,
+                    height: planes[plane].2,
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(
+                    vk::ImageUsageFlags::TRANSFER_SRC
+                        | vk::ImageUsageFlags::TRANSFER_DST
+                        | vk::ImageUsageFlags::SAMPLED
+                        | vk::ImageUsageFlags::STORAGE,
+                )
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .initial_layout(vk::ImageLayout::UNDEFINED);
+
+            let image = vulk
+                .dev
+                .create_image(&image_info, None)
+                .map_err(|x| tag!("Failed to create Vulkan image: {:?}", x))?;
+
+            let mem_reqs = vulk.dev.get_image_memory_requirements(image);
+
+            assert!(mem_reqs.memory_type_bits != 0);
+            let mem_index = mem_reqs.memory_type_bits.trailing_zeros();
+
+            let alloc_info = vk::MemoryAllocateInfo::default()
+                .allocation_size(mem_reqs.size)
+                .memory_type_index(mem_index);
+            let memory = vulk
+                .dev
+                .allocate_memory(&alloc_info, None)
+                .map_err(|x| tag!("Failed to allocate image memory: {:?}", x))?;
+
+            vulk.dev
+                .bind_image_memory(image, memory, 0)
+                .map_err(|x| tag!("Failed to bind image memory: {:?}", x))?;
+
+            let image_view_info = vk::ImageViewCreateInfo::default()
+                .flags(vk::ImageViewCreateFlags::empty())
+                .image(image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(planes[plane].0)
+                .components(vk::ComponentMapping::default().r(vk::ComponentSwizzle::IDENTITY))
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(1)
+                        .base_array_layer(0)
+                        .layer_count(1),
+                );
+            let image_view = vulk
+                .dev
+                .create_image_view(&image_view_info, None)
+                .map_err(|_| "Failed to create plane 1 image view")?;
+
+            plane_images[plane] = image;
+            plane_memories[plane] = memory;
+            plane_image_views[plane] = image_view;
+        }
+
+        Ok(VideoHWStagingImages {
+            plane_memories,
+            plane_images,
+            plane_image_views,
+            layout: Mutex::new(vk::ImageLayout::UNDEFINED),
+        })
+    }
+}
+
 pub fn setup_video_decode_hw(
     img: &Arc<VulkanDmabuf>,
     fmt: VideoFormat,
@@ -884,6 +1015,8 @@ pub fn setup_video_decode_hw(
         if ctx.is_null() {
             return Err(tag!("Failed to allocate context"));
         }
+
+        let (awidth, aheight) = align_size(img.width, img.height, fmt);
         {
             let cr = ctx.as_mut().unwrap();
 
@@ -897,7 +1030,7 @@ pub fn setup_video_decode_hw(
             cr.opaque = &video.bindings as *const ffmpeg as *mut _;
             cr.get_format = Some(pick_video_format_hw);
 
-            (cr.width, cr.height) = align_size(img.width, img.height, fmt);
+            (cr.width, cr.height) = (awidth, aheight);
         }
 
         /* ctx->get_format will be called to do setup work once a packet is received */
@@ -929,11 +1062,18 @@ pub fn setup_video_decode_hw(
             .create_image_view(&output_image_view_info, None)
             .map_err(|_| "Failed to create output image view")?;
 
+        let staging_images = create_staging_images(
+            &img.vulk,
+            awidth.try_into().unwrap(),
+            aheight.try_into().unwrap(),
+            vk::Format::G8_B8R8_2PLANE_420_UNORM,
+        )?;
+
         Ok(VideoDecodeState {
             target: img.clone(),
             inner: Mutex::new(VideoDecodeInner { ctx }),
             output_image_view,
-            sw: false,
+            data: VideoDecodeStateData::HW(staging_images),
         })
     }
 }
@@ -1013,7 +1153,7 @@ pub fn setup_video_decode_sw(
             target: img.clone(),
             inner: Mutex::new(VideoDecodeInner { ctx }),
             output_image_view,
-            sw: true,
+            data: VideoDecodeStateData::SW,
         })
     }
 }
@@ -1099,6 +1239,11 @@ pub fn start_dmavid_decode_hw(
         state.target.height,
         packet.len()
     );
+    let VideoDecodeStateData::HW(ref state_data) = state.data else {
+        unreachable!()
+    };
+    let mut current_staging_layout = state_data.layout.lock().unwrap();
+
     unsafe {
         let av_packet = video.bindings.av_packet_alloc();
         video
@@ -1113,6 +1258,15 @@ pub fn start_dmavid_decode_hw(
 
         // ignoring EAGAIN, since Waypipe's video streaming does one packet, one frame
         avcodec_receive_frame(&video.bindings, dec_inner.ctx, frame)?;
+
+        let (frame_width, frame_height): (u32, u32) = (
+            (*frame).width.try_into().unwrap(),
+            (*frame).height.try_into().unwrap(),
+        );
+        assert!(
+            frame_width as usize >= state.target.width
+                && frame_height as usize >= state.target.height
+        );
 
         let hw_fr_ref = (*frame).hw_frames_ctx.as_ref().unwrap();
         let hwfc_ref = hw_fr_ref.data.cast::<AVHWFramesContext>().as_mut().unwrap();
@@ -1166,57 +1320,15 @@ pub fn start_dmavid_decode_hw(
             .map_err(|_| "Failed to allocate descriptor sets")?;
         let descriptor_set = descs[0];
 
-        // TODO: store these on the individual output images
-        let plane_1_image_view_info = vk::ImageViewCreateInfo::default()
-            .flags(vk::ImageViewCreateFlags::empty())
-            .image(src_img)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(vk::Format::R8_UNORM)
-            .components(vk::ComponentMapping::default().r(vk::ComponentSwizzle::IDENTITY))
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::PLANE_0)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(0)
-                    .layer_count(1),
-            );
-        let plane_1_image_view = vulk
-            .dev
-            .create_image_view(&plane_1_image_view_info, None)
-            .map_err(|_| "Failed to create plane 1 image view")?;
-        let plane_2_image_view_info = vk::ImageViewCreateInfo::default()
-            .flags(vk::ImageViewCreateFlags::empty())
-            .image(src_img)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(vk::Format::R8G8_UNORM)
-            .components(
-                vk::ComponentMapping::default()
-                    .r(vk::ComponentSwizzle::IDENTITY)
-                    .g(vk::ComponentSwizzle::IDENTITY),
-            )
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::PLANE_1)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(0)
-                    .layer_count(1),
-            );
-        let plane_2_image_view = vulk
-            .dev
-            .create_image_view(&plane_2_image_view_info, None)
-            .map_err(|_| "Failed to create plane 2 image view")?;
-
         let output_image_info = &[vk::DescriptorImageInfo::default()
             .image_view(state.output_image_view)
             .image_layout(vk::ImageLayout::GENERAL)];
         let input_1_image_info = &[vk::DescriptorImageInfo::default()
-            .image_view(plane_1_image_view)
+            .image_view(state_data.plane_image_views[0])
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .sampler(video.yuv_to_rgb_sampler_y)];
         let input_2_image_info = &[vk::DescriptorImageInfo::default()
-            .image_view(plane_2_image_view)
+            .image_view(state_data.plane_image_views[1])
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .sampler(video.yuv_to_rgb_sampler_rb)];
 
@@ -1263,31 +1375,130 @@ pub fn start_dmavid_decode_hw(
             .map_err(|_| "Failed to begin command buffer")?;
 
         let target_layout = vk::ImageLayout::GENERAL;
-        let src_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        let src_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
 
         let standard_access_range = vk::ImageSubresourceRange::default()
             .aspect_mask(vk::ImageAspectFlags::COLOR)
             .level_count(1)
             .layer_count(1);
         let mut img_inner = state.target.inner.lock().unwrap();
-        let entry_barriers = &[
-            qfot_acquire_image_memory_barrier(
-                state.target.image,
-                img_inner.image_layout,
-                target_layout,
-                vulk.queue_family,
-                vk::AccessFlags::SHADER_WRITE,
-            ),
+
+        let pre_transfer_barriers = &[vk::ImageMemoryBarrier::default()
+            .image(src_img)
+            .old_layout(vk::ImageLayout::from_raw(init_layout as _))
+            .new_layout(src_layout)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+            .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
+            .subresource_range(standard_access_range)];
+        vulk.dev.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            pre_transfer_barriers,
+        );
+        /* Transition the staging images from undefined, discarding their previous
+         * contents; the images will be entirely filled by the following copy operations. */
+        let pre_transfer_barriers2 = &[
             vk::ImageMemoryBarrier::default()
-                .image(src_img)
-                .old_layout(vk::ImageLayout::from_raw(init_layout as _))
-                .new_layout(src_layout)
+                .image(state_data.plane_images[0])
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .src_access_mask(vk::AccessFlags::SHADER_READ)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .subresource_range(standard_access_range),
+            vk::ImageMemoryBarrier::default()
+                .image(state_data.plane_images[1])
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .src_access_mask(vk::AccessFlags::SHADER_READ)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                 .subresource_range(standard_access_range),
         ];
+        vulk.dev.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            pre_transfer_barriers2,
+        );
+
+        let copy_plane_1 = &[vk::ImageCopy {
+            src_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::PLANE_0,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            src_offset: vk::Offset3D::default(),
+            dst_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            dst_offset: vk::Offset3D::default(),
+            extent: vk::Extent3D {
+                width: frame_width,
+                height: frame_height,
+                depth: 1,
+            },
+        }];
+        let copy_plane_2 = &[vk::ImageCopy {
+            src_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::PLANE_1,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            src_offset: vk::Offset3D::default(),
+            dst_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            dst_offset: vk::Offset3D::default(),
+            extent: vk::Extent3D {
+                width: frame_width / 2,
+                height: frame_height / 2,
+                depth: 1,
+            },
+        }];
+        vulk.dev.cmd_copy_image(
+            cb,
+            src_img,
+            src_layout,
+            state_data.plane_images[0],
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            copy_plane_1,
+        );
+        vulk.dev.cmd_copy_image(
+            cb,
+            src_img,
+            src_layout,
+            state_data.plane_images[1],
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            copy_plane_2,
+        );
+
+        let output_image_barrier = &[qfot_acquire_image_memory_barrier(
+            state.target.image,
+            img_inner.image_layout,
+            target_layout,
+            vulk.queue_family,
+            vk::AccessFlags::SHADER_WRITE,
+        )];
         vulk.dev.cmd_pipeline_barrier(
             cb,
             vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -1295,7 +1506,36 @@ pub fn start_dmavid_decode_hw(
             vk::DependencyFlags::empty(),
             &[],
             &[],
-            entry_barriers,
+            output_image_barrier,
+        );
+        let staging_barrier = &[
+            vk::ImageMemoryBarrier::default()
+                .image(state_data.plane_images[0])
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .subresource_range(standard_access_range),
+            vk::ImageMemoryBarrier::default()
+                .image(state_data.plane_images[1])
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .subresource_range(standard_access_range),
+        ];
+        vulk.dev.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            staging_barrier,
         );
 
         vulk.dev.cmd_bind_pipeline(
@@ -1378,6 +1618,8 @@ pub fn start_dmavid_decode_hw(
             .map_err(|_| "Queue submit failed")?; // <- can fail with OOM
         drop(inner);
 
+        *current_staging_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+
         /* Unlock frame, now that command is submitted. (Note: unlocking before
          * submission could risk timeline semaphore value updates and monotonicity
          * violations */
@@ -1397,10 +1639,7 @@ pub fn start_dmavid_decode_hw(
         Ok(VulkanDecodeOpHandle {
             decode: state.clone(),
             pool: pool.clone(),
-            data: VulkanDecodeOpData::Hardware(VulkanHWDecodeData {
-                plane_1_image_view,
-                plane_2_image_view,
-            }),
+            data: VulkanDecodeOpData::Hardware(VulkanHWDecodeData {}),
             desc_pool,
             descriptor_set,
             cb,
@@ -1762,7 +2001,7 @@ pub fn start_dmavid_apply(
     pool: &Arc<VulkanCommandPool>,
     packet: &[u8],
 ) -> Result<VulkanDecodeOpHandle, String> {
-    if state.sw {
+    if matches!(state.data, VideoDecodeStateData::SW) {
         start_dmavid_decode_sw(state, pool, packet)
     } else {
         start_dmavid_decode_hw(state, pool, packet)
@@ -2912,7 +3151,11 @@ fn test_video(try_hardware: bool) {
                         Arc::new(setup_video_encode(&dmabuf1, video_format, None).unwrap());
                     let dec_state = Arc::new(setup_video_decode(&dmabuf2, video_format).unwrap());
 
-                    println!("Enc is sw: {}, Dec is sw: {}", enc_state.sw, dec_state.sw);
+                    println!(
+                        "Enc is sw: {}, Dec is sw: {}",
+                        enc_state.sw,
+                        matches!(dec_state.data, VideoDecodeStateData::SW)
+                    );
 
                     let copy1 = Arc::new(
                         vulkan_get_buffer(&vulk, dmabuf1.nominal_size(None), false).unwrap(),
