@@ -1731,9 +1731,12 @@ fn setup_linux_dmabuf(
 
     let main_device = vulk.get_device();
     let advertised_formats = [
+        wayland_to_drm(WlShmFormat::R8),
         wayland_to_drm(WlShmFormat::Rgb565),
+        wayland_to_drm(WlShmFormat::Argb8888),
         wayland_to_drm(WlShmFormat::Xrgb8888),
-        wayland_to_drm(WlShmFormat::Xrgb16161616),
+        wayland_to_drm(WlShmFormat::Xbgr16161616),
+        wayland_to_drm(WlShmFormat::Abgr16161616),
     ];
     let mut table: Vec<u8> = Vec::new();
     let mut array: Vec<u8> = Vec::new();
@@ -2521,10 +2524,10 @@ fn proto_dmabuf_damage(info: TestInfo, device: RenderDevice) -> TestResult {
                 WlShmFormat::R8,
                 WlShmFormat::Rgb565,
                 WlShmFormat::Argb8888,
-                WlShmFormat::Argb16161616,
+                WlShmFormat::Abgr16161616,
             ] {
                 let bpp = match wl_format {
-                    WlShmFormat::Argb16161616 => 8,
+                    WlShmFormat::Abgr16161616 => 8,
                     WlShmFormat::Argb8888 => 4,
                     WlShmFormat::Rgb565 => 2,
                     WlShmFormat::R8 => 1,
