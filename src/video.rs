@@ -1006,6 +1006,42 @@ fn create_staging_images(
     }
 }
 
+/** Create a vkImageSubresourceLayers for an entire image (single layer, no mipmaps) */
+fn subresource_layer(aspect_mask: vk::ImageAspectFlags) -> vk::ImageSubresourceLayers {
+    vk::ImageSubresourceLayers {
+        aspect_mask,
+        mip_level: 0,
+        base_array_layer: 0,
+        layer_count: 1,
+    }
+}
+
+/** Image memory barrier for a same-queue layout transition.
+ *
+ * The access range is COLOR for the single level/layer of the entire image. */
+fn image_layout_transition(
+    image: vk::Image,
+    old_layout: vk::ImageLayout,
+    new_layout: vk::ImageLayout,
+    src_access_mask: vk::AccessFlags,
+    dst_access_mask: vk::AccessFlags,
+) -> vk::ImageMemoryBarrier<'static> {
+    let standard_access_range = vk::ImageSubresourceRange::default()
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .level_count(1)
+        .layer_count(1);
+
+    vk::ImageMemoryBarrier::default()
+        .image(image)
+        .old_layout(old_layout)
+        .new_layout(new_layout)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .src_access_mask(src_access_mask)
+        .dst_access_mask(dst_access_mask)
+        .subresource_range(standard_access_range)
+}
+
 fn create_dmabuf_view(img: &VulkanDmabuf) -> Result<vk::ImageView, String> {
     let idswizzle = vk::ComponentMapping::default()
         .r(vk::ComponentSwizzle::IDENTITY)
@@ -1394,24 +1430,20 @@ pub fn start_dmavid_decode_hw(
         /* Transition the staging images from undefined, discarding their previous
          * contents; the images will be entirely filled by the following copy operations. */
         let pre_transfer_barriers2 = &[
-            vk::ImageMemoryBarrier::default()
-                .image(state_data.plane_images[0])
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .src_access_mask(vk::AccessFlags::SHADER_READ)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .subresource_range(standard_access_range),
-            vk::ImageMemoryBarrier::default()
-                .image(state_data.plane_images[1])
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .src_access_mask(vk::AccessFlags::SHADER_READ)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .subresource_range(standard_access_range),
+            image_layout_transition(
+                state_data.plane_images[0],
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::AccessFlags::SHADER_READ,
+                vk::AccessFlags::TRANSFER_WRITE,
+            ),
+            image_layout_transition(
+                state_data.plane_images[1],
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::AccessFlags::SHADER_READ,
+                vk::AccessFlags::TRANSFER_WRITE,
+            ),
         ];
         vulk.dev.cmd_pipeline_barrier(
             cb,
@@ -1424,19 +1456,9 @@ pub fn start_dmavid_decode_hw(
         );
 
         let copy_plane_1 = &[vk::ImageCopy {
-            src_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::PLANE_0,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
+            src_subresource: subresource_layer(vk::ImageAspectFlags::PLANE_0),
             src_offset: vk::Offset3D::default(),
-            dst_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
+            dst_subresource: subresource_layer(vk::ImageAspectFlags::COLOR),
             dst_offset: vk::Offset3D::default(),
             extent: vk::Extent3D {
                 width: frame_width,
@@ -1445,19 +1467,9 @@ pub fn start_dmavid_decode_hw(
             },
         }];
         let copy_plane_2 = &[vk::ImageCopy {
-            src_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::PLANE_1,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
+            src_subresource: subresource_layer(vk::ImageAspectFlags::PLANE_1),
             src_offset: vk::Offset3D::default(),
-            dst_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
+            dst_subresource: subresource_layer(vk::ImageAspectFlags::COLOR),
             dst_offset: vk::Offset3D::default(),
             extent: vk::Extent3D {
                 width: frame_width / 2,
@@ -1499,24 +1511,20 @@ pub fn start_dmavid_decode_hw(
             output_image_barrier,
         );
         let staging_barrier = &[
-            vk::ImageMemoryBarrier::default()
-                .image(state_data.plane_images[0])
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .subresource_range(standard_access_range),
-            vk::ImageMemoryBarrier::default()
-                .image(state_data.plane_images[1])
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .subresource_range(standard_access_range),
+            image_layout_transition(
+                state_data.plane_images[0],
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+            ),
+            image_layout_transition(
+                state_data.plane_images[1],
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::AccessFlags::TRANSFER_WRITE,
+                vk::AccessFlags::SHADER_READ,
+            ),
         ];
         vulk.dev.cmd_pipeline_barrier(
             cb,
@@ -2394,24 +2402,20 @@ pub fn start_dmavid_encode_hw(
         );
         /* Set staging image layout and discard old contents */
         let staging_entry_barriers = &[
-            vk::ImageMemoryBarrier::default()
-                .image(state_data.plane_images[0])
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::GENERAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .src_access_mask(vk::AccessFlags::TRANSFER_READ)
-                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .subresource_range(standard_access_range),
-            vk::ImageMemoryBarrier::default()
-                .image(state_data.plane_images[1])
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::GENERAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .src_access_mask(vk::AccessFlags::TRANSFER_READ)
-                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .subresource_range(standard_access_range),
+            image_layout_transition(
+                state_data.plane_images[0],
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::GENERAL,
+                vk::AccessFlags::TRANSFER_READ,
+                vk::AccessFlags::SHADER_WRITE,
+            ),
+            image_layout_transition(
+                state_data.plane_images[1],
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::GENERAL,
+                vk::AccessFlags::TRANSFER_READ,
+                vk::AccessFlags::SHADER_WRITE,
+            ),
         ];
         vulk.dev.cmd_pipeline_barrier(
             cb,
@@ -2487,24 +2491,20 @@ pub fn start_dmavid_encode_hw(
             post_compute_barriers,
         );
         let staging_tx_barriers = &[
-            vk::ImageMemoryBarrier::default()
-                .image(state_data.plane_images[0])
-                .old_layout(vk::ImageLayout::GENERAL)
-                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
-                .subresource_range(standard_access_range),
-            vk::ImageMemoryBarrier::default()
-                .image(state_data.plane_images[1])
-                .old_layout(vk::ImageLayout::GENERAL)
-                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
-                .subresource_range(standard_access_range),
+            image_layout_transition(
+                state_data.plane_images[0],
+                vk::ImageLayout::GENERAL,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::AccessFlags::SHADER_WRITE,
+                vk::AccessFlags::TRANSFER_READ,
+            ),
+            image_layout_transition(
+                state_data.plane_images[1],
+                vk::ImageLayout::GENERAL,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::AccessFlags::SHADER_WRITE,
+                vk::AccessFlags::TRANSFER_READ,
+            ),
         ];
         vulk.dev.cmd_pipeline_barrier(
             cb,
@@ -2517,19 +2517,9 @@ pub fn start_dmavid_encode_hw(
         );
 
         let copy_plane_1 = &[vk::ImageCopy {
-            src_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
+            src_subresource: subresource_layer(vk::ImageAspectFlags::COLOR),
             src_offset: vk::Offset3D::default(),
-            dst_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::PLANE_0,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
+            dst_subresource: subresource_layer(vk::ImageAspectFlags::PLANE_0),
             dst_offset: vk::Offset3D::default(),
             extent: vk::Extent3D {
                 width: hwfc_ref.width as u32,
@@ -2538,19 +2528,9 @@ pub fn start_dmavid_encode_hw(
             },
         }];
         let copy_plane_2 = &[vk::ImageCopy {
-            src_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
+            src_subresource: subresource_layer(vk::ImageAspectFlags::COLOR),
             src_offset: vk::Offset3D::default(),
-            dst_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::PLANE_1,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
+            dst_subresource: subresource_layer(vk::ImageAspectFlags::PLANE_1),
             dst_offset: vk::Offset3D::default(),
             extent: vk::Extent3D {
                 width: (hwfc_ref.width as u32) / 2,
