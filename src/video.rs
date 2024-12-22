@@ -1006,6 +1006,36 @@ fn create_staging_images(
     }
 }
 
+fn create_dmabuf_view(img: &VulkanDmabuf) -> Result<vk::ImageView, String> {
+    let idswizzle = vk::ComponentMapping::default()
+        .r(vk::ComponentSwizzle::IDENTITY)
+        .g(vk::ComponentSwizzle::IDENTITY)
+        .b(vk::ComponentSwizzle::IDENTITY)
+        .a(vk::ComponentSwizzle::IDENTITY);
+    let output_image_view_info = vk::ImageViewCreateInfo::default()
+        .flags(vk::ImageViewCreateFlags::empty())
+        .image(img.image)
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(img.vk_format)
+        .components(idswizzle)
+        .subresource_range(
+            vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(1)
+                .base_array_layer(0)
+                .layer_count(1),
+        );
+    unsafe {
+        let output_image_view = img
+            .vulk
+            .dev
+            .create_image_view(&output_image_view_info, None)
+            .map_err(|x| tag!("Failed to create image view for dmabuf image: {}", x))?;
+        Ok(output_image_view)
+    }
+}
+
 pub fn setup_video_decode_hw(
     img: &Arc<VulkanDmabuf>,
     fmt: VideoFormat,
@@ -1044,31 +1074,7 @@ pub fn setup_video_decode_hw(
         /* ctx->get_format will be called to do setup work once a packet is received */
         avcodec_open(&video.bindings, ctx, decoder, std::ptr::null_mut())?;
 
-        // TODO: make into a function, deduplicate from encode
-        let idswizzle = vk::ComponentMapping::default()
-            .r(vk::ComponentSwizzle::IDENTITY)
-            .g(vk::ComponentSwizzle::IDENTITY)
-            .b(vk::ComponentSwizzle::IDENTITY)
-            .a(vk::ComponentSwizzle::IDENTITY);
-        let output_image_view_info = vk::ImageViewCreateInfo::default()
-            .flags(vk::ImageViewCreateFlags::empty())
-            .image(img.image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(img.vk_format)
-            .components(idswizzle)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(0)
-                    .layer_count(1),
-            );
-        let output_image_view = img
-            .vulk
-            .dev
-            .create_image_view(&output_image_view_info, None)
-            .map_err(|_| "Failed to create output image view")?;
+        let output_image_view = create_dmabuf_view(img)?;
 
         let staging_images = create_staging_images(
             &img.vulk,
@@ -1132,31 +1138,7 @@ pub fn setup_video_decode_sw(
         /* ctx->get_format will be called to do setup work once a packet is received */
         avcodec_open(&video.bindings, ctx, decoder, std::ptr::null_mut())?;
 
-        // TODO: make into a function, deduplicate from encode
-        let idswizzle = vk::ComponentMapping::default()
-            .r(vk::ComponentSwizzle::IDENTITY)
-            .g(vk::ComponentSwizzle::IDENTITY)
-            .b(vk::ComponentSwizzle::IDENTITY)
-            .a(vk::ComponentSwizzle::IDENTITY);
-        let output_image_view_info = vk::ImageViewCreateInfo::default()
-            .flags(vk::ImageViewCreateFlags::empty())
-            .image(img.image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(img.vk_format)
-            .components(idswizzle)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(0)
-                    .layer_count(1),
-            );
-        let output_image_view = img
-            .vulk
-            .dev
-            .create_image_view(&output_image_view_info, None)
-            .map_err(|x| tag!("Failed to create output image view: {:?}", x))?;
+        let output_image_view = create_dmabuf_view(img)?;
 
         Ok(VideoDecodeState {
             target: img.clone(),
@@ -2129,30 +2111,7 @@ pub fn setup_video_encode_hw(
         avcodec_open(&video.bindings, ctx, encoder, &mut options)?;
         video.bindings.av_dict_free(&mut options);
 
-        let idswizzle = vk::ComponentMapping::default()
-            .r(vk::ComponentSwizzle::IDENTITY)
-            .g(vk::ComponentSwizzle::IDENTITY)
-            .b(vk::ComponentSwizzle::IDENTITY)
-            .a(vk::ComponentSwizzle::IDENTITY);
-        let output_image_view_info = vk::ImageViewCreateInfo::default()
-            .flags(vk::ImageViewCreateFlags::empty())
-            .image(img.image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(img.vk_format)
-            .components(idswizzle)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(0)
-                    .layer_count(1),
-            );
-        let output_image_view = img
-            .vulk
-            .dev
-            .create_image_view(&output_image_view_info, None)
-            .map_err(|_| "Failed to create output image view")?;
+        let output_image_view = create_dmabuf_view(img)?;
 
         let staging_images = create_staging_images(
             &img.vulk,
@@ -2251,30 +2210,7 @@ pub fn setup_video_encode_sw(
         avcodec_open(&video.bindings, ctx, sw_encoder, &mut options)?;
         video.bindings.av_dict_free(&mut options);
 
-        let idswizzle = vk::ComponentMapping::default()
-            .r(vk::ComponentSwizzle::IDENTITY)
-            .g(vk::ComponentSwizzle::IDENTITY)
-            .b(vk::ComponentSwizzle::IDENTITY)
-            .a(vk::ComponentSwizzle::IDENTITY);
-        let output_image_view_info = vk::ImageViewCreateInfo::default()
-            .flags(vk::ImageViewCreateFlags::empty())
-            .image(img.image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(img.vk_format)
-            .components(idswizzle)
-            .subresource_range(
-                vk::ImageSubresourceRange::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .base_mip_level(0)
-                    .level_count(1)
-                    .base_array_layer(0)
-                    .layer_count(1),
-            );
-        let output_image_view = img
-            .vulk
-            .dev
-            .create_image_view(&output_image_view_info, None)
-            .map_err(|_| "Failed to create output image view")?;
+        let output_image_view = create_dmabuf_view(img)?;
 
         Ok(VideoEncodeState {
             target: img.clone(),
