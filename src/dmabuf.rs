@@ -1299,6 +1299,60 @@ fn vulkan_get_memory_type_index(
     panic!("No matching memory type for {:?}", flags);
 }
 
+/** Image memory barrier for use when transferring image to the current queue from the FOREIGN queue.
+ *
+ * The access range is COLOR for the single level/layer of the entire image. */
+pub fn qfot_acquire_image_memory_barrier(
+    image: vk::Image,
+    old_layout: vk::ImageLayout,
+    new_layout: vk::ImageLayout,
+    queue_family_idx: u32,
+    dst_access_mask: vk::AccessFlags,
+) -> vk::ImageMemoryBarrier<'static> {
+    let standard_access_range = vk::ImageSubresourceRange::default()
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .level_count(1)
+        .layer_count(1);
+
+    vk::ImageMemoryBarrier::default()
+        .image(image)
+        .old_layout(old_layout)
+        .new_layout(new_layout)
+        .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
+        .dst_queue_family_index(queue_family_idx)
+        /* queue family transfer acquire = srcAccessMask ignored, zero value recommended */
+        .src_access_mask(vk::AccessFlags::empty())
+        .dst_access_mask(dst_access_mask)
+        .subresource_range(standard_access_range)
+}
+
+/** Image memory barrier for use when transferring image from the current queue to the FOREIGN queue.
+ *
+ * The access range is COLOR for the single level/layer of the entire image. */
+pub fn qfot_release_image_memory_barrier(
+    image: vk::Image,
+    old_layout: vk::ImageLayout,
+    new_layout: vk::ImageLayout,
+    queue_family_idx: u32,
+    src_access_mask: vk::AccessFlags,
+) -> vk::ImageMemoryBarrier<'static> {
+    let standard_access_range = vk::ImageSubresourceRange::default()
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .level_count(1)
+        .layer_count(1);
+
+    vk::ImageMemoryBarrier::default()
+        .image(image)
+        .old_layout(old_layout)
+        .new_layout(new_layout)
+        .src_queue_family_index(queue_family_idx)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
+        /* queue family transfer release = dstAccessMask ignored, zero value recommended */
+        .src_access_mask(src_access_mask)
+        .dst_access_mask(vk::AccessFlags::empty())
+        .subresource_range(standard_access_range)
+}
+
 fn memory_plane(x: usize) -> vk::ImageAspectFlags {
     match x {
         0 => vk::ImageAspectFlags::MEMORY_PLANE_0_EXT,
@@ -2157,34 +2211,24 @@ pub fn start_copy_segments_from_dmabuf(
         let regions = make_copy_regions(segments, format_info, view_row_length, img);
 
         // TODO: eventually, might copy plane0/plane1/plane2 for multiplanar formats
-        let standard_access_range = vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .level_count(1)
-            .layer_count(1);
-
         let op_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
 
         let mut img_inner = img.inner.lock().unwrap();
 
-        let acq_barriers = &[vk::ImageMemoryBarrier::default()
-        .image(img.image)
-        .old_layout(img_inner.image_layout)
-        .new_layout(op_layout)
-        .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-        .dst_queue_family_index(vulk.queue_family)
-        /* Make foreign writes visible to this transfer read. Unclear if this matters with queue=FOREIGN */
-        .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-        .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
-        .subresource_range(standard_access_range)];
-        let rel_barriers = &[vk::ImageMemoryBarrier::default()
-            .image(img.image)
-            .old_layout(op_layout)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .src_queue_family_index(vulk.queue_family)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-            .src_access_mask(vk::AccessFlags::TRANSFER_READ)
-            .dst_access_mask(vk::AccessFlags::NONE)
-            .subresource_range(standard_access_range)];
+        let acq_barriers = &[qfot_acquire_image_memory_barrier(
+            img.image,
+            img_inner.image_layout,
+            op_layout,
+            vulk.queue_family,
+            vk::AccessFlags::TRANSFER_READ,
+        )];
+        let rel_barriers = &[qfot_release_image_memory_barrier(
+            img.image,
+            op_layout,
+            vk::ImageLayout::GENERAL,
+            vulk.queue_family,
+            vk::AccessFlags::TRANSFER_READ,
+        )];
         let buf_rel_barrier = &[vk::BufferMemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
             .dst_access_mask(vk::AccessFlags::HOST_READ)
@@ -2238,7 +2282,7 @@ pub fn start_copy_segments_from_dmabuf(
         let waitv_semaphores: Vec<vk::Semaphore> =
             wait_semaphores.iter().map(|x| x.0.semaphore).collect();
         let mut waitv_stage_flags = Vec::new();
-        waitv_stage_flags.resize(waitv_semaphores.len(), vk::PipelineStageFlags::TRANSFER);
+        waitv_stage_flags.resize(waitv_semaphores.len(), vk::PipelineStageFlags::ALL_COMMANDS);
 
         let mut inner = vulk.inner.lock().unwrap();
         inner.last_semaphore_value += 1;
@@ -2447,21 +2491,15 @@ pub fn start_copy_segments_onto_dmabuf(
 
         let mut img_inner = img.inner.lock().unwrap();
 
-        let standard_access_range = vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .level_count(1)
-            .layer_count(1);
         let op_layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
 
-        let acq_barriers = &[vk::ImageMemoryBarrier::default()
-            .image(img.image)
-            .old_layout(img_inner.image_layout)
-            .new_layout(op_layout)
-            .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-            .dst_queue_family_index(vulk.queue_family)
-            .src_access_mask(vk::AccessFlags::NONE)
-            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-            .subresource_range(standard_access_range)];
+        let acq_barriers = &[qfot_acquire_image_memory_barrier(
+            img.image,
+            img_inner.image_layout,
+            op_layout,
+            vulk.queue_family,
+            vk::AccessFlags::TRANSFER_WRITE,
+        )];
         let buf_acq_barrier = &[vk::BufferMemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::HOST_WRITE)
             .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
@@ -2471,15 +2509,13 @@ pub fn start_copy_segments_onto_dmabuf(
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)];
 
-        let rel_barriers = &[vk::ImageMemoryBarrier::default()
-        .image(img.image)
-        .old_layout(op_layout)
-        .new_layout(vk::ImageLayout::GENERAL)
-        .src_queue_family_index(vulk.queue_family)
-        .dst_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-        .src_access_mask(vk::AccessFlags::TRANSFER_WRITE) /* Make this transfer-write visible to all foreign reads */
-        .dst_access_mask(vk::AccessFlags::MEMORY_READ)
-        .subresource_range(standard_access_range)];
+        let rel_barriers = &[qfot_release_image_memory_barrier(
+            img.image,
+            op_layout,
+            vk::ImageLayout::GENERAL,
+            vulk.queue_family,
+            vk::AccessFlags::TRANSFER_WRITE,
+        )];
 
         // Perform layout transition, even though it is unclear how useful it is for DMABUFs
         vulk.dev.cmd_pipeline_barrier(
@@ -2525,7 +2561,7 @@ pub fn start_copy_segments_onto_dmabuf(
         let waitv_semaphores: Vec<vk::Semaphore> =
             wait_semaphores.iter().map(|x| x.0.semaphore).collect();
         let mut waitv_stage_flags = Vec::new();
-        waitv_stage_flags.resize(waitv_semaphores.len(), vk::PipelineStageFlags::TRANSFER);
+        waitv_stage_flags.resize(waitv_semaphores.len(), vk::PipelineStageFlags::ALL_COMMANDS);
 
         let mut inner = vulk.inner.lock().unwrap();
         inner.last_semaphore_value += 1;

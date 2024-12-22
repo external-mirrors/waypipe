@@ -1271,15 +1271,13 @@ pub fn start_dmavid_decode_hw(
             .layer_count(1);
         let mut img_inner = state.target.inner.lock().unwrap();
         let entry_barriers = &[
-            vk::ImageMemoryBarrier::default()
-                .image(state.target.image)
-                .old_layout(img_inner.image_layout)
-                .new_layout(target_layout)
-                .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-                .dst_queue_family_index(vulk.queue_family)
-                .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .subresource_range(standard_access_range),
+            qfot_acquire_image_memory_barrier(
+                state.target.image,
+                img_inner.image_layout,
+                target_layout,
+                vulk.queue_family,
+                vk::AccessFlags::SHADER_WRITE,
+            ),
             vk::ImageMemoryBarrier::default()
                 .image(src_img)
                 .old_layout(vk::ImageLayout::from_raw(init_layout as _))
@@ -1329,15 +1327,13 @@ pub fn start_dmavid_decode_hw(
         vulk.dev.cmd_dispatch(cb, xgroups, ygroups, 1);
 
         // Only for main image; other barriers are
-        let exit_barriers = &[vk::ImageMemoryBarrier::default()
-            .image(state.target.image)
-            .old_layout(target_layout)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .src_queue_family_index(vulk.queue_family)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-            .dst_access_mask(vk::AccessFlags::NONE)
-            .subresource_range(standard_access_range)];
+        let exit_barriers = &[qfot_release_image_memory_barrier(
+            state.target.image,
+            target_layout,
+            vk::ImageLayout::GENERAL,
+            vulk.queue_family,
+            vk::AccessFlags::SHADER_WRITE,
+        )];
         vulk.dev.cmd_pipeline_barrier(
             cb,
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -1599,20 +1595,16 @@ pub fn start_dmavid_decode_sw(
 
         let target_layout = vk::ImageLayout::GENERAL;
 
-        let standard_access_range = vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .level_count(1)
-            .layer_count(1);
         let mut img_inner = state.target.inner.lock().unwrap();
-        let entry_barriers = &[vk::ImageMemoryBarrier::default()
-            .image(state.target.image)
-            .old_layout(img_inner.image_layout)
-            .new_layout(target_layout)
-            .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-            .dst_queue_family_index(vulk.queue_family)
-            .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
-            .subresource_range(standard_access_range)];
+        // note: original contents of image do not need to be preserved as
+        // all pixels should be written; can the queue transfer be skipped?
+        let entry_barriers = &[qfot_acquire_image_memory_barrier(
+            state.target.image,
+            img_inner.image_layout,
+            target_layout,
+            vulk.queue_family,
+            vk::AccessFlags::SHADER_WRITE,
+        )];
         let buf_memory_barriers = &[
             vk::BufferMemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::HOST_WRITE)
@@ -1692,15 +1684,13 @@ pub fn start_dmavid_decode_sw(
         vulk.dev.cmd_dispatch(cb, xgroups, ygroups, 1);
 
         // Only for main image; other barriers are
-        let exit_barriers = &[vk::ImageMemoryBarrier::default()
-            .image(state.target.image)
-            .old_layout(target_layout)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .src_queue_family_index(vulk.queue_family)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-            .dst_access_mask(vk::AccessFlags::NONE)
-            .subresource_range(standard_access_range)];
+        let exit_barriers = &[qfot_release_image_memory_barrier(
+            state.target.image,
+            target_layout,
+            vk::ImageLayout::GENERAL,
+            vulk.queue_family,
+            vk::AccessFlags::SHADER_WRITE,
+        )];
         vulk.dev.cmd_pipeline_barrier(
             cb,
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -2237,15 +2227,13 @@ pub fn start_dmavid_encode_hw(
             .layer_count(1);
         let mut img_inner = state.target.inner.lock().unwrap();
         let entry_barriers = &[
-            vk::ImageMemoryBarrier::default()
-                .image(state.target.image)
-                .old_layout(img_inner.image_layout)
-                .new_layout(target_layout)
-                .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-                .dst_queue_family_index(vulk.queue_family)
-                .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .subresource_range(standard_access_range),
+            qfot_acquire_image_memory_barrier(
+                state.target.image,
+                img_inner.image_layout,
+                target_layout,
+                vulk.queue_family,
+                vk::AccessFlags::SHADER_READ,
+            ),
             vk::ImageMemoryBarrier::default()
                 .image(dst_img)
                 .old_layout(vk::ImageLayout::from_raw(init_layout as _))
@@ -2297,15 +2285,13 @@ pub fn start_dmavid_encode_hw(
         vulk.dev.cmd_dispatch(cb, xgroups, ygroups, 1);
 
         // Only for main image; other barriers are
-        let exit_barriers = &[vk::ImageMemoryBarrier::default()
-            .image(state.target.image)
-            .old_layout(target_layout)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .src_queue_family_index(vulk.queue_family)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-            .src_access_mask(vk::AccessFlags::SHADER_READ)
-            .dst_access_mask(vk::AccessFlags::NONE)
-            .subresource_range(standard_access_range)];
+        let exit_barriers = &[qfot_release_image_memory_barrier(
+            state.target.image,
+            target_layout,
+            vk::ImageLayout::GENERAL,
+            vulk.queue_family,
+            vk::AccessFlags::SHADER_READ,
+        )];
         vulk.dev.cmd_pipeline_barrier(
             cb,
             vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -2548,20 +2534,14 @@ pub fn start_dmavid_encode_sw(
 
         let target_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
 
-        let standard_access_range = vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .level_count(1)
-            .layer_count(1);
         let mut img_inner = state.target.inner.lock().unwrap();
-        let entry_barriers = &[vk::ImageMemoryBarrier::default()
-            .image(state.target.image)
-            .old_layout(img_inner.image_layout)
-            .new_layout(target_layout)
-            .src_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-            .dst_queue_family_index(vulk.queue_family)
-            .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ)
-            .subresource_range(standard_access_range)];
+        let entry_barriers = &[qfot_acquire_image_memory_barrier(
+            state.target.image,
+            img_inner.image_layout,
+            target_layout,
+            vulk.queue_family,
+            vk::AccessFlags::SHADER_READ,
+        )];
         vulk.dev.cmd_pipeline_barrier(
             cb,
             vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -2608,15 +2588,13 @@ pub fn start_dmavid_encode_sw(
         vulk.dev.cmd_dispatch(cb, xgroups, ygroups, 1);
 
         // Only for main image; buffers
-        let exit_barriers = &[vk::ImageMemoryBarrier::default()
-            .image(state.target.image)
-            .old_layout(target_layout)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .src_queue_family_index(vulk.queue_family)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_FOREIGN_EXT)
-            .src_access_mask(vk::AccessFlags::SHADER_READ)
-            .dst_access_mask(vk::AccessFlags::NONE)
-            .subresource_range(standard_access_range)];
+        let exit_barriers = &[qfot_release_image_memory_barrier(
+            state.target.image,
+            target_layout,
+            vk::ImageLayout::GENERAL,
+            vulk.queue_family,
+            vk::AccessFlags::SHADER_READ,
+        )];
         let buf_memory_barriers = &[
             vk::BufferMemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::SHADER_WRITE)
