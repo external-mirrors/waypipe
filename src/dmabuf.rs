@@ -3027,8 +3027,17 @@ pub const DRM_FORMATS: &[u32] = &[
     WlShmFormat::P030 as u32,
 ];
 
+/* Creating a Vulkan instance or connecting ffmpeg to it should be thread safe (safe to
+ * run in multiple test threads), but in practice there may be memory corruption visible
+ * every few hundred runs. This should not be a problem in practice for Waypipe since
+ * setup_vulkan() is only called once; but could make tests flaky. */
+#[cfg(test)]
+pub static VULKAN_MUTEX: Mutex<()> = Mutex::new(());
+
 #[test]
 fn test_dmabuf() {
+    let _serialize_test = VULKAN_MUTEX.lock().unwrap();
+
     for dev_id in list_vulkan_device_ids() {
         let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
             continue;

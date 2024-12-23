@@ -3071,6 +3071,8 @@ fn get_average_color(w: usize, h: usize, format: u32, data: &[u8]) -> (f32, f32,
 
 #[cfg(test)]
 fn test_video(try_hardware: bool) {
+    let _serialize_test = VULKAN_MUTEX.lock().unwrap();
+
     /* A crude error metric */
     fn color_error(x: (f32, f32, f32), y: (f32, f32, f32)) -> f32 {
         (x.0 - y.0).abs() + (x.1 - y.1).abs() + (x.2 - y.2).abs()
