@@ -862,6 +862,25 @@ pub unsafe fn setup_video(
     })
 }
 
+/** Lock the first queue in the given family, if a hardware context was set up */
+pub unsafe fn video_lock_queue(video: &VulkanVideo, queue_family: u32) {
+    if video.av_hwdevice.is_null() {
+        return;
+    }
+    let hw_context = (*video.av_hwdevice).data.cast::<AVHWDeviceContext>();
+    let vk_context = (*hw_context).hwctx.cast::<AVVulkanDeviceContext>();
+    (*vk_context).lock_queue.unwrap()(hw_context, queue_family, 0);
+}
+/** Unlock the first queue in the given family, if a hardware context was set up */
+pub unsafe fn video_unlock_queue(video: &VulkanVideo, queue_family: u32) {
+    if video.av_hwdevice.is_null() {
+        return;
+    }
+    let hw_context = (*video.av_hwdevice).data.cast::<AVHWDeviceContext>();
+    let vk_context = (*hw_context).hwctx.cast::<AVVulkanDeviceContext>();
+    (*vk_context).unlock_queue.unwrap()(hw_context, queue_family, 0);
+}
+
 /* Pick format: Vulkan, and setup hw frames context */
 #[cfg(feature = "video")]
 unsafe extern "C" fn pick_video_format_hw(ctx: *mut AVCodecContext, fmts: *const i32) -> i32 {
@@ -1593,9 +1612,9 @@ pub fn start_dmavid_decode_hw(
         let waitv_stage_flags = &[vk::PipelineStageFlags::ALL_COMMANDS];
         let cbs = &[cb];
 
-        let mut inner = vulk.inner.lock().unwrap();
-        inner.last_semaphore_value += 1;
-        let completion_time_point = inner.last_semaphore_value;
+        let mut queue = vulkan_lock_queue(vulk);
+        queue.inner.last_semaphore_value += 1;
+        let completion_time_point = queue.inner.last_semaphore_value;
         vkframe.sem_value[0] += 1;
         /* Signal vkframe's semaphore to indicate when this operation is done,
          * and main semaphore to notify main loop. */
@@ -1612,9 +1631,9 @@ pub fn start_dmavid_decode_hw(
             .signal_semaphores(signal_semaphores)
             .push_next(&mut wait_timeline_info)];
         vulk.dev
-            .queue_submit(inner.queue, submits, vk::Fence::null())
+            .queue_submit(queue.inner.queue, submits, vk::Fence::null())
             .map_err(|_| "Queue submit failed")?; // <- can fail with OOM
-        drop(inner);
+        drop(queue);
 
         /* Unlock frame, now that command is submitted. (Note: unlocking before
          * submission could risk timeline semaphore value updates and monotonicity
@@ -1943,9 +1962,9 @@ pub fn start_dmavid_decode_sw(
 
         let cbs = &[cb];
 
-        let mut inner = vulk.inner.lock().unwrap();
-        inner.last_semaphore_value += 1;
-        let completion_time_point = inner.last_semaphore_value;
+        let mut queue = vulkan_lock_queue(vulk);
+        queue.inner.last_semaphore_value += 1;
+        let completion_time_point = queue.inner.last_semaphore_value;
         /* Signal vkframe's semaphore to indicate when this operation is done,
          * and main semaphore to notify main loop. */
         let signal_values = &[completion_time_point];
@@ -1961,9 +1980,9 @@ pub fn start_dmavid_decode_sw(
             .signal_semaphores(signal_semaphores)
             .push_next(&mut wait_timeline_info)];
         vulk.dev
-            .queue_submit(inner.queue, submits, vk::Fence::null())
+            .queue_submit(queue.inner.queue, submits, vk::Fence::null())
             .map_err(|_| "Queue submit failed")?; // <- can fail with OOM
-        drop(inner);
+        drop(queue);
 
         let mut av_packet_ref = av_packet;
         video
@@ -2584,11 +2603,11 @@ pub fn start_dmavid_encode_hw(
             .signal_semaphores(signal_semaphores)
             .push_next(&mut wait_timeline_info)];
 
-        let inner = vulk.inner.lock().unwrap();
+        let queue = vulkan_lock_queue(vulk);
         vulk.dev
-            .queue_submit(inner.queue, submits, vk::Fence::null())
+            .queue_submit(queue.inner.queue, submits, vk::Fence::null())
             .map_err(|_| "Queue submit failed")?; // <- can fail with OOM
-        drop(inner);
+        drop(queue);
 
         /* Unlock frame, now that command is submitted. (Note: unlocking before
          * submission could risk timeline semaphore value updates and monotonicity
@@ -2911,18 +2930,16 @@ pub fn start_dmavid_encode_sw(
             .signal_semaphores(&[])
             .push_next(&mut wait_timeline_info)];
 
-        let inner = vulk.inner.lock().unwrap();
+        let queue = vulkan_lock_queue(vulk);
         vulk.dev
-            .queue_submit(inner.queue, submits, vk::Fence::null())
+            .queue_submit(queue.inner.queue, submits, vk::Fence::null())
             .map_err(|_| "Queue submit failed")?; // <- can fail with OOM
 
         vulk.dev
-            .queue_wait_idle(inner.queue)
+            .queue_wait_idle(queue.inner.queue)
             .map_err(|_| tag!("Queue wait idle failed"))?;
 
-        drop(inner);
-
-        // TODO: is a pipeline barrier with PIPELINE_STAGE_HOST/ACCESS_HOST_READ_BIT required for the buffers?
+        drop(queue);
 
         buf_y.prepare_read()?;
         buf_u.prepare_read()?;

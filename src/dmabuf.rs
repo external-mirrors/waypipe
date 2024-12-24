@@ -14,7 +14,7 @@ use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString, OsString};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub struct AddDmabufPlane {
@@ -38,25 +38,34 @@ pub struct FormatData {
     pub modifiers: Vec<ModifierData>,
 }
 
-pub struct VulkanInner {
+pub struct VulkanQueue {
     /* mutable globals for which access must be externally synchronized */
     pub queue: vk::Queue,
     /* The last semaphore value planned to be signalled by a submission to the queue */
     pub last_semaphore_value: u64,
 }
 
+pub struct VulkanQueueGuard<'a> {
+    pub inner: MutexGuard<'a, VulkanQueue>,
+    vulk: &'a Vulkan,
+}
+
 pub struct Vulkan {
     _entry: Entry,
     instance: Instance,
     _physdev: vk::PhysicalDevice,
-    pub inner: Mutex<VulkanInner>,
-    /* Timeline semaphore; when it reaches 'inner.last_semaphore_value', all preceding work using
+    /** Timeline semaphore; when it reaches 'queue.last_semaphore_value', all preceding work using
      * the semaphore is done */
     pub semaphore: vk::Semaphore,
     _semaphore_fd: OwnedFd,
     semaphore_drm_handle: u32,
     drm_fd: OwnedFd,
     event_fd: OwnedFd,
+
+    /** The compute+transfer queue to use. Do NOT access via queue.lock() -- use
+     * vulkan_lock_queue() instead, to also ensure ffmpeg is locked out of using
+     * the queue. */
+    queue: Mutex<VulkanQueue>,
 
     #[cfg(feature = "video")]
     pub video: Option<VulkanVideo>,
@@ -172,7 +181,7 @@ impl Drop for Vulkan {
         }
     }
 }
-impl Drop for VulkanInner {
+impl Drop for VulkanQueue {
     fn drop(&mut self) {}
 }
 
@@ -237,6 +246,28 @@ impl Drop for VulkanCopyHandle {
                 );
             }
             self.vulk.dev.free_command_buffers(*cmd_pool, &[self.cb]);
+        }
+    }
+}
+
+pub fn vulkan_lock_queue(vulk: &Vulkan) -> VulkanQueueGuard<'_> {
+    /* Lock order: vulk.queue before video lock */
+    let inner = vulk.queue.lock().unwrap();
+    #[cfg(feature = "video")]
+    if let Some(ref v) = vulk.video {
+        unsafe {
+            video_lock_queue(v, vulk.queue_family);
+        }
+    }
+    VulkanQueueGuard { inner, vulk }
+}
+impl Drop for VulkanQueueGuard<'_> {
+    fn drop(&mut self) {
+        #[cfg(feature = "video")]
+        if let Some(ref v) = self.vulk.video {
+            unsafe {
+                video_unlock_queue(v, self.vulk.queue_family);
+            }
         }
     }
 }
@@ -1256,7 +1287,7 @@ pub fn setup_vulkan(
             _entry: entry,
             instance,
             _physdev: physdev,
-            inner: Mutex::new(VulkanInner {
+            queue: Mutex::new(VulkanQueue {
                 queue,
                 last_semaphore_value: init_sem_value,
             }),
@@ -2284,9 +2315,9 @@ pub fn start_copy_segments_from_dmabuf(
         let mut waitv_stage_flags = Vec::new();
         waitv_stage_flags.resize(waitv_semaphores.len(), vk::PipelineStageFlags::ALL_COMMANDS);
 
-        let mut inner = vulk.inner.lock().unwrap();
-        inner.last_semaphore_value += 1;
-        let completion_time_point = inner.last_semaphore_value;
+        let mut queue = vulkan_lock_queue(vulk);
+        queue.inner.last_semaphore_value += 1;
+        let completion_time_point = queue.inner.last_semaphore_value;
         let values = &[completion_time_point];
         let semaphores = &[vulk.semaphore];
 
@@ -2301,9 +2332,9 @@ pub fn start_copy_segments_from_dmabuf(
             .signal_semaphores(semaphores)
             .push_next(&mut signal)];
         vulk.dev
-            .queue_submit(inner.queue, submits, vk::Fence::null())
+            .queue_submit(queue.inner.queue, submits, vk::Fence::null())
             .map_err(|_| "Queue submit failed")?; // <- can fail with OOM
-        drop(inner);
+        drop(queue);
 
         Ok(VulkanCopyHandle {
             vulk: img.vulk.clone(),
@@ -2563,9 +2594,9 @@ pub fn start_copy_segments_onto_dmabuf(
         let mut waitv_stage_flags = Vec::new();
         waitv_stage_flags.resize(waitv_semaphores.len(), vk::PipelineStageFlags::ALL_COMMANDS);
 
-        let mut inner = vulk.inner.lock().unwrap();
-        inner.last_semaphore_value += 1;
-        let completion_time_point = inner.last_semaphore_value;
+        let mut queue = vulkan_lock_queue(vulk);
+        queue.inner.last_semaphore_value += 1;
+        let completion_time_point = queue.inner.last_semaphore_value;
         let values = &[completion_time_point];
         let semaphores = &[vulk.semaphore];
         let mut signal = vk::TimelineSemaphoreSubmitInfoKHR::default()
@@ -2578,9 +2609,9 @@ pub fn start_copy_segments_onto_dmabuf(
             .signal_semaphores(semaphores)
             .push_next(&mut signal)];
         vulk.dev
-            .queue_submit(inner.queue, submits, vk::Fence::null())
+            .queue_submit(queue.inner.queue, submits, vk::Fence::null())
             .map_err(|_| "Queue submit failed")?; // <- can fail with OOM
-        drop(inner);
+        drop(queue);
 
         // TODO: clean up or recycle command buffer
         Ok(VulkanCopyHandle {
