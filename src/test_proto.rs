@@ -1031,7 +1031,13 @@ fn proto_keymap(info: TestInfo) -> TestResult {
 
             let new_kb_fd = fds.remove(0);
             let new_data = get_file_contents(&new_kb_fd, keymap_length as usize).unwrap();
-            assert!(new_data == source_data);
+            assert!(
+                new_data == source_data,
+                "{} {:?} {:?}",
+                keymap_length,
+                &new_data[..new_data.len().min(1000)],
+                &source_data[..source_data.len().min(1000)]
+            );
         })?;
     }
     Ok(StatusOk::Pass)
@@ -3383,7 +3389,6 @@ fn main() -> ExitCode {
                     let status = wait::waitpid(child, Some(wait::WaitPidFlag::WNOHANG)).unwrap();
                     match status {
                         wait::WaitStatus::Exited(..) | wait::WaitStatus::Signaled(..) => {
-                            println!("Status change");
                             child_status = status;
                             break;
                         }

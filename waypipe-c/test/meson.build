@@ -172,6 +172,12 @@ fuzz_hook_det = executable(
     include_directories: waypipe_includes,
     link_with: [lib_waypipe_src, common_src],
 )
+test_proto_hook = executable(
+    'test_proto_hook',
+    ['test_proto_hook.c'],
+    include_directories: waypipe_includes,
+    link_with: [lib_waypipe_src, common_src],
+)
 test(
     'That `waypipe bench` doesn\'t crash',
     waypipe_prog,
