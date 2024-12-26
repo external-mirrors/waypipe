@@ -799,6 +799,16 @@ fn run_protocol_test(
     run_protocol_test_with_opts(info, &options, &options, test_fn)
 }
 
+#[cfg(feature = "dmabuf")]
+fn setup_vulkan(device_id: u64) -> Result<Arc<VulkanDevice>, String> {
+    let instance = setup_vulkan_instance(true, &VideoSetting::default())?;
+    Ok(Arc::new(setup_vulkan_device_base(
+        &instance,
+        Some(device_id),
+        false,
+    )?))
+}
+
 fn get_intf_name(intf: WaylandInterface) -> &'static [u8] {
     INTERFACE_TABLE[intf as usize].name.as_bytes()
 }
@@ -1704,7 +1714,7 @@ fn proto_shm_extend(info: TestInfo) -> TestResult {
 #[cfg(feature = "dmabuf")]
 fn setup_linux_dmabuf(
     ctx: &mut ProtocolTestContext,
-    vulk: &Vulkan,
+    vulk: &VulkanDevice,
     display: ObjId,
     registry: ObjId,
     dmabuf: ObjId,
@@ -1850,7 +1860,7 @@ fn setup_linux_dmabuf(
 
 #[cfg(feature = "dmabuf")]
 fn proto_dmabuf(info: TestInfo, device: RenderDevice) -> TestResult {
-    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+    let Ok(vulk) = setup_vulkan(device.id) else {
         return Ok(StatusOk::Skipped);
     };
 
@@ -2024,7 +2034,7 @@ fn fill_pseudorand_xrgb(w: usize, h: usize) -> Vec<u8> {
 
 #[cfg(feature = "dmabuf")]
 fn create_dmabuf_and_copy(
-    vulk: &Arc<Vulkan>,
+    vulk: &Arc<VulkanDevice>,
     ctx: &mut ProtocolTestContext,
     params: ObjId,
     dmabuf: ObjId,
@@ -2094,7 +2104,7 @@ fn create_dmabuf_and_copy(
 }
 
 #[cfg(feature = "video")]
-fn test_dmavid_inner(vulk: &Arc<Vulkan>, info: &TestInfo, opts: &WaypipeOptions) -> bool {
+fn test_dmavid_inner(vulk: &Arc<VulkanDevice>, info: &TestInfo, opts: &WaypipeOptions) -> bool {
     let accurate_replication = AtomicBool::new(true);
     run_protocol_test_with_opts(
         info, opts, opts,
@@ -2228,7 +2238,7 @@ fn test_dmavid_inner(vulk: &Arc<Vulkan>, info: &TestInfo, opts: &WaypipeOptions)
 
 #[cfg(feature = "video")]
 fn test_video_combo(
-    vulk: &Arc<Vulkan>,
+    vulk: &Arc<VulkanDevice>,
     info: &TestInfo,
     device: &RenderDevice,
     video_format: VideoFormat,
@@ -2280,7 +2290,7 @@ fn test_video_combo(
 
 #[cfg(feature = "video")]
 fn proto_dmavid_vp9(info: TestInfo, device: RenderDevice) -> TestResult {
-    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+    let Ok(vulk) = setup_vulkan(device.id) else {
         return Ok(StatusOk::Pass);
     };
     if test_video_combo(&vulk, &info, &device, VideoFormat::VP9, false, false, false) {
@@ -2292,7 +2302,7 @@ fn proto_dmavid_vp9(info: TestInfo, device: RenderDevice) -> TestResult {
 
 #[cfg(feature = "video")]
 fn proto_dmavid_h264(info: TestInfo, device: RenderDevice) -> TestResult {
-    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+    let Ok(vulk) = setup_vulkan(device.id) else {
         return Ok(StatusOk::Pass);
     };
 
@@ -2504,7 +2514,7 @@ fn proto_shm_damage(info: TestInfo) -> TestResult {
 
 #[cfg(feature = "dmabuf")]
 fn proto_dmabuf_damage(info: TestInfo, device: RenderDevice) -> TestResult {
-    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+    let Ok(vulk) = setup_vulkan(device.id) else {
         return Ok(StatusOk::Pass);
     };
 
@@ -2629,7 +2639,7 @@ fn proto_dmabuf_damage(info: TestInfo, device: RenderDevice) -> TestResult {
 
 #[cfg(feature = "dmabuf")]
 fn proto_explicit_sync(info: TestInfo, device: RenderDevice) -> TestResult {
-    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+    let Ok(vulk) = setup_vulkan(device.id) else {
         return Ok(StatusOk::Pass);
     };
 
@@ -3074,7 +3084,7 @@ fn proto_screencopy_shm(info: TestInfo) -> TestResult {
 /* Test that basic wlr_screencopy operations work with dmabufs */
 #[cfg(feature = "dmabuf")]
 fn proto_screencopy_dmabuf(info: TestInfo, device: RenderDevice) -> TestResult {
-    let Ok(vulk) = setup_vulkan(Some(device.id), &VideoSetting::default(), true) else {
+    let Ok(vulk) = setup_vulkan(device.id) else {
         return Ok(StatusOk::Skipped);
     };
 

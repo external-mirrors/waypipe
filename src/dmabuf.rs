@@ -47,13 +47,23 @@ pub struct VulkanQueue {
 
 pub struct VulkanQueueGuard<'a> {
     pub inner: MutexGuard<'a, VulkanQueue>,
-    vulk: &'a Vulkan,
+    vulk: &'a VulkanDevice,
 }
 
-pub struct Vulkan {
-    _entry: Entry,
+pub struct VulkanInstance {
+    entry: Entry,
     instance: Instance,
-    _physdev: vk::PhysicalDevice,
+
+    physdevs: Vec<DeviceInfo>,
+}
+
+pub struct VulkanDevice {
+    _instance: Arc<VulkanInstance>,
+
+    dev_info: DeviceInfo,
+    /** Queue family indices. Order: [compute+transfer, graphics+transfer, encode, decode] */
+    qfis: [u32; 4],
+
     /** Timeline semaphore; when it reaches 'queue.last_semaphore_value', all preceding work using
      * the semaphore is done */
     pub semaphore: vk::Semaphore,
@@ -62,14 +72,13 @@ pub struct Vulkan {
     drm_fd: OwnedFd,
     event_fd: OwnedFd,
 
+    #[cfg(feature = "video")]
+    pub video: Option<VulkanVideo>,
+
     /** The compute+transfer queue to use. Do NOT access via queue.lock() -- use
      * vulkan_lock_queue() instead, to also ensure ffmpeg is locked out of using
      * the queue. */
     queue: Mutex<VulkanQueue>,
-
-    #[cfg(feature = "video")]
-    pub video: Option<VulkanVideo>,
-
     pub dev: Device,
     get_modifier: ext::image_drm_format_modifier::Device,
     get_mem_reqs2: khr::get_memory_requirements2::Device,
@@ -85,14 +94,14 @@ pub struct Vulkan {
 }
 
 pub struct VulkanTimelineSemaphore {
-    pub vulk: Arc<Vulkan>,
+    pub vulk: Arc<VulkanDevice>,
     pub semaphore: vk::Semaphore,
     semaphore_drm_handle: u32,
     event_fd: OwnedFd,
 }
 
 pub struct VulkanCommandPool {
-    pub vulk: Arc<Vulkan>,
+    pub vulk: Arc<VulkanDevice>,
     pub pool: Mutex<vk::CommandPool>,
 }
 
@@ -103,7 +112,7 @@ pub struct VulkanDmabufInner {
 
 pub struct VulkanDmabuf {
     // No RefCell -- unsafe is used throughout anyway, exclusivity is not needed, and no recursion should be done
-    pub vulk: Arc<Vulkan>,
+    pub vulk: Arc<VulkanDevice>,
 
     pub image: vk::Image,
     // todo: store memory, to be able to free it properly when the VulkanDmabuf is dropped?
@@ -130,7 +139,7 @@ struct VulkanBufferInner {
 
 /* A mapped staging buffer, either for use when reading or writing data */
 pub struct VulkanBuffer {
-    pub vulk: Arc<Vulkan>,
+    pub vulk: Arc<VulkanDevice>,
 
     // todo: central handling of vk::Buffer objects, to allow bump-allocating
     // segments from a larger central buffer.
@@ -147,7 +156,7 @@ unsafe impl Sync for VulkanBuffer {}
 
 // TODO: VulkanCopyHandle must live at least as long as the originating VulkanCopy and VulkanDmabuf
 pub struct VulkanCopyHandle {
-    vulk: Arc<Vulkan>,
+    vulk: Arc<VulkanDevice>,
     /* Copy operation is between these two objects */
     _image: Arc<VulkanDmabuf>,
     _buffer: Arc<VulkanBuffer>,
@@ -161,7 +170,14 @@ pub struct VulkanCopyHandle {
     completion_time_point: u64,
 }
 
-impl Drop for Vulkan {
+impl Drop for VulkanInstance {
+    fn drop(&mut self) {
+        unsafe {
+            self.instance.destroy_instance(None);
+        }
+    }
+}
+impl Drop for VulkanDevice {
     fn drop(&mut self) {
         unsafe {
             #[cfg(feature = "video")]
@@ -177,7 +193,6 @@ impl Drop for Vulkan {
             // a centralized registry
             self.dev.destroy_semaphore(self.semaphore, None);
             self.dev.destroy_device(None);
-            self.instance.destroy_instance(None);
         }
     }
 }
@@ -201,7 +216,7 @@ impl Drop for VulkanDmabuf {
                 self.vulk.dev.free_memory(*mem, None);
             }
         }
-        // The Arc<Vulkan>> should keep Vulkan alive until after VulkanDmabuf is dropped
+        // The Arc<VulkanDevice>> should keep Vulkan alive until after VulkanDmabuf is dropped
     }
 }
 
@@ -250,7 +265,7 @@ impl Drop for VulkanCopyHandle {
     }
 }
 
-pub fn vulkan_lock_queue(vulk: &Vulkan) -> VulkanQueueGuard<'_> {
+pub fn vulkan_lock_queue(vulk: &VulkanDevice) -> VulkanQueueGuard<'_> {
     /* Lock order: vulk.queue before video lock */
     let inner = vulk.queue.lock().unwrap();
     #[cfg(feature = "video")]
@@ -633,6 +648,7 @@ fn device_rank(info: &DeviceInfo) -> u8 {
     base_score * 4 + ((!hw_enc) as u8) + 2 * ((!hw_dec) as u8)
 }
 
+#[derive(Copy, Clone)]
 pub struct DeviceInfo {
     physdev: vk::PhysicalDevice,
     device_id: u64,
@@ -643,11 +659,93 @@ pub struct DeviceInfo {
     pub hw_dec_av1: bool,
 }
 
-pub fn setup_vulkan(
-    main_device: Option<u64>,
-    video: &VideoSetting,
+const INSTANCE_EXTS: &[*const c_char] = &[
+    vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME.as_ptr(), // needed to link device and DRM node
+    vk::KHR_EXTERNAL_MEMORY_CAPABILITIES_NAME.as_ptr(),    // needed for buffer import/export
+    vk::KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_NAME.as_ptr(), // needed to export/poll on timeline semaphores
+];
+
+const EXT_LIST: &[(&CStr, u32)] = &[
+    (
+        /* Needed to get drm node details */
+        vk::EXT_PHYSICAL_DEVICE_DRM_NAME,
+        1,
+    ),
+    (
+        /* This and dependencies needed to import/export dmabufs */
+        vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_NAME,
+        1,
+    ),
+    (
+        /* Used to bind dmabuf memory */
+        vk::KHR_BIND_MEMORY2_NAME,
+        1,
+    ),
+    (vk::KHR_SAMPLER_YCBCR_CONVERSION_NAME, 12),
+    (vk::KHR_IMAGE_FORMAT_LIST_NAME, 1),
+    (vk::KHR_EXTERNAL_MEMORY_NAME, 1),
+    (vk::EXT_EXTERNAL_MEMORY_DMA_BUF_NAME, 1),
+    (vk::KHR_GET_MEMORY_REQUIREMENTS2_NAME, 1),
+    (vk::KHR_EXTERNAL_MEMORY_FD_NAME, 1),
+    (vk::KHR_DEDICATED_ALLOCATION_NAME, 3),
+    (vk::KHR_MAINTENANCE1_NAME, 1),
+    /* For synchronization with the client/compositor, which need
+     * not be Vulkan programs themselves */
+    (vk::EXT_QUEUE_FAMILY_FOREIGN_NAME, 1),
+    /* For timeline semaphores and explicit sync */
+    (vk::KHR_TIMELINE_SEMAPHORE_NAME, 2),
+    /* To import/export semaphores to fds, for explicit sync protocols & event loop */
+    (vk::KHR_EXTERNAL_SEMAPHORE_FD_NAME, 1),
+    /* Needed by external_semaphore_fd */
+    (vk::KHR_EXTERNAL_SEMAPHORE_NAME, 1),
+];
+/* Require the latest known version for video related extensions,
+ * to be safe, because AVVulkanDeviceContext is only given extension
+ * names and not their versions. */
+const EXT_LIST_VIDEO_ENC_BASE: &[(&CStr, u32)] = &[(
+    vk::KHR_VIDEO_ENCODE_QUEUE_NAME,
+    vk::KHR_VIDEO_ENCODE_QUEUE_SPEC_VERSION,
+)];
+const EXT_VIDEO_ENC_H264: (&CStr, u32) = (
+    vk::KHR_VIDEO_ENCODE_H264_NAME,
+    vk::KHR_VIDEO_ENCODE_H264_SPEC_VERSION,
+);
+const EXT_LIST_VIDEO_DEC_BASE: &[(&CStr, u32)] = &[(
+    vk::KHR_VIDEO_DECODE_QUEUE_NAME,
+    vk::KHR_VIDEO_DECODE_QUEUE_SPEC_VERSION,
+)];
+const EXT_VIDEO_DEC_H264: (&CStr, u32) = (
+    vk::KHR_VIDEO_DECODE_H264_NAME,
+    vk::KHR_VIDEO_DECODE_H264_SPEC_VERSION,
+);
+const EXT_VIDEO_DEC_AV1: (&CStr, u32) = (
+    vk::KHR_VIDEO_DECODE_AV1_NAME,
+    vk::KHR_VIDEO_DECODE_AV1_SPEC_VERSION,
+);
+const EXT_LIST_VIDEO_BASE: &[(&CStr, u32)] = &[
+    (vk::KHR_VIDEO_QUEUE_NAME, vk::KHR_VIDEO_QUEUE_SPEC_VERSION),
+    /* Also required, for ffmpeg's vkQueueSubmit2 */
+    (
+        vk::KHR_SYNCHRONIZATION2_NAME,
+        vk::KHR_SYNCHRONIZATION2_SPEC_VERSION,
+    ),
+    /* YCbCR support */
+    (
+        vk::KHR_SAMPLER_YCBCR_CONVERSION_NAME,
+        vk::KHR_SAMPLER_YCBCR_CONVERSION_SPEC_VERSION,
+    ),
+    /* For ffmpeg encoding */
+    (
+        vk::KHR_VIDEO_MAINTENANCE1_NAME,
+        vk::KHR_VIDEO_MAINTENANCE1_SPEC_VERSION,
+    ),
+];
+
+/** Create a Vulkan instance and record which devices are acceptable */
+pub fn setup_vulkan_instance(
     debug: bool,
-) -> Result<Arc<Vulkan>, String> {
+    video: &VideoSetting,
+) -> Result<Arc<VulkanInstance>, String> {
     let app_name = CString::new(env!("CARGO_PKG_NAME")).unwrap();
     let version: u32 = env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap() << 24
         | env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap() << 16;
@@ -668,91 +766,9 @@ pub fn setup_vulkan(
             },
         );
 
-    let exts = [
-        vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME.as_ptr(), // needed to link device and DRM node
-        vk::KHR_EXTERNAL_MEMORY_CAPABILITIES_NAME.as_ptr(),    // needed for buffer import/export
-        vk::KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_NAME.as_ptr(), // needed to export/poll on timeline semaphores
-    ];
-
-    let ext_list: &[(&CStr, u32)] = &[
-        (
-            /* Needed to get drm node details */
-            vk::EXT_PHYSICAL_DEVICE_DRM_NAME,
-            1,
-        ),
-        (
-            /* This and dependencies needed to import/export dmabufs */
-            vk::EXT_IMAGE_DRM_FORMAT_MODIFIER_NAME,
-            1,
-        ),
-        (
-            /* Used to bind dmabuf memory */
-            vk::KHR_BIND_MEMORY2_NAME,
-            1,
-        ),
-        (vk::KHR_SAMPLER_YCBCR_CONVERSION_NAME, 12),
-        (vk::KHR_IMAGE_FORMAT_LIST_NAME, 1),
-        (vk::KHR_EXTERNAL_MEMORY_NAME, 1),
-        (vk::EXT_EXTERNAL_MEMORY_DMA_BUF_NAME, 1),
-        (vk::KHR_GET_MEMORY_REQUIREMENTS2_NAME, 1),
-        (vk::KHR_EXTERNAL_MEMORY_FD_NAME, 1),
-        (vk::KHR_DEDICATED_ALLOCATION_NAME, 3),
-        (vk::KHR_MAINTENANCE1_NAME, 1),
-        /* For synchronization with the client/compositor, which need
-         * not be Vulkan programs themselves */
-        (vk::EXT_QUEUE_FAMILY_FOREIGN_NAME, 1),
-        /* For timeline semaphores and explicit sync */
-        (vk::KHR_TIMELINE_SEMAPHORE_NAME, 2),
-        /* To import/export semaphores to fds, for explicit sync protocols & event loop */
-        (vk::KHR_EXTERNAL_SEMAPHORE_FD_NAME, 1),
-        /* Needed by external_semaphore_fd */
-        (vk::KHR_EXTERNAL_SEMAPHORE_NAME, 1),
-    ];
-    /* Require the latest known version for video related extensions,
-     * to be safe, because AVVulkanDeviceContext is only given extension
-     * names and not their versions. */
-    let ext_list_video_enc_base: &[(&CStr, u32)] = &[(
-        vk::KHR_VIDEO_ENCODE_QUEUE_NAME,
-        vk::KHR_VIDEO_ENCODE_QUEUE_SPEC_VERSION,
-    )];
-    let ext_video_enc_h264: (&CStr, u32) = (
-        vk::KHR_VIDEO_ENCODE_H264_NAME,
-        vk::KHR_VIDEO_ENCODE_H264_SPEC_VERSION,
-    );
-    let ext_list_video_dec_base: &[(&CStr, u32)] = &[(
-        vk::KHR_VIDEO_DECODE_QUEUE_NAME,
-        vk::KHR_VIDEO_DECODE_QUEUE_SPEC_VERSION,
-    )];
-    let ext_video_dec_h264: (&CStr, u32) = (
-        vk::KHR_VIDEO_DECODE_H264_NAME,
-        vk::KHR_VIDEO_DECODE_H264_SPEC_VERSION,
-    );
-    let ext_video_dec_av1: (&CStr, u32) = (
-        vk::KHR_VIDEO_DECODE_AV1_NAME,
-        vk::KHR_VIDEO_DECODE_AV1_SPEC_VERSION,
-    );
-    let ext_list_video_base: &[(&CStr, u32)] = &[
-        (vk::KHR_VIDEO_QUEUE_NAME, vk::KHR_VIDEO_QUEUE_SPEC_VERSION),
-        /* Also required, for ffmpeg's vkQueueSubmit2 */
-        (
-            vk::KHR_SYNCHRONIZATION2_NAME,
-            vk::KHR_SYNCHRONIZATION2_SPEC_VERSION,
-        ),
-        /* YCbCR support */
-        (
-            vk::KHR_SAMPLER_YCBCR_CONVERSION_NAME,
-            vk::KHR_SAMPLER_YCBCR_CONVERSION_SPEC_VERSION,
-        ),
-        /* For ffmpeg encoding */
-        (
-            vk::KHR_VIDEO_MAINTENANCE1_NAME,
-            vk::KHR_VIDEO_MAINTENANCE1_SPEC_VERSION,
-        ),
-    ];
-
     let mut create = vk::InstanceCreateInfo::default()
         .application_info(&info)
-        .enabled_extension_names(&exts)
+        .enabled_extension_names(INSTANCE_EXTS)
         .flags(vk::InstanceCreateFlags::default());
 
     let validation = c"VK_LAYER_KHRONOS_validation";
@@ -784,7 +800,7 @@ pub fn setup_vulkan(
             .enumerate_physical_devices()
             .map_err(|x| tag!("Failed to get physical devices: {:?}", x))?;
 
-        let mut best_device: Option<DeviceInfo> = None;
+        let mut physdevs = Vec::new();
         for p in devices {
             let exts = instance
                 .enumerate_device_extension_properties(p)
@@ -854,41 +870,30 @@ pub fn setup_vulkan(
                 }
                 debug!(
                     "Baseline extensions: missing {:?}",
-                    list_missing(ext_list, &exts)
+                    list_missing(EXT_LIST, &exts)
                 );
                 debug!(
                     "Video base extensions: missing {:?}",
-                    list_missing(ext_list_video_base, &exts)
+                    list_missing(EXT_LIST_VIDEO_BASE, &exts)
                 );
+                let mut video_enc_list = Vec::new();
+                video_enc_list.extend_from_slice(EXT_LIST_VIDEO_ENC_BASE);
+                video_enc_list.push(EXT_VIDEO_ENC_H264);
                 debug!(
-                    "Video enc extensions: missing {:?}; has {}, {}",
-                    list_missing(ext_list_video_enc_base, &exts),
-                    ext_video_enc_h264.0.to_str().unwrap(),
-                    fmt_bool(exts_has_prop(
-                        &exts,
-                        ext_video_enc_h264.0,
-                        ext_video_enc_h264.1
-                    ))
+                    "Video enc extensions: missing {:?}",
+                    list_missing(&video_enc_list, &exts)
                 );
+                let mut video_dec_list = Vec::new();
+                video_dec_list.extend_from_slice(EXT_LIST_VIDEO_DEC_BASE);
+                video_dec_list.push(EXT_VIDEO_DEC_H264);
+                video_dec_list.push(EXT_VIDEO_DEC_AV1);
                 debug!(
-                    "Video dec extensions: missing {:?}; has {}, {}; has {}, {}",
-                    list_missing(ext_list_video_dec_base, &exts),
-                    ext_video_dec_h264.0.to_str().unwrap(),
-                    fmt_bool(exts_has_prop(
-                        &exts,
-                        ext_video_dec_h264.0,
-                        ext_video_dec_h264.1
-                    )),
-                    ext_video_dec_av1.0.to_str().unwrap(),
-                    fmt_bool(exts_has_prop(
-                        &exts,
-                        ext_video_dec_av1.0,
-                        ext_video_dec_av1.1
-                    ))
+                    "Video dec extensions: missing {:?}",
+                    list_missing(&video_dec_list, &exts)
                 );
             }
 
-            let all_present = ext_list
+            let all_present = EXT_LIST
                 .iter()
                 .all(|(name, version)| exts_has_prop(&exts, name, *version));
             if !all_present {
@@ -900,29 +905,29 @@ pub fn setup_vulkan(
             let mut hw_dec_av1 = false;
 
             if video.format.is_some()
-                && ext_list_video_base
+                && EXT_LIST_VIDEO_BASE
                     .iter()
                     .all(|(name, version)| exts_has_prop(&exts, name, *version))
             {
                 // TODO: first verify that libavcodec has the appropriate encoders/decoders available, if possible
                 if video.dec_pref != Some(CodecPreference::SW)
-                    && ext_list_video_dec_base
+                    && EXT_LIST_VIDEO_DEC_BASE
                         .iter()
                         .all(|(name, version)| exts_has_prop(&exts, name, *version))
                 {
-                    if exts_has_prop(&exts, ext_video_dec_h264.0, ext_video_dec_h264.1) {
+                    if exts_has_prop(&exts, EXT_VIDEO_DEC_H264.0, EXT_VIDEO_DEC_H264.1) {
                         hw_dec_h264 = true;
                     }
-                    if exts_has_prop(&exts, ext_video_dec_av1.0, ext_video_dec_av1.1) {
+                    if exts_has_prop(&exts, EXT_VIDEO_DEC_AV1.0, EXT_VIDEO_DEC_AV1.1) {
                         hw_dec_av1 = true;
                     }
                 }
                 if video.enc_pref != Some(CodecPreference::SW)
-                    && ext_list_video_enc_base
+                    && EXT_LIST_VIDEO_ENC_BASE
                         .iter()
                         .all(|(name, version)| exts_has_prop(&exts, name, *version))
                 {
-                    if exts_has_prop(&exts, ext_video_enc_h264.0, ext_video_enc_h264.1) {
+                    if exts_has_prop(&exts, EXT_VIDEO_ENC_H264.0, EXT_VIDEO_ENC_H264.1) {
                         hw_enc_h264 = true;
                     }
                 }
@@ -962,88 +967,125 @@ pub fn setup_vulkan(
                 None
             };
 
-            if let Some(d) = main_device {
-                if render_id != Some(d) && primary_id != Some(d) {
-                    /* This device corresponds to some other DRM node */
-                    continue;
-                }
-            }
-
             /* Some device_id is needed for the Wayland application to use */
             let Some(device_id) = render_id.or(primary_id) else {
                 continue;
             };
 
-            let proposed = DeviceInfo {
+            physdevs.push(DeviceInfo {
                 physdev: p,
                 device_id,
                 typ: dev_type,
                 hw_enc_h264,
                 hw_dec_h264,
                 hw_dec_av1,
-            };
-            if let Some(ref cur) = best_device {
-                if device_rank(&proposed) < device_rank(cur) {
-                    best_device = Some(proposed);
+            })
+        }
+
+        Ok(Arc::new(VulkanInstance {
+            entry,
+            instance,
+            physdevs,
+        }))
+    }
+}
+
+impl VulkanInstance {
+    /** Return true if Vulkan has a physical device available that Waypipe can use */
+    pub fn has_device(&self, main_device: Option<u64>) -> bool {
+        self.pick_device(main_device).is_some()
+    }
+    fn pick_device(&self, main_device: Option<u64>) -> Option<&DeviceInfo> {
+        if let Some(d) = main_device {
+            for x in &self.physdevs {
+                if x.device_id == d {
+                    return Some(x);
                 }
-            } else {
-                best_device = Some(proposed);
             }
+            None
+        } else {
+            let mut best_device: Option<&DeviceInfo> = None;
+            for x in &self.physdevs {
+                if let Some(cur) = best_device {
+                    if device_rank(x) < device_rank(cur) {
+                        best_device = Some(x);
+                    }
+                } else {
+                    best_device = Some(x)
+                }
+            }
+            best_device
         }
+    }
+}
 
-        let Some(dev_info) = best_device else {
-            if let Some(d) = main_device {
-                return Err(tag!("Failed to find a Vulkan physical device with device id {}, or it does not meet all requirements.", d));
-            } else {
-                return Err(tag!(
-                    "Failed to find any Vulkan physical device meeting all requirements."
-                ));
-            }
-        };
-        debug!(
-            "Chose physical device with device id: {}",
-            dev_info.device_id
+fn get_enabled_exts(dev_info: &DeviceInfo) -> Vec<*const c_char> {
+    let mut enabled_exts: Vec<*const c_char> = Vec::new();
+    // TODO: use a static (stack) array instead, since max number of extensions is small
+    enabled_exts.extend(EXT_LIST.iter().map(|(name, _)| name.as_ptr()));
+    if dev_info.hw_enc_h264 || dev_info.hw_dec_h264 || dev_info.hw_dec_av1 {
+        enabled_exts.extend(EXT_LIST_VIDEO_BASE.iter().map(|(name, _)| name.as_ptr()));
+    }
+    if dev_info.hw_enc_h264 {
+        enabled_exts.extend(
+            EXT_LIST_VIDEO_ENC_BASE
+                .iter()
+                .map(|(name, _)| name.as_ptr()),
         );
+    }
+    if dev_info.hw_enc_h264 {
+        enabled_exts.push(EXT_VIDEO_ENC_H264.0.as_ptr());
+    }
+    if dev_info.hw_dec_h264 | dev_info.hw_dec_av1 {
+        enabled_exts.extend(
+            EXT_LIST_VIDEO_DEC_BASE
+                .iter()
+                .map(|(name, _)| name.as_ptr()),
+        );
+    }
+    if dev_info.hw_dec_h264 {
+        enabled_exts.push(EXT_VIDEO_DEC_H264.0.as_ptr());
+    }
+    if dev_info.hw_dec_av1 {
+        enabled_exts.push(EXT_VIDEO_DEC_AV1.0.as_ptr());
+    }
 
-        let physdev = dev_info.physdev;
-        let using_hw_video = dev_info.hw_enc_h264 | dev_info.hw_dec_h264 | dev_info.hw_dec_av1;
+    enabled_exts
+}
 
-        let memory_properties = instance.get_physical_device_memory_properties(physdev);
-        let queue_families = instance.get_physical_device_queue_family_properties(physdev);
+/** Set up a physical device */
+pub fn setup_vulkan_device_base(
+    instance: &Arc<VulkanInstance>,
+    main_device: Option<u64>,
+    format_filter_for_video: bool,
+) -> Result<VulkanDevice, String> {
+    let Some(dev_info) = instance.pick_device(main_device) else {
+        if let Some(d) = main_device {
+            return Err(tag!("Failed to find a Vulkan physical device with device id {}, or it does not meet all requirements.", d));
+        } else {
+            return Err(tag!(
+                "Failed to find any Vulkan physical device meeting all requirements."
+            ));
+        }
+    };
+    debug!(
+        "Chose physical device with device id: {}",
+        dev_info.device_id
+    );
 
-        // TODO: use a static (stack) array instead, since max number of extensions is small
-        let mut enabled_exts: Vec<*const c_char> = Vec::<*const c_char>::new();
-        enabled_exts.extend(ext_list.iter().map(|(name, _)| name.as_ptr()));
-        if using_hw_video {
-            enabled_exts.extend(ext_list_video_base.iter().map(|(name, _)| name.as_ptr()));
-        }
-        if dev_info.hw_enc_h264 {
-            enabled_exts.extend(
-                ext_list_video_enc_base
-                    .iter()
-                    .map(|(name, _)| name.as_ptr()),
-            );
-        }
-        if dev_info.hw_enc_h264 {
-            enabled_exts.push(ext_video_enc_h264.0.as_ptr());
-        }
-        if dev_info.hw_dec_h264 | dev_info.hw_dec_av1 {
-            enabled_exts.extend(
-                ext_list_video_dec_base
-                    .iter()
-                    .map(|(name, _)| name.as_ptr()),
-            );
-        }
-        if dev_info.hw_dec_h264 {
-            enabled_exts.push(ext_video_dec_h264.0.as_ptr());
-        }
-        if dev_info.hw_dec_av1 {
-            enabled_exts.push(ext_video_dec_av1.0.as_ptr());
-        }
+    let physdev = dev_info.physdev;
+    let using_hw_video = dev_info.hw_enc_h264 | dev_info.hw_dec_h264 | dev_info.hw_dec_av1;
 
-        // order: [compute+transfer, graphics+transfer, encode, decode]
-        let qfis = &mut [u32::MAX, u32::MAX, u32::MAX, u32::MAX];
-        let nqis = &mut [0, 0, 0, 0];
+    unsafe {
+        let memory_properties = instance
+            .instance
+            .get_physical_device_memory_properties(physdev);
+        let queue_families = instance
+            .instance
+            .get_physical_device_queue_family_properties(physdev);
+
+        let mut qfis = [u32::MAX, u32::MAX, u32::MAX, u32::MAX];
+        let mut nqis = [0, 0, 0, 0];
         for (u, family) in queue_families.iter().enumerate().rev() {
             let i: u32 = u.try_into().unwrap();
             if family
@@ -1110,6 +1152,8 @@ pub fn setup_vulkan(
                 .queue_priorities(prio),
         ];
 
+        let enabled_exts = get_enabled_exts(dev_info);
+
         let mut featuresv11 =
             vk::PhysicalDeviceVulkan11Features::default().sampler_ycbcr_conversion(true);
         let mut featuresv13 = vk::PhysicalDeviceVulkan13Features::default().synchronization2(true);
@@ -1130,7 +1174,10 @@ pub fn setup_vulkan(
                 .push_next(&mut feature_vid1);
         }
 
-        let dev = match instance.create_device(physdev, &logical_info, None) {
+        let dev = match instance
+            .instance
+            .create_device(physdev, &logical_info, None)
+        {
             Ok(x) => x,
             Err(x) => {
                 // TODO: cleanup more
@@ -1140,14 +1187,14 @@ pub fn setup_vulkan(
 
         let queue = dev.get_device_queue(queue_family, 0);
 
-        let get_modifier = ext::image_drm_format_modifier::Device::new(&instance, &dev);
+        let get_modifier = ext::image_drm_format_modifier::Device::new(&instance.instance, &dev);
 
-        let get_mem_reqs2 = khr::get_memory_requirements2::Device::new(&instance, &dev);
-        let bind_mem2 = khr::bind_memory2::Device::new(&instance, &dev);
-        let ext_mem_fd = khr::external_memory_fd::Device::new(&instance, &dev);
+        let get_mem_reqs2 = khr::get_memory_requirements2::Device::new(&instance.instance, &dev);
+        let bind_mem2 = khr::bind_memory2::Device::new(&instance.instance, &dev);
+        let ext_mem_fd = khr::external_memory_fd::Device::new(&instance.instance, &dev);
 
-        let timeline_semaphore = khr::timeline_semaphore::Device::new(&instance, &dev);
-        let ext_semaphore_fd = khr::external_semaphore_fd::Device::new(&instance, &dev);
+        let timeline_semaphore = khr::timeline_semaphore::Device::new(&instance.instance, &dev);
+        let ext_semaphore_fd = khr::external_semaphore_fd::Device::new(&instance.instance, &dev);
 
         let mut formats = BTreeMap::<vk::Format, FormatData>::new();
         for f in SUPPORTED_FORMAT_LIST {
@@ -1155,7 +1202,11 @@ pub fn setup_vulkan(
             let mut format_drm_props = vk::DrmFormatModifierPropertiesListEXT::default();
             let mut format_props =
                 vk::FormatProperties2::default().push_next(&mut format_drm_props);
-            instance.get_physical_device_format_properties2(physdev, *f, &mut format_props);
+            instance.instance.get_physical_device_format_properties2(
+                physdev,
+                *f,
+                &mut format_props,
+            );
 
             if format_drm_props.drm_format_modifier_count == 0 {
                 /* No associated modifiers / format not supported for import/export */
@@ -1168,7 +1219,11 @@ pub fn setup_vulkan(
             format_drm_props = format_drm_props.drm_format_modifier_properties(&mut dst);
             let mut format_props =
                 vk::FormatProperties2::default().push_next(&mut format_drm_props);
-            instance.get_physical_device_format_properties2(physdev, *f, &mut format_props);
+            instance.instance.get_physical_device_format_properties2(
+                physdev,
+                *f,
+                &mut format_props,
+            );
 
             let info = get_vulkan_info(*f);
 
@@ -1193,7 +1248,7 @@ pub fn setup_vulkan(
                 }
 
                 let max_size_transfer = get_max_external_image_size(
-                    &instance,
+                    &instance.instance,
                     physdev,
                     queue_family,
                     *f,
@@ -1215,7 +1270,7 @@ pub fn setup_vulkan(
                     .contains(store_feature)
                 {
                     Some(get_max_external_image_size(
-                        &instance,
+                        &instance.instance,
                         physdev,
                         queue_family,
                         *f,
@@ -1234,7 +1289,7 @@ pub fn setup_vulkan(
                 });
             }
 
-            if video.format.is_some() {
+            if format_filter_for_video {
                 // todo: only restrict modifiers when the format is usable for video?
                 // (in general, if a format supports video encoding, clients should preferably use it.)
                 // Alternatively, a preference for video-encodable formats could be made part of dmabuf-feedback,
@@ -1265,34 +1320,17 @@ pub fn setup_vulkan(
         let (semaphore, semaphore_drm_handle, semaphore_fd, semaphore_event_fd) =
             vulkan_create_timeline_parts(&dev, &ext_semaphore_fd, &drm_fd, init_sem_value)?;
 
-        // TODO: if video loading fails, post an error here immediately, for now
-        #[cfg(feature = "video")]
-        let video = if video.format.is_some() {
-            Some(setup_video(
-                &entry,
-                &instance,
-                &physdev,
-                &dev,
-                &dev_info,
-                debug,
-                *qfis,
-                &enabled_exts,
-                &exts,
-            )?)
-        } else {
-            None
-        };
+        Ok(VulkanDevice {
+            _instance: instance.clone(),
 
-        Ok(Arc::new(Vulkan {
-            _entry: entry,
-            instance,
-            _physdev: physdev,
+            dev_info: *dev_info,
+            qfis,
             queue: Mutex::new(VulkanQueue {
                 queue,
                 last_semaphore_value: init_sem_value,
             }),
             #[cfg(feature = "video")]
-            video,
+            video: None,
             dev,
             drm_fd,
             semaphore,
@@ -1309,12 +1347,47 @@ pub fn setup_vulkan(
             device_id: dev_info.device_id,
             formats,
             queue_family,
-        }))
+        })
     }
 }
 
+/** Set up a physical device, including video encoding/decoding setup */
+pub fn setup_vulkan_device(
+    instance: &Arc<VulkanInstance>,
+    main_device: Option<u64>,
+    video: &VideoSetting,
+    debug: bool,
+) -> Result<Arc<VulkanDevice>, String> {
+    let mut dev = setup_vulkan_device_base(instance, main_device, video.format.is_some())?;
+
+    #[cfg(feature = "video")]
+    {
+        let enabled_exts = get_enabled_exts(&dev.dev_info);
+
+        dev.video = if video.format.is_some() {
+            Some(unsafe {
+                setup_video(
+                    &instance.entry,
+                    &instance.instance,
+                    &dev.dev_info.physdev,
+                    &dev.dev,
+                    &dev.dev_info,
+                    debug,
+                    dev.qfis,
+                    &enabled_exts,
+                    INSTANCE_EXTS,
+                )?
+            })
+        } else {
+            None
+        };
+    }
+
+    Ok(Arc::new(dev))
+}
+
 fn vulkan_get_memory_type_index(
-    info: &Vulkan,
+    info: &VulkanDevice,
     bitmask: u32,
     flags: vk::MemoryPropertyFlags,
 ) -> u32 {
@@ -1395,7 +1468,7 @@ fn memory_plane(x: usize) -> vk::ImageAspectFlags {
 }
 
 fn create_cpu_visible_buffer(
-    vulk: &Vulkan,
+    vulk: &VulkanDevice,
     size: usize,
     read_optimized: bool,
 ) -> Result<(vk::Buffer, vk::DeviceMemory, u64), String> {
@@ -1451,7 +1524,7 @@ fn create_cpu_visible_buffer(
 }
 
 pub fn vulkan_get_buffer(
-    vulk: &Arc<Vulkan>,
+    vulk: &Arc<VulkanDevice>,
     nom_len: usize,
     read_optimized: bool,
 ) -> Result<VulkanBuffer, String> {
@@ -1479,7 +1552,7 @@ pub fn vulkan_get_buffer(
     }
 }
 
-pub fn vulkan_get_cmd_pool(vulk: &Arc<Vulkan>) -> Result<Arc<VulkanCommandPool>, String> {
+pub fn vulkan_get_cmd_pool(vulk: &Arc<VulkanDevice>) -> Result<Arc<VulkanCommandPool>, String> {
     let pool_info = vk::CommandPoolCreateInfo::default()
         .queue_family_index(vulk.queue_family)
         .flags(vk::CommandPoolCreateFlags::empty()); // todo: transient? reset?
@@ -1577,7 +1650,7 @@ impl Drop for VulkanBufferWriteView<'_> {
 }
 
 pub fn vulkan_import_dmabuf(
-    vulk: &Arc<Vulkan>,
+    vulk: &Arc<VulkanDevice>,
     planes: Vec<AddDmabufPlane>, // takes ownership, consumes fd. TODO: proper cleanup if this fails early
     width: u32,
     height: u32,
@@ -1804,7 +1877,7 @@ pub fn vulkan_import_dmabuf(
 
 /* Note: the planes do _not_ need to match the original's dimensions */
 pub fn vulkan_create_dmabuf(
-    vulk: &Arc<Vulkan>,
+    vulk: &Arc<VulkanDevice>,
     width: u32,
     height: u32,
     drm_format: u32,
@@ -2056,7 +2129,7 @@ fn make_evt_fd() -> Result<OwnedFd, String> {
 }
 
 pub fn vulkan_import_timeline(
-    vulk: &Arc<Vulkan>,
+    vulk: &Arc<VulkanDevice>,
     fd: OwnedFd,
 ) -> Result<Arc<VulkanTimelineSemaphore>, String> {
     let mut sem_exp_info = vk::ExportSemaphoreCreateInfo::default()
@@ -2174,7 +2247,7 @@ unsafe fn vulkan_create_timeline_parts(
 }
 
 pub fn vulkan_create_timeline(
-    vulk: &Arc<Vulkan>,
+    vulk: &Arc<VulkanDevice>,
     start_pt: u64,
 ) -> Result<(Arc<VulkanTimelineSemaphore>, OwnedFd), String> {
     unsafe {
@@ -2208,7 +2281,7 @@ pub fn start_copy_segments_from_dmabuf(
 ) -> Result<VulkanCopyHandle, String> {
     // TODO: validate that buffer/dmabuf regions affected are not being used by any other transfer
     // (otherwise callers risk unsoundness)
-    let vulk: &Vulkan = &img.vulk;
+    let vulk: &VulkanDevice = &img.vulk;
     let format_info = get_vulkan_info(img.vk_format);
     // todo: fully synchronous code; even if not high performance enough in practice,
     // will be useful for testing or initial creation
@@ -2490,7 +2563,7 @@ pub fn start_copy_segments_onto_dmabuf(
     view_row_length: Option<u32>,
     wait_semaphores: &[(Arc<VulkanTimelineSemaphore>, u64)],
 ) -> Result<VulkanCopyHandle, String> {
-    let vulk: &Vulkan = &img.vulk;
+    let vulk: &VulkanDevice = &img.vulk;
     let format_info = get_vulkan_info(img.vk_format);
 
     // Design: each image gets its own command pool, with four options (diff, fill, etc.)
@@ -2643,11 +2716,11 @@ pub fn get_dev_for_drm_node_path(path: &PathBuf) -> Result<u64, String> {
     Ok(r.st_rdev)
 }
 
-impl Vulkan {
+impl VulkanDevice {
     /* For indefinite delay, use u64::MAX ~585 years.
      * Returns `true` if wait successful.
      */
-    pub fn wait_for_timeline_pt(self: &Vulkan, pt: u64, max_wait: u64) -> Result<bool, String> {
+    pub fn wait_for_timeline_pt(&self, pt: u64, max_wait: u64) -> Result<bool, String> {
         unsafe {
             let sem = &[self.semaphore];
             let values = &[pt];
@@ -2666,10 +2739,10 @@ impl Vulkan {
         }
     }
 
-    pub fn get_device(self: &Vulkan) -> u64 {
+    pub fn get_device(&self) -> u64 {
         self.device_id
     }
-    pub fn get_event_fd(self: &Vulkan, timeline_point: u64) -> Result<BorrowedFd, String> {
+    pub fn get_event_fd(&self, timeline_point: u64) -> Result<BorrowedFd, String> {
         drm_syncobj_eventfd(
             &self.drm_fd,
             &self.event_fd,
@@ -2679,7 +2752,7 @@ impl Vulkan {
         Ok(self.event_fd.as_fd())
     }
 
-    pub fn get_current_timeline_pt(self: &Vulkan) -> Result<u64, String> {
+    pub fn get_current_timeline_pt(&self) -> Result<u64, String> {
         unsafe {
             self.timeline_semaphore
                 .get_semaphore_counter_value(self.semaphore)
@@ -2716,7 +2789,7 @@ impl Vulkan {
         width as usize <= max_size.0 && height as usize <= max_size.1
     }
 
-    pub fn supports_format(self: &Vulkan, drm_format: u32, drm_modifier: u64) -> bool {
+    pub fn supports_format(&self, drm_format: u32, drm_modifier: u64) -> bool {
         let Some(vk_fmt) = drm_to_vulkan(drm_format) else {
             return false;
         };
@@ -2727,7 +2800,7 @@ impl Vulkan {
     }
 
     /* Returns empty vector if format is not supported; otherwise a list of permissible modifiers */
-    pub fn get_supported_modifiers(self: &Vulkan, drm_format: u32) -> Vec<u64> {
+    pub fn get_supported_modifiers(&self, drm_format: u32) -> Vec<u64> {
         let Some(vk_fmt) = drm_to_vulkan(drm_format) else {
             return Vec::new();
         };
@@ -2869,7 +2942,7 @@ pub fn copy_onto_dmabuf(
             .offset(0)
             .size(copy.memory_len)
             .memory(copy.mem)];
-        let vulk: &Vulkan = &buf.vulk;
+        let vulk: &VulkanDevice = &buf.vulk;
         vulk.dev
             .flush_mapped_memory_ranges(ranges)
             .map_err(|_| "Failed to flush mapped memory range")?;
@@ -2911,7 +2984,7 @@ pub fn copy_from_dmabuf(
     let nom_len = buf.nominal_size(None);
     let mut output = vec![0; nom_len];
 
-    let vulk: &Vulkan = &buf.vulk;
+    let vulk: &VulkanDevice = &buf.vulk;
     unsafe {
         let ranges = &[vk::MappedMemoryRange::default()
             .offset(0)
@@ -3069,8 +3142,10 @@ pub static VULKAN_MUTEX: Mutex<()> = Mutex::new(());
 fn test_dmabuf() {
     let _serialize_test = VULKAN_MUTEX.lock().unwrap();
 
+    let instance = setup_vulkan_instance(true, &VideoSetting::default()).unwrap();
     for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan(Some(dev_id), &VideoSetting::default(), true) else {
+        let Ok(vulk) = setup_vulkan_device(&instance, Some(dev_id), &VideoSetting::default(), true)
+        else {
             continue;
         };
 

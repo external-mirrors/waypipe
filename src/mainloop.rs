@@ -90,7 +90,8 @@ pub struct Globals {
     pub max_local_id: i32,
 
     /* Vulkan instance and other data; lazily loaded after client binds linux-dmabuf-v1 */
-    pub vulkan: Option<Arc<Vulkan>>,
+    pub vulkan_instance: Option<Arc<VulkanInstance>>,
+    pub vulkan_device: Option<Arc<VulkanDevice>>,
 
     // note: slight space/time perf improvement may be possible by using different
     // maps for regular objects (which need only store 1 or 2 bytes/object)
@@ -380,7 +381,7 @@ struct FillDmabufTask2 {
 
 /** Task to encode DMABUF changes as a video packet */
 struct VideoEncodeTask {
-    vulk: Arc<Vulkan>,
+    vulk: Arc<VulkanDevice>,
     state: Arc<VideoEncodeState>,
     remote_id: Rid,
 }
@@ -388,7 +389,7 @@ struct VideoEncodeTask {
 struct VideoDecodeTask {
     msg: ReadBufferView,
     remote_id: Rid,
-    vulk: Arc<Vulkan>,
+    vulk: Arc<VulkanDevice>,
     state: Arc<VideoDecodeState>,
 }
 
@@ -923,7 +924,7 @@ pub fn translate_dmabuf_fd(
     drm_format: u32,
     planes: Vec<AddDmabufPlane>,
     opts: &Options,
-    vulk: &Arc<Vulkan>,
+    vulk: &Arc<VulkanDevice>,
     max_local_id: &mut i32,
     map: &mut BTreeMap<Rid, Weak<RefCell<ShadowFd>>>,
     wayland_id: ObjId,
@@ -1004,7 +1005,7 @@ pub fn translate_timeline(
 
     debug!("Translating timeline semaphore fd");
 
-    let tm = vulkan_import_timeline(glob.vulkan.as_ref().unwrap(), fd)?;
+    let tm = vulkan_import_timeline(glob.vulkan_device.as_ref().unwrap(), fd)?;
 
     let sfd = Rc::new(RefCell::new(ShadowFd {
         remote_id,
@@ -1304,13 +1305,13 @@ fn process_sfd_msg(
             // TODO: filter this by compositor preference exposed through dmabuf-feedback (if it exists?)
             // if client never requested dmabuf-feedback before creating buffers, warn and try linear?
             let modifier_list = glob
-                .vulkan
+                .vulkan_device
                 .as_ref()
                 .unwrap()
                 .get_supported_modifiers(drm_format);
 
             let (buf, add_planes) = vulkan_create_dmabuf(
-                glob.vulkan.as_ref().unwrap(),
+                glob.vulkan_device.as_ref().unwrap(),
                 width,
                 height,
                 drm_format,
@@ -1382,7 +1383,7 @@ fn process_sfd_msg(
                 }
             };
 
-            let vulk: &Arc<Vulkan> = glob.vulkan.as_ref().unwrap();
+            let vulk: &Arc<VulkanDevice> = glob.vulkan_device.as_ref().unwrap();
             if !supports_video_format(vulk, vid_type, drm_format, width, height) {
                 return Err(tag!(
                     "Video format {:?} is not supported at {}x{}",
@@ -1450,7 +1451,7 @@ fn process_sfd_msg(
             let task = VideoDecodeTask {
                 msg: msg_view,
                 remote_id,
-                vulk: glob.vulkan.as_ref().unwrap().clone(),
+                vulk: glob.vulkan_device.as_ref().unwrap().clone(),
                 state: video_decode.clone(),
             };
             tasksys
@@ -1468,7 +1469,8 @@ fn process_sfd_msg(
 
         WmsgType::OpenTimeline => {
             let start_pt = u64::from_le_bytes(msg[8..16].try_into().unwrap());
-            let (timeline, fd) = vulkan_create_timeline(glob.vulkan.as_ref().unwrap(), start_pt)?;
+            let (timeline, fd) =
+                vulkan_create_timeline(glob.vulkan_device.as_ref().unwrap(), start_pt)?;
 
             let sfd = Rc::new(RefCell::new(ShadowFd {
                 remote_id,
@@ -2519,7 +2521,7 @@ fn run_diff_dmabuf_task_2(task: DiffDmabufTask2, cache: &mut ThreadCache) -> Tas
 impl ThreadCache {
     fn get_cmd_pool<'a>(
         &'a mut self,
-        vulk: &Arc<Vulkan>,
+        vulk: &Arc<VulkanDevice>,
     ) -> Result<&'a Arc<VulkanCommandPool>, String> {
         if self.cmd_pool.is_none() {
             let p = vulkan_get_cmd_pool(vulk)?;
@@ -3572,7 +3574,11 @@ fn process_vulkan_updates(
     tasksys: &TaskSystem,
     from_chan: &mut FromChannel,
 ) -> Result<(), String> {
-    let current: u64 = glob.vulkan.as_ref().unwrap().get_current_timeline_pt()?;
+    let current: u64 = glob
+        .vulkan_device
+        .as_ref()
+        .unwrap()
+        .get_current_timeline_pt()?;
 
     let mut g = tasksys.tasks.lock().unwrap();
     // TODO: more efficient filtering, this is O(n^2) as typically only
@@ -4063,7 +4069,7 @@ fn loop_inner(
         };
 
         let (vulk_id, borrowed_fd): (Option<usize>, Option<BorrowedFd>) =
-            if let Some(ref vulk) = glob.vulkan {
+            if let Some(ref vulk) = glob.vulkan_device {
                 let g = tasksys.tasks.lock().unwrap();
                 let mut first_pt = u64::MAX;
                 first_pt = std::cmp::min(
@@ -4858,7 +4864,8 @@ pub fn main_interface_loop(
         fresh: BTreeMap::new(),
         pipes: Vec::new(),
         on_display_side,
-        vulkan: None,
+        vulkan_instance: None,
+        vulkan_device: None,
         max_local_id: if on_display_side { -1 } else { 1 },
         objects: setup_object_map(),
         opts: (*opts).clone(), // todo: reference opts instead?

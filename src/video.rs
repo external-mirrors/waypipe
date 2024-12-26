@@ -98,7 +98,7 @@ pub struct VulkanDecodeOpHandle {
 impl Drop for VulkanDecodeOpHandle {
     fn drop(&mut self) {
         let cmd_pool = self.pool.pool.lock().unwrap();
-        let vulk: &Vulkan = &self.decode.target.vulk;
+        let vulk: &VulkanDevice = &self.decode.target.vulk;
         unsafe {
             /* Verify that the command buffer execution has completed; if not, panic, as it's a program error */
             if let Ok(counter) = vulk
@@ -921,7 +921,7 @@ unsafe extern "C" fn pick_video_format_hw(ctx: *mut AVCodecContext, fmts: *const
     AVPixelFormat_AV_PIX_FMT_VULKAN
 }
 
-unsafe fn free_staging_images(vulk: &Vulkan, data: &VideoHWStagingImages) {
+unsafe fn free_staging_images(vulk: &VulkanDevice, data: &VideoHWStagingImages) {
     for i in 0..2 {
         vulk.dev.destroy_image_view(data.plane_image_views[i], None);
         vulk.dev.destroy_image(data.plane_images[i], None);
@@ -930,7 +930,7 @@ unsafe fn free_staging_images(vulk: &Vulkan, data: &VideoHWStagingImages) {
 }
 
 fn create_staging_images(
-    vulk: &Vulkan,
+    vulk: &VulkanDevice,
     width: u32,
     height: u32,
     for_encode: bool,
@@ -1220,7 +1220,7 @@ pub fn setup_video_decode(
 }
 
 pub fn supports_video_format(
-    vulk: &Vulkan,
+    vulk: &VulkanDevice,
     fmt: VideoFormat,
     drm_format: u32,
     _width: u32,
@@ -1276,7 +1276,7 @@ pub fn start_dmavid_decode_hw(
     pool: &Arc<VulkanCommandPool>,
     packet: &[u8],
 ) -> Result<VulkanDecodeOpHandle, String> {
-    let vulk: &Vulkan = &state.target.vulk;
+    let vulk: &VulkanDevice = &state.target.vulk;
     let video = vulk.video.as_ref().unwrap();
 
     debug!(
@@ -1668,7 +1668,7 @@ pub fn start_dmavid_decode_sw(
     pool: &Arc<VulkanCommandPool>,
     packet: &[u8],
 ) -> Result<VulkanDecodeOpHandle, String> {
-    let vulk: &Vulkan = &state.target.vulk;
+    let vulk: &VulkanDevice = &state.target.vulk;
     let video = vulk.video.as_ref().unwrap();
 
     debug!(
@@ -2266,7 +2266,7 @@ pub fn start_dmavid_encode_hw(
     state: &Arc<VideoEncodeState>,
     pool: &Arc<VulkanCommandPool>,
 ) -> Result<Vec<u8>, String> {
-    let vulk: &Vulkan = &state.target.vulk;
+    let vulk: &VulkanDevice = &state.target.vulk;
     let video = vulk.video.as_ref().unwrap();
 
     let VideoEncodeStateData::HW(ref state_data) = state.data else {
@@ -2645,7 +2645,7 @@ pub fn start_dmavid_encode_sw(
     state: &Arc<VideoEncodeState>,
     pool: &Arc<VulkanCommandPool>,
 ) -> Result<Vec<u8>, String> {
-    let vulk: &Vulkan = &state.target.vulk;
+    let vulk: &VulkanDevice = &state.target.vulk;
     let video = vulk.video.as_ref().unwrap();
 
     debug!(
@@ -3104,16 +3104,14 @@ fn test_video(try_hardware: bool) {
         } else {
             CodecPreference::SW
         });
-        let Ok(vulk) = setup_vulkan(
-            Some(dev_id),
-            &VideoSetting {
-                format: Some(VideoFormat::H264), /* the actual format given here does not matter */
-                bits_per_frame: None,
-                enc_pref: pref,
-                dec_pref: pref,
-            },
-            debug,
-        ) else {
+        let vid_setting = VideoSetting {
+            format: Some(VideoFormat::H264), /* the actual format given here does not matter */
+            bits_per_frame: None,
+            enc_pref: pref,
+            dec_pref: pref,
+        };
+        let instance = setup_vulkan_instance(debug, &vid_setting).unwrap();
+        let Ok(vulk) = setup_vulkan_device(&instance, Some(dev_id), &vid_setting, debug) else {
             continue;
         };
 

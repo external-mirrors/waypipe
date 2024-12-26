@@ -443,7 +443,7 @@ fn get_damage_for_dmabuf(
 
 /** Construct a format table for use by the zwp_linux_dmabuf_v1 protocol */
 fn build_new_format_table(
-    vulk: &Arc<Vulkan>,
+    vulk: &Arc<VulkanDevice>,
     sfd: &Rc<RefCell<ShadowFd>>,
     feedback: &mut ObjZwpLinuxDmabufFeedback,
 ) -> Result<usize, String> {
@@ -1788,7 +1788,7 @@ pub fn process_way_msg(
             let format = parse_evt_zwp_linux_dmabuf_v1_format(msg)?;
             let mod_linear = 0;
             if !glob
-                .vulkan
+                .vulkan_device
                 .as_ref()
                 .unwrap()
                 .supports_format(format, mod_linear)
@@ -1803,7 +1803,7 @@ pub fn process_way_msg(
         (WaylandInterface::ZwpLinuxDmabufV1, OPCODE_ZWP_LINUX_DMABUF_V1_MODIFIER) => {
             let (format, mod_hi, mod_lo) = parse_evt_zwp_linux_dmabuf_v1_modifier(msg)?;
             let modifier = join_u64(mod_hi, mod_lo);
-            let vulk = glob.vulkan.as_ref().unwrap();
+            let vulk = glob.vulkan_device.as_ref().unwrap();
             if glob.on_display_side {
                 /* Restrict the format/modifier pairs to what this instance of Waypipe supports */
                 if !vulk.supports_format(format, modifier) {
@@ -1967,7 +1967,7 @@ pub fn process_way_msg(
                         drm_format,
                         planes,
                         &glob.opts,
-                        glob.vulkan.as_ref().unwrap(),
+                        glob.vulkan_device.as_ref().unwrap(),
                         &mut glob.max_local_id,
                         &mut glob.map,
                         buffer_id,
@@ -2090,7 +2090,7 @@ pub fn process_way_msg(
                         drm_format,
                         planes,
                         &glob.opts,
-                        glob.vulkan.as_ref().unwrap(),
+                        glob.vulkan_device.as_ref().unwrap(),
                         &mut glob.max_local_id,
                         &mut glob.map,
                         ObjId(0),
@@ -2328,7 +2328,7 @@ pub fn process_way_msg(
                 return Err(tag!("Unexpected object extra type"));
             };
 
-            if glob.on_display_side && glob.vulkan.is_none() {
+            if glob.on_display_side && glob.vulkan_device.is_none() {
                 /* Try to initialize Vulkan, now that we know _a_ device to use */
                 // TODO: handle cases where surface_feedback disagrees with default_feedback, or
                 // where only surface_feedback is asked for and never default_feedback
@@ -2338,7 +2338,12 @@ pub fn process_way_msg(
                     ));
                 };
 
-                glob.vulkan = Some(setup_vulkan(Some(dev), &glob.opts.video, glob.opts.debug)?);
+                glob.vulkan_device = Some(setup_vulkan_device(
+                    glob.vulkan_instance.as_ref().unwrap(),
+                    Some(dev),
+                    &glob.opts.video,
+                    glob.opts.debug,
+                )?);
             }
 
             let dev_len = std::mem::size_of::<u64>();
@@ -2390,8 +2395,11 @@ pub fn process_way_msg(
                         drop(b);
                         feedback.format_table = parse_format_table(&data[..]);
 
-                        let new_size =
-                            build_new_format_table(glob.vulkan.as_ref().unwrap(), &sfd, feedback)?;
+                        let new_size = build_new_format_table(
+                            glob.vulkan_device.as_ref().unwrap(),
+                            &sfd,
+                            feedback,
+                        )?;
 
                         y.push_back(sfd);
 
@@ -2437,7 +2445,7 @@ pub fn process_way_msg(
             }
 
             /* Write messages, filtering as necessary. */
-            let vulk: &Vulkan = glob.vulkan.as_ref().unwrap();
+            let vulk: &VulkanDevice = glob.vulkan_device.as_ref().unwrap();
             let dev_id: u64 = vulk.get_device();
             write_evt_zwp_linux_dmabuf_feedback_v1_main_device(
                 dst,
@@ -2855,6 +2863,31 @@ pub fn process_way_msg(
                     return Ok(ProcMsg::Done);
                 }
 
+                if !glob.on_display_side {
+                    /* waypipe-server side: Filter out dmabuf support if the target device (or _any_ device)
+                     * is not available; this must be done now to prevent advertising this global when
+                     * DMABUF support is not actually available. */
+                    if glob.vulkan_instance.is_none() {
+                        glob.vulkan_instance =
+                            Some(setup_vulkan_instance(glob.opts.debug, &glob.opts.video)?);
+                    }
+
+                    let dev = if let Some(node) = &glob.opts.drm_node {
+                        /* Pick specified device */
+                        Some(get_dev_for_drm_node_path(node)?)
+                    } else {
+                        /* Pick best device */
+                        None
+                    };
+                    if !glob.vulkan_instance.as_ref().unwrap().has_device(dev) {
+                        debug!(
+                            "Desired Vulkan device not available; dropping interface: {}",
+                            escape_wl_name(intf)
+                        );
+                        return Ok(ProcMsg::Done);
+                    }
+                }
+
                 let max_v = INTERFACE_TABLE[WaylandInterface::ZwpLinuxDmabufV1 as usize].version;
                 /* note: with versions < 4, the the compositor has no way to specify the preferred
                  * drm node, so it may be chosen arbitrarily */
@@ -2874,16 +2907,24 @@ pub fn process_way_msg(
             // filter out events
             let (_id, name, version, oid) = parse_req_wl_registry_bind(msg)?;
             if name == b"zwp_linux_dmabuf_v1" {
-                if glob.vulkan.is_none() && glob.on_display_side && version < 4 {
-                    debug!(
-                        "Client bound zwp_linux_dmabuf_v1 at version {} older than 4, using best-or-specified drm node",
-                        version
-                    );
+                if glob.on_display_side {
+                    /* On application side, vulkan_instance will be created on global advertisement */
+                    if glob.vulkan_instance.is_none() {
+                        glob.vulkan_instance =
+                            Some(setup_vulkan_instance(glob.opts.debug, &glob.opts.video)?);
+                    }
                 }
+                /* If version >= 4 and on display side, compositor will provide the preferred device in
+                 * dmabuf_feedback.main_device. Otherwise, set up the device here. */
+                if glob.vulkan_device.is_none() && (version < 4 || !glob.on_display_side) {
+                    let Some(ref instance) = glob.vulkan_instance else {
+                        return Err(tag!("Vulkan instance setup required before device"));
+                    };
 
-                /* Client side (or server if version < 4): initialize Vulkan,
-                 * choosing best device or specified device. */
-                if glob.vulkan.is_none() && (!glob.on_display_side || version < 4) {
+                    debug!(
+                            "Client bound zwp_linux_dmabuf_v1 at version {} older than 4, using best-or-specified drm node",
+                            version
+                        );
                     let dev = if let Some(node) = &glob.opts.drm_node {
                         /* Pick specified device */
                         Some(get_dev_for_drm_node_path(node)?)
@@ -2891,7 +2932,12 @@ pub fn process_way_msg(
                         /* Pick best device */
                         None
                     };
-                    glob.vulkan = Some(setup_vulkan(dev, &glob.opts.video, glob.opts.debug)?);
+                    glob.vulkan_device = Some(setup_vulkan_device(
+                        instance,
+                        dev,
+                        &glob.opts.video,
+                        glob.opts.debug,
+                    )?);
                 }
 
                 check_space!(msg.len(), 0, remaining_space);

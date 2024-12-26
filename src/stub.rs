@@ -15,14 +15,15 @@ mod dmabuf_stub {
         pub stride: u32,
         pub modifier: u64,
     }
-    pub struct Vulkan(());
+    pub struct VulkanInstance(());
+    pub struct VulkanDevice(());
     pub struct VulkanCommandPool {
-        pub vulk: Arc<Vulkan>,
+        pub vulk: Arc<VulkanDevice>,
     }
     pub struct VulkanTimelineSemaphore(());
     pub struct VulkanCopyHandle(());
     pub struct VulkanDmabuf {
-        pub vulk: Arc<Vulkan>,
+        pub vulk: Arc<VulkanDevice>,
         pub width: usize,
         pub height: usize,
     }
@@ -34,11 +35,25 @@ mod dmabuf_stub {
         pub data: &'a mut [u8],
     }
 
-    pub fn setup_vulkan(
+    pub fn setup_vulkan_instance(
+        debug: bool,
+        video: &VideoSetting,
+    ) -> Result<Arc<VulkanInstance>, String> {
+        unreachable!();
+    }
+    pub fn setup_vulkan_device_base(
+        instance: &Arc<VulkanInstance>,
+        main_device: Option<u64>,
+        format_filter_for_video: bool,
+    ) -> Result<VulkanDevice, String> {
+        unreachable!();
+    }
+    pub fn setup_vulkan_device(
+        instance: &Arc<VulkanInstance>,
         main_device: Option<u64>,
         video: &VideoSetting,
         debug: bool,
-    ) -> Result<Arc<Vulkan>, String> {
+    ) -> Result<Arc<VulkanDevice>, String> {
         unreachable!();
     }
 
@@ -62,17 +77,19 @@ mod dmabuf_stub {
     ) -> Result<VulkanCopyHandle, String> {
         unreachable!();
     }
-    pub fn vulkan_get_cmd_pool(vulk: &Arc<Vulkan>) -> Result<Arc<VulkanCommandPool>, &'static str> {
+    pub fn vulkan_get_cmd_pool(
+        vulk: &Arc<VulkanDevice>,
+    ) -> Result<Arc<VulkanCommandPool>, &'static str> {
         unreachable!();
     }
     pub fn vulkan_import_timeline(
-        vulk: &Arc<Vulkan>,
+        vulk: &Arc<VulkanDevice>,
         fd: OwnedFd,
     ) -> Result<Arc<VulkanTimelineSemaphore>, String> {
         unreachable!();
     }
     pub fn vulkan_create_timeline(
-        vulk: &Arc<Vulkan>,
+        vulk: &Arc<VulkanDevice>,
         start_pt: u64,
     ) -> Result<(Arc<VulkanTimelineSemaphore>, OwnedFd), String> {
         unreachable!();
@@ -84,14 +101,14 @@ mod dmabuf_stub {
         unreachable!();
     }
     pub fn vulkan_get_buffer(
-        vulk: &Arc<Vulkan>,
+        vulk: &Arc<VulkanDevice>,
         nom_len: usize,
         read_optimized: bool,
     ) -> Result<VulkanBuffer, &'static str> {
         unreachable!();
     }
     pub fn vulkan_create_dmabuf(
-        vulk: &Arc<Vulkan>,
+        vulk: &Arc<VulkanDevice>,
         width: u32,
         height: u32,
         drm_format: u32,
@@ -101,7 +118,7 @@ mod dmabuf_stub {
         unreachable!();
     }
     pub fn vulkan_import_dmabuf(
-        vulk: &Arc<Vulkan>,
+        vulk: &Arc<VulkanDevice>,
         planes: Vec<AddDmabufPlane>,
         width: u32,
         height: u32,
@@ -129,27 +146,28 @@ mod dmabuf_stub {
             unreachable!();
         }
     }
-    impl Vulkan {
-        pub fn wait_for_timeline_pt(
-            self: &Vulkan,
-            pt: u64,
-            max_wait: u64,
-        ) -> Result<bool, &'static str> {
+    impl VulkanInstance {
+        pub fn has_device(&self, main_device: Option<u64>) -> bool {
             unreachable!();
         }
-        pub fn get_device(self: &Vulkan) -> u64 {
+    }
+    impl VulkanDevice {
+        pub fn wait_for_timeline_pt(&self, pt: u64, max_wait: u64) -> Result<bool, &'static str> {
             unreachable!();
         }
-        pub fn get_event_fd(self: &Vulkan, timeline_point: u64) -> Result<BorrowedFd, String> {
+        pub fn get_device(&self) -> u64 {
             unreachable!();
         }
-        pub fn get_current_timeline_pt(self: &Vulkan) -> Result<u64, &'static str> {
+        pub fn get_event_fd(&self, timeline_point: u64) -> Result<BorrowedFd, String> {
             unreachable!();
         }
-        pub fn supports_format(self: &Vulkan, drm_format: u32, drm_modifier: u64) -> bool {
+        pub fn get_current_timeline_pt(&self) -> Result<u64, &'static str> {
             unreachable!();
         }
-        pub fn get_supported_modifiers(self: &Vulkan, drm_format: u32) -> Vec<u64> {
+        pub fn supports_format(&self, drm_format: u32, drm_modifier: u64) -> bool {
+            unreachable!();
+        }
+        pub fn get_supported_modifiers(&self, drm_format: u32) -> Vec<u64> {
             unreachable!();
         }
         pub fn can_import_image(
@@ -242,7 +260,7 @@ mod video_stub {
         unreachable!();
     }
     pub fn supports_video_format(
-        vulk: &Vulkan,
+        vulk: &VulkanDevice,
         fmt: VideoFormat,
         drm_format: u32,
         width: u32,
