@@ -2850,16 +2850,13 @@ pub fn process_way_msg(
             }
             if blacklist.contains(&intf) {
                 /* Drop interface entirely */
-                debug!("Dropping interface: {}", escape_wl_name(intf));
+                debug!("Dropping interface: {}", EscapeWlName(intf));
                 return Ok(ProcMsg::Done);
             }
 
             if intf == b"zwp_linux_dmabuf_v1" {
                 if glob.opts.no_gpu {
-                    debug!(
-                        "no-gpu option: Dropping interface: {}",
-                        escape_wl_name(intf)
-                    );
+                    debug!("no-gpu option: Dropping interface: {}", EscapeWlName(intf));
                     return Ok(ProcMsg::Done);
                 }
 
@@ -2882,7 +2879,7 @@ pub fn process_way_msg(
                     if !glob.vulkan_instance.as_ref().unwrap().has_device(dev) {
                         debug!(
                             "Desired Vulkan device not available; dropping interface: {}",
-                            escape_wl_name(intf)
+                            EscapeWlName(intf)
                         );
                         return Ok(ProcMsg::Done);
                     }

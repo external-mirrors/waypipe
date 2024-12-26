@@ -2,7 +2,7 @@
 /*! Misc utilities and types */
 use nix::fcntl;
 use std::fmt;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::str::FromStr;
 
@@ -217,20 +217,22 @@ where
     e
 }
 
-/* Wayland interface names should consist of [a-zA-Z0-9_]. Escape all unexpected characters. */
-pub fn escape_wl_name(name: &[u8]) -> String {
-    let mut s = String::new();
-    for c in name {
-        match *c {
-            b'_' | b'a'..=b'z' | b'0'..=b'9' | b'A'..=b'Z' => {
-                s.push(char::from_u32(*c as u32).unwrap())
-            }
-            _ => {
-                write!(s, "\\x{:02x}", *c).unwrap();
-            }
+/** A type to escape Wayland interface names, which should only consist of [a-zA-Z0-9_] */
+pub struct EscapeWlName<'a>(pub &'a [u8]);
+impl Display for EscapeWlName<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for c in self.0 {
+            match *c {
+                b'_' | b'a'..=b'z' | b'0'..=b'9' | b'A'..=b'Z' => {
+                    write!(f, "{}", char::from_u32(*c as u32).unwrap())
+                }
+                _ => {
+                    write!(f, "\\x{:02x}", *c)
+                }
+            }?
         }
+        Ok(())
     }
-    s
 }
 
 /** A type to escape all non-ascii-printable characters when Displayed, to leave strings
