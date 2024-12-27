@@ -96,15 +96,24 @@ mod proto {
     define_test! {oversized}
     define_test! {pipe_write}
     define_test! {presentation_time}
-    define_test! {screencopy_shm}
+    define_test! {screencopy_shm_ext}
+    define_test! {screencopy_shm_wlr}
     define_test! {shm_buffer}
     define_test! {shm_damage}
     define_test! {shm_extend}
     define_test! {title_prefix}
+    #[cfg(feature = "dmabuf")]
     define_test! {dmabuf}
+    #[cfg(feature = "dmabuf")]
     define_test! {dmabuf_damage}
+    #[cfg(feature = "video")]
     define_test! {dmavid_h264}
+    #[cfg(feature = "video")]
     define_test! {dmavid_vp9}
+    #[cfg(feature = "dmabuf")]
     define_test! {explicit_sync}
-    define_test! {screencopy_dmabuf}
+    #[cfg(feature = "dmabuf")]
+    define_test! {screencopy_dmabuf_ext}
+    #[cfg(feature = "dmabuf")]
+    define_test! {screencopy_dmabuf_wlr}
 }

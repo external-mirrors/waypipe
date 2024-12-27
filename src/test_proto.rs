@@ -1838,39 +1838,11 @@ fn proto_shm_extend(info: TestInfo) -> TestResult {
 }
 
 #[cfg(feature = "dmabuf")]
-fn setup_linux_dmabuf(
+fn send_linux_dmabuf_feedback(
     ctx: &mut ProtocolTestContext,
     vulk: &VulkanDevice,
-    display: ObjId,
-    registry: ObjId,
-    dmabuf: ObjId,
-    comp: ObjId,
-    surface: ObjId,
     feedback: ObjId,
 ) -> BTreeMap<u32, Vec<u64>> {
-    ctx.prog_write_passthrough(build_msgs(|dst| {
-        write_req_wl_display_get_registry(dst, display, registry);
-    }));
-
-    ctx.comp_write_passthrough(build_msgs(|dst| {
-        write_evt_wl_registry_global(dst, registry, 1, "zwp_linux_dmabuf_v1".as_bytes(), 5);
-        write_evt_wl_registry_global(dst, registry, 2, "wl_compositor".as_bytes(), 6);
-    }));
-
-    ctx.prog_write_passthrough(build_msgs(|dst| {
-        write_req_wl_registry_bind(
-            dst,
-            registry,
-            1,
-            "zwp_linux_dmabuf_v1".as_bytes(),
-            5,
-            dmabuf,
-        );
-        write_req_wl_registry_bind(dst, registry, 2, "wl_compositor".as_bytes(), 6, comp);
-        write_req_wl_compositor_create_surface(dst, comp, surface);
-        write_req_zwp_linux_dmabuf_v1_get_default_feedback(dst, dmabuf, feedback);
-    }));
-
     let main_device = vulk.get_device();
     let advertised_formats = [
         wayland_to_drm(WlShmFormat::R8),
@@ -1982,6 +1954,42 @@ fn setup_linux_dmabuf(
     }
     assert!(rfds.is_empty());
     mod_table
+}
+#[cfg(feature = "dmabuf")]
+fn setup_linux_dmabuf(
+    ctx: &mut ProtocolTestContext,
+    vulk: &VulkanDevice,
+    display: ObjId,
+    registry: ObjId,
+    dmabuf: ObjId,
+    comp: ObjId,
+    surface: ObjId,
+    feedback: ObjId,
+) -> BTreeMap<u32, Vec<u64>> {
+    ctx.prog_write_passthrough(build_msgs(|dst| {
+        write_req_wl_display_get_registry(dst, display, registry);
+    }));
+
+    ctx.comp_write_passthrough(build_msgs(|dst| {
+        write_evt_wl_registry_global(dst, registry, 1, "zwp_linux_dmabuf_v1".as_bytes(), 5);
+        write_evt_wl_registry_global(dst, registry, 2, "wl_compositor".as_bytes(), 6);
+    }));
+
+    ctx.prog_write_passthrough(build_msgs(|dst| {
+        write_req_wl_registry_bind(
+            dst,
+            registry,
+            1,
+            "zwp_linux_dmabuf_v1".as_bytes(),
+            5,
+            dmabuf,
+        );
+        write_req_wl_registry_bind(dst, registry, 2, "wl_compositor".as_bytes(), 6, comp);
+        write_req_wl_compositor_create_surface(dst, comp, surface);
+        write_req_zwp_linux_dmabuf_v1_get_default_feedback(dst, dmabuf, feedback);
+    }));
+
+    send_linux_dmabuf_feedback(ctx, vulk, feedback)
 }
 
 #[cfg(feature = "dmabuf")]
@@ -3080,19 +3088,117 @@ fn proto_title_prefix(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
-/* Test that basic wlr_screencopy operations work with wl_shm buffers */
-fn proto_screencopy_shm(info: TestInfo) -> TestResult {
+/** Protocol to use for a screencopy test */
+#[derive(Clone, Copy)]
+enum ScreencopyType {
+    WlrScreencopy,
+    ExtImageCopyCapture,
+}
+
+/** Send event(s) signaling completion of a screencopy frame, and check they are correctly
+ * replicated */
+fn send_screencopy_ready(ctx: &mut ProtocolTestContext, frame: ObjId, style: ScreencopyType) {
+    let time_ns: u32 = 123456789;
+    let time_s: u32 = 1;
+    let init_time_ns: u128 = (time_s as u128) * 1000000000 + (time_ns as u128);
+    let ready_msg = build_msgs(|dst| match style {
+        ScreencopyType::WlrScreencopy => {
+            write_evt_zwlr_screencopy_frame_v1_ready(dst, frame, 0, time_s, time_ns)
+        }
+        ScreencopyType::ExtImageCopyCapture => {
+            write_evt_ext_image_copy_capture_frame_v1_presentation_time(
+                dst, frame, 0, time_s, time_ns,
+            );
+            write_evt_ext_image_copy_capture_frame_v1_ready(dst, frame)
+        }
+    });
+
+    let start = Instant::now();
+    let (rmsgs, rfds) = ctx.comp_write(&ready_msg, &[]).unwrap();
+    assert!(rfds.is_empty());
+    let end = Instant::now();
+
+    let (tv_sec_hi, tv_sec_lo, tv_nsec) = match style {
+        ScreencopyType::WlrScreencopy => {
+            assert!(rmsgs.len() == 1);
+            assert!(
+                parse_wl_header(&rmsgs[0])
+                    == (
+                        frame,
+                        length_evt_zwlr_screencopy_frame_v1_ready(),
+                        OPCODE_ZWLR_SCREENCOPY_FRAME_V1_READY.code()
+                    )
+            );
+            parse_evt_zwlr_screencopy_frame_v1_ready(&rmsgs[0]).unwrap()
+        }
+        ScreencopyType::ExtImageCopyCapture => {
+            assert!(rmsgs.len() == 2);
+            assert!(
+                parse_wl_header(&rmsgs[0])
+                    == (
+                        frame,
+                        length_evt_ext_image_copy_capture_frame_v1_presentation_time(),
+                        OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_PRESENTATION_TIME.code()
+                    )
+            );
+            assert!(
+                parse_wl_header(&rmsgs[1])
+                    == (
+                        frame,
+                        length_evt_ext_image_copy_capture_frame_v1_ready(),
+                        OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_READY.code()
+                    )
+            );
+            parse_evt_ext_image_copy_capture_frame_v1_presentation_time(&rmsgs[0]).unwrap()
+        }
+    };
+    let output_ns = 1000000000 * (join_u64(tv_sec_hi, tv_sec_lo) as u128) + (tv_nsec as u128);
+
+    /* The time adjustment uses two XYX measurements, whose absolute error
+     * is ≤ half the elapsed time each, assuming the clocks run at the same
+     * rate and do not change. */
+    let max_time_error = end.duration_since(start).saturating_mul(2);
+
+    let abs_diff = output_ns.abs_diff(init_time_ns);
+    assert!(abs_diff < max_time_error.as_nanos());
+}
+
+/** Test that basic screencopy operations work with wl_shm buffers */
+fn proto_screencopy_shm(info: TestInfo, style: ScreencopyType) -> TestResult {
     run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
-        let [display, reg, shm, screencopy, output, shm_pool, buffer1, buffer2, frame, ..] =
-            ID_SEQUENCE;
+        let [display, reg, shm, screencopy, output, shm_pool, buffer1, buffer2, ..] = ID_SEQUENCE;
+        let (capture_manager, capture_source, session, frame) = match style {
+            ScreencopyType::WlrScreencopy => (ObjId(0), ObjId(0), ObjId(0), ObjId(9)),
+            ScreencopyType::ExtImageCopyCapture => (ObjId(9), ObjId(10), ObjId(11), ObjId(12)),
+        };
         ctx.prog_write_passthrough(build_msgs(|dst| {
             write_req_wl_display_get_registry(dst, display, reg);
         }));
         let scrcopy_name = "zwlr_screencopy_manager_v1".as_bytes();
         ctx.comp_write_passthrough(build_msgs(|dst| {
             write_evt_wl_registry_global(dst, reg, 1, "wl_shm".as_bytes(), 2);
-            write_evt_wl_registry_global(dst, reg, 2, scrcopy_name, 3);
-            write_evt_wl_registry_global(dst, reg, 3, "wl_output".as_bytes(), 4);
+            write_evt_wl_registry_global(dst, reg, 2, "wl_output".as_bytes(), 4);
+            match style {
+                ScreencopyType::WlrScreencopy => {
+                    write_evt_wl_registry_global(dst, reg, 3, scrcopy_name, 3);
+                }
+                ScreencopyType::ExtImageCopyCapture => {
+                    write_evt_wl_registry_global(
+                        dst,
+                        reg,
+                        3,
+                        b"ext_image_copy_capture_manager_v1",
+                        1,
+                    );
+                    write_evt_wl_registry_global(
+                        dst,
+                        reg,
+                        4,
+                        b"ext_output_image_capture_source_manager_v1",
+                        1,
+                    );
+                }
+            }
         }));
         let (w, h, fmt) = (33, 17, WlShmFormat::Xrgb8888 as u32);
         let pool_sz: usize = 3 * (w * h * 4) / 2;
@@ -3106,8 +3212,20 @@ fn proto_screencopy_shm(info: TestInfo) -> TestResult {
 
         let setup = build_msgs(|dst| {
             write_req_wl_registry_bind(dst, reg, 1, "wl_shm".as_bytes(), 2, shm);
-            write_req_wl_registry_bind(dst, reg, 2, scrcopy_name, 3, screencopy);
-            write_req_wl_registry_bind(dst, reg, 3, "wl_output".as_bytes(), 4, output);
+            write_req_wl_registry_bind(dst, reg, 2, "wl_output".as_bytes(), 4, output);
+            match style {
+                ScreencopyType::WlrScreencopy => {
+                    write_req_wl_registry_bind(dst, reg, 3, scrcopy_name, 3, screencopy)
+                }
+                ScreencopyType::ExtImageCopyCapture => write_req_wl_registry_bind(
+                    dst,
+                    reg,
+                    3,
+                    b"ext_image_copy_capture_manager_v1",
+                    1,
+                    screencopy,
+                ),
+            }
             write_req_wl_shm_create_pool(dst, shm, false, shm_pool, pool_sz.try_into().unwrap());
             write_req_wl_shm_pool_create_buffer(
                 dst,
@@ -3129,17 +3247,45 @@ fn proto_screencopy_shm(info: TestInfo) -> TestResult {
                 (w * 4).try_into().unwrap(),
                 fmt,
             );
-            write_req_zwlr_screencopy_manager_v1_capture_output_region(
-                dst,
-                screencopy,
-                frame,
-                0,
-                output,
-                1,
-                1,
-                (w - 2) as _,
-                (h - 2) as _,
-            );
+
+            match style {
+                ScreencopyType::WlrScreencopy => {
+                    write_req_zwlr_screencopy_manager_v1_capture_output_region(
+                        dst,
+                        screencopy,
+                        frame,
+                        0,
+                        output,
+                        1,
+                        1,
+                        (w - 2) as _,
+                        (h - 2) as _,
+                    );
+                }
+                ScreencopyType::ExtImageCopyCapture => {
+                    write_req_wl_registry_bind(
+                        dst,
+                        reg,
+                        4,
+                        b"ext_output_image_capture_source_manager_v1",
+                        1,
+                        capture_manager,
+                    );
+                    write_req_ext_output_image_capture_source_manager_v1_create_source(
+                        dst,
+                        capture_manager,
+                        capture_source,
+                        output,
+                    );
+                    write_req_ext_image_copy_capture_manager_v1_create_session(
+                        dst,
+                        screencopy,
+                        session,
+                        capture_source,
+                        0,
+                    );
+                }
+            }
         });
         let fds = [&shm_fd];
         let (rmsgs, mut rfds) = ctx.prog_write(&setup, &fds).unwrap();
@@ -3148,22 +3294,49 @@ fn proto_screencopy_shm(info: TestInfo) -> TestResult {
         let rfd = rfds.pop().unwrap();
         update_file_contents(&rfd, &copy_contents).unwrap();
 
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_zwlr_screencopy_frame_v1_buffer(
-                dst,
-                frame,
-                fmt,
-                w as _,
-                h as _,
-                (4 * w) as _,
-            );
-            write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
+        ctx.comp_write_passthrough(build_msgs(|dst| match style {
+            ScreencopyType::WlrScreencopy => {
+                write_evt_zwlr_screencopy_frame_v1_buffer(
+                    dst,
+                    frame,
+                    fmt,
+                    w as _,
+                    h as _,
+                    (4 * w) as _,
+                );
+                write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
+            }
+            ScreencopyType::ExtImageCopyCapture => {
+                write_evt_ext_image_copy_capture_session_v1_buffer_size(
+                    dst, session, w as _, h as _,
+                );
+                write_evt_ext_image_copy_capture_session_v1_shm_format(dst, session, fmt);
+                write_evt_ext_image_copy_capture_session_v1_done(dst, session);
+            }
         }));
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer2);
+        ctx.prog_write_passthrough(build_msgs(|dst| match style {
+            ScreencopyType::WlrScreencopy => {
+                write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer2);
+            }
+            ScreencopyType::ExtImageCopyCapture => {
+                write_req_ext_image_copy_capture_session_v1_create_frame(dst, session, frame);
+                write_req_ext_image_copy_capture_frame_v1_attach_buffer(dst, frame, buffer2);
+                write_req_ext_image_copy_capture_frame_v1_damage_buffer(
+                    dst,
+                    frame,
+                    0,
+                    0,
+                    i32::MAX,
+                    i32::MAX,
+                );
+                write_req_ext_image_copy_capture_frame_v1_capture(dst, frame);
+            }
         }));
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_zwlr_screencopy_frame_v1_failed(dst, frame);
+        ctx.comp_write_passthrough(build_msgs(|dst| match style {
+            ScreencopyType::WlrScreencopy => write_evt_zwlr_screencopy_frame_v1_failed(dst, frame),
+            ScreencopyType::ExtImageCopyCapture => {
+                write_evt_ext_image_copy_capture_frame_v1_failed(dst, frame, 0)
+            }
         }));
         /* Check that the failed screencopy does not lead to replication
          * (Although technically Waypipe _could_ eagerly make updates in this scenario,
@@ -3174,32 +3347,77 @@ fn proto_screencopy_shm(info: TestInfo) -> TestResult {
         assert!(check1 == seed_contents);
 
         // Check diff
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_zwlr_screencopy_frame_v1_destroy(dst, frame);
+        ctx.prog_write_passthrough(build_msgs(|dst| match style {
+            ScreencopyType::WlrScreencopy => write_req_zwlr_screencopy_frame_v1_destroy(dst, frame),
+            ScreencopyType::ExtImageCopyCapture => {
+                write_req_ext_image_copy_capture_session_v1_destroy(dst, session);
+                write_req_ext_image_copy_capture_frame_v1_destroy(dst, frame)
+            }
         }));
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_display_delete_id(dst, display, frame.0);
+        ctx.comp_write_passthrough(build_msgs(|dst| match style {
+            ScreencopyType::WlrScreencopy => write_evt_wl_display_delete_id(dst, display, frame.0),
+            ScreencopyType::ExtImageCopyCapture => {
+                write_evt_wl_display_delete_id(dst, display, session.0);
+                write_evt_wl_display_delete_id(dst, display, frame.0);
+            }
         }));
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_zwlr_screencopy_manager_v1_capture_output(dst, screencopy, frame, 0, output);
+        ctx.prog_write_passthrough(build_msgs(|dst| match style {
+            ScreencopyType::WlrScreencopy => {
+                write_req_zwlr_screencopy_manager_v1_capture_output(
+                    dst, screencopy, frame, 0, output,
+                );
+            }
+            ScreencopyType::ExtImageCopyCapture => {
+                write_req_ext_image_copy_capture_manager_v1_create_session(
+                    dst,
+                    screencopy,
+                    session,
+                    capture_source,
+                    0,
+                );
+            }
         }));
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_zwlr_screencopy_frame_v1_buffer(
-                dst,
-                frame,
-                fmt,
-                w as _,
-                h as _,
-                (4 * w) as _,
-            );
-            write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
+        ctx.comp_write_passthrough(build_msgs(|dst| match style {
+            ScreencopyType::WlrScreencopy => {
+                write_evt_zwlr_screencopy_frame_v1_buffer(
+                    dst,
+                    frame,
+                    fmt,
+                    w as _,
+                    h as _,
+                    (4 * w) as _,
+                );
+                write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
+            }
+            ScreencopyType::ExtImageCopyCapture => {
+                write_evt_ext_image_copy_capture_session_v1_buffer_size(
+                    dst, session, w as _, h as _,
+                );
+                write_evt_ext_image_copy_capture_session_v1_shm_format(dst, session, fmt);
+                write_evt_ext_image_copy_capture_session_v1_done(dst, session);
+            }
         }));
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer1);
+        ctx.prog_write_passthrough(build_msgs(|dst| match style {
+            ScreencopyType::WlrScreencopy => {
+                write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer1);
+            }
+            ScreencopyType::ExtImageCopyCapture => {
+                write_req_ext_image_copy_capture_session_v1_create_frame(dst, session, frame);
+                write_req_ext_image_copy_capture_frame_v1_attach_buffer(dst, frame, buffer1);
+                write_req_ext_image_copy_capture_frame_v1_damage_buffer(
+                    dst,
+                    frame,
+                    0,
+                    0,
+                    i32::MAX,
+                    i32::MAX,
+                );
+                write_req_ext_image_copy_capture_frame_v1_capture(dst, frame);
+            }
         }));
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_zwlr_screencopy_frame_v1_ready(dst, frame, 0, 1, 123456789);
-        }));
+
+        send_screencopy_ready(&mut ctx, frame, style);
+
         /* Check that the update is replicated */
         let check2 = get_file_contents(&shm_fd, pool_sz).unwrap();
         assert!(check2 == copy_contents);
@@ -3207,25 +3425,42 @@ fn proto_screencopy_shm(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
-/* Test that basic wlr_screencopy operations work with dmabufs */
+/** Test that basic wlr-screencopy operations work with wl_shm buffers */
+fn proto_screencopy_shm_wlr(info: TestInfo) -> TestResult {
+    proto_screencopy_shm(info, ScreencopyType::WlrScreencopy)
+}
+/** Test that basic ext-image-copy-capture operations work with wl_shm buffers */
+fn proto_screencopy_shm_ext(info: TestInfo) -> TestResult {
+    proto_screencopy_shm(info, ScreencopyType::ExtImageCopyCapture)
+}
+
+/** Test that basic wlr_screencopy operations work with dmabufs */
 #[cfg(feature = "dmabuf")]
-fn proto_screencopy_dmabuf(info: TestInfo, device: RenderDevice) -> TestResult {
+fn proto_screencopy_dmabuf(
+    info: TestInfo,
+    device: RenderDevice,
+    style: ScreencopyType,
+) -> TestResult {
     let Ok(vulk) = setup_vulkan(device.id) else {
         return Ok(StatusOk::Skipped);
     };
 
     run_protocol_test_with_drm_node(&info, &device, &|mut ctx: ProtocolTestContext| {
-        let [display, reg, dmabuf, screencopy, output, frame, params, buffer, ..] = ID_SEQUENCE;
+        let [display, reg, dmabuf, feedback, output, screencopy, ..] = ID_SEQUENCE;
 
-        let fmt = wayland_to_drm(WlShmFormat::R8);
-        let bpp = 1;
-        let (w, h) = (8, 8);
-        let img_size = (w * h) as usize * bpp;
-        let img_data = vec![0x33u8; img_size];
-        let mod_data = vec![0x44u8; img_size];
-        let modifier_list = vulk.get_supported_modifiers(fmt);
-
-        let copy_buf = Arc::new(vulkan_get_buffer(&vulk, img_size, true).unwrap());
+        let (capture_manager, capture_source, session, frame, params, buffer) = match style {
+            ScreencopyType::WlrScreencopy => {
+                (ObjId(0), ObjId(0), ObjId(0), ObjId(9), ObjId(10), ObjId(11))
+            }
+            ScreencopyType::ExtImageCopyCapture => (
+                ObjId(9),
+                ObjId(10),
+                ObjId(11),
+                ObjId(12),
+                ObjId(13),
+                ObjId(14),
+            ),
+        };
 
         ctx.prog_write_passthrough(build_msgs(|dst| {
             write_req_wl_display_get_registry(dst, display, reg);
@@ -3233,59 +3468,209 @@ fn proto_screencopy_dmabuf(info: TestInfo, device: RenderDevice) -> TestResult {
         let scrcopy_name = "zwlr_screencopy_manager_v1".as_bytes();
         ctx.comp_write_passthrough(build_msgs(|dst| {
             write_evt_wl_registry_global(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3);
-            write_evt_wl_registry_global(dst, reg, 2, scrcopy_name, 3);
-            write_evt_wl_registry_global(dst, reg, 3, "wl_output".as_bytes(), 4);
+            write_evt_wl_registry_global(dst, reg, 2, "wl_output".as_bytes(), 4);
+            match style {
+                ScreencopyType::WlrScreencopy => {
+                    write_evt_wl_registry_global(dst, reg, 3, scrcopy_name, 3)
+                }
+                ScreencopyType::ExtImageCopyCapture => {
+                    write_evt_wl_registry_global(
+                        dst,
+                        reg,
+                        3,
+                        b"ext_image_copy_capture_manager_v1",
+                        1,
+                    );
+                    write_evt_wl_registry_global(
+                        dst,
+                        reg,
+                        4,
+                        b"ext_output_image_capture_source_manager_v1",
+                        1,
+                    );
+                }
+            }
         }));
         ctx.prog_write_passthrough(build_msgs(|dst| {
             write_req_wl_registry_bind(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3, dmabuf);
-            write_req_wl_registry_bind(dst, reg, 2, scrcopy_name, 3, screencopy);
-            write_req_wl_registry_bind(dst, reg, 3, "wl_output".as_bytes(), 4, output);
-            write_req_zwlr_screencopy_manager_v1_capture_output(dst, screencopy, frame, 0, output);
+            write_req_zwp_linux_dmabuf_v1_get_default_feedback(dst, dmabuf, feedback);
+            write_req_wl_registry_bind(dst, reg, 2, "wl_output".as_bytes(), 4, output);
+            match style {
+                ScreencopyType::WlrScreencopy => {
+                    write_req_wl_registry_bind(dst, reg, 3, scrcopy_name, 3, screencopy);
+                    write_req_zwlr_screencopy_manager_v1_capture_output(
+                        dst, screencopy, frame, 0, output,
+                    );
+                }
+                ScreencopyType::ExtImageCopyCapture => {
+                    write_req_wl_registry_bind(
+                        dst,
+                        reg,
+                        3,
+                        b"ext_image_copy_capture_manager_v1",
+                        1,
+                        screencopy,
+                    );
+                    write_req_wl_registry_bind(
+                        dst,
+                        reg,
+                        4,
+                        b"ext_output_image_capture_source_manager_v1",
+                        1,
+                        capture_manager,
+                    );
+                    write_req_ext_output_image_capture_source_manager_v1_create_source(
+                        dst,
+                        capture_manager,
+                        capture_source,
+                        output,
+                    );
+                    write_req_ext_image_copy_capture_manager_v1_create_session(
+                        dst,
+                        screencopy,
+                        session,
+                        capture_source,
+                        0,
+                    );
+                }
+            }
         }));
 
-        /* Note: This assumes the Waypipe instance supports all the modifiers that the
-         * test framework does */
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_zwp_linux_dmabuf_v1_format(dst, dmabuf, fmt);
-            for m in &modifier_list {
-                let (mod_hi, mod_lo) = split_u64(*m);
-                write_evt_zwp_linux_dmabuf_v1_modifier(dst, dmabuf, fmt, mod_hi, mod_lo);
+        let supported_modifier_table = send_linux_dmabuf_feedback(&mut ctx, &vulk, feedback);
+
+        let fmt = wayland_to_drm(WlShmFormat::R8);
+        let bpp = 1;
+        let (w, h) = (8, 8);
+        let Some(mod_list) = supported_modifier_table.get(&fmt) else {
+            println!("Skipping test, format not supported");
+            return;
+        };
+
+        let msg_batch = build_msgs(|dst| {
+            write_evt_ext_image_copy_capture_session_v1_buffer_size(dst, session, w as _, h as _);
+            write_evt_ext_image_copy_capture_session_v1_dmabuf_device(
+                dst,
+                session,
+                &u64::to_le_bytes(device.id),
+            );
+            let mut mod_array = Vec::new();
+            for m in mod_list {
+                mod_array.extend_from_slice(&u64::to_le_bytes(*m));
             }
-            write_evt_zwlr_screencopy_frame_v1_linux_dmabuf(dst, frame, fmt, w, h);
-            write_evt_zwlr_screencopy_frame_v1_buffer_done(dst, frame);
-        }));
+            write_evt_ext_image_copy_capture_session_v1_dmabuf_format(
+                dst, session, fmt, &mod_array,
+            );
+            write_evt_ext_image_copy_capture_session_v1_done(dst, session);
+        });
+        let (rmsgs, rfds) = ctx.comp_write(&msg_batch, &[]).unwrap();
+        assert!(rfds.is_empty());
+        let nmsgs = rmsgs.len();
+        let mut received_mod_table: Vec<(u32, Vec<u64>)> = Vec::new();
+        let (mut has_size, mut has_device) = (false, false);
+        for (i, msg) in rmsgs.into_iter().enumerate() {
+            let (obj, _len, opcode) = parse_wl_header(&msg);
+            assert!(obj == session);
+            match MethodId::Event(opcode) {
+                OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_BUFFER_SIZE => {
+                    assert!(
+                        parse_evt_ext_image_copy_capture_session_v1_buffer_size(&msg).unwrap()
+                            == (w as _, h as _)
+                    );
+                    has_size = true;
+                }
+                OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DMABUF_DEVICE => {
+                    assert!(
+                        parse_evt_ext_image_copy_capture_session_v1_dmabuf_device(&msg).unwrap()
+                            == u64::to_le_bytes(device.id)
+                    );
+                    has_device = true;
+                }
+                OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DMABUF_FORMAT => {
+                    let (fmt, mods) =
+                        parse_evt_ext_image_copy_capture_session_v1_dmabuf_format(&msg).unwrap();
+                    assert!(mods.len() % 8 == 0);
+                    received_mod_table.push((
+                        fmt,
+                        mods.chunks_exact(8)
+                            .map(|x| u64::from_le_bytes(x.try_into().unwrap()))
+                            .collect::<Vec<u64>>(),
+                    ));
+                }
+                OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DONE => {
+                    assert!(i == nmsgs - 1);
+                }
+                _ => panic!("Unexpected message opcode {}", opcode),
+            }
+        }
+        assert!(has_size);
+        assert!(has_device);
+        assert!(received_mod_table.len() == 1);
+        assert!(received_mod_table[0].0 == fmt);
+        received_mod_table[0].1.sort();
+        let mut mod_copy = mod_list.clone();
+        mod_copy.sort();
+        /* All modifiers should make the roundtrip, since they were already filtered by linux-dmabuf */
+        assert!(received_mod_table[0].1 == mod_copy);
+
+        let img_size = (w * h) as usize * bpp;
+        let img_data = vec![0x33u8; img_size];
+        let mod_data = vec![0x44u8; img_size];
+
+        let copy_buf = Arc::new(vulkan_get_buffer(&vulk, img_size, true).unwrap());
 
         let (prog_img, comp_img) = create_dmabuf_and_copy(
-            &vulk,
-            &mut ctx,
-            params,
-            dmabuf,
-            buffer,
-            w as _,
-            h as _,
-            fmt,
-            &modifier_list,
-            &img_data,
+            &vulk, &mut ctx, params, dmabuf, buffer, w as _, h as _, fmt, mod_list, &img_data,
         )
         .unwrap();
 
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer);
+        ctx.prog_write_passthrough(build_msgs(|dst| match style {
+            ScreencopyType::WlrScreencopy => {
+                write_req_zwlr_screencopy_frame_v1_copy(dst, frame, buffer);
+            }
+            ScreencopyType::ExtImageCopyCapture => {
+                write_req_ext_image_copy_capture_session_v1_create_frame(dst, session, frame);
+                write_req_ext_image_copy_capture_frame_v1_attach_buffer(dst, frame, buffer);
+                write_req_ext_image_copy_capture_frame_v1_damage_buffer(
+                    dst,
+                    frame,
+                    0,
+                    0,
+                    i32::MAX,
+                    i32::MAX,
+                );
+                write_req_ext_image_copy_capture_frame_v1_capture(dst, frame);
+            }
         }));
 
         copy_onto_dmabuf(&comp_img, &copy_buf, &mod_data).unwrap();
-        ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_zwlr_screencopy_frame_v1_ready(dst, frame, 0, 1, 123456789);
-        }));
+
+        send_screencopy_ready(&mut ctx, frame, style);
 
         let output = copy_from_dmabuf(&prog_img, &copy_buf).unwrap();
         assert!(output == mod_data);
 
-        ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_zwlr_screencopy_frame_v1_destroy(dst, frame);
+        ctx.prog_write_passthrough(build_msgs(|dst| match style {
+            ScreencopyType::WlrScreencopy => {
+                write_req_zwlr_screencopy_frame_v1_destroy(dst, frame);
+            }
+            ScreencopyType::ExtImageCopyCapture => {
+                write_req_ext_image_copy_capture_frame_v1_destroy(dst, frame);
+                write_req_ext_image_copy_capture_session_v1_destroy(dst, session);
+            }
         }));
     })?;
     Ok(StatusOk::Pass)
+}
+
+/** Test that basic wlr-screencopy operations work with dmabufs */
+#[cfg(feature = "dmabuf")]
+fn proto_screencopy_dmabuf_wlr(info: TestInfo, device: RenderDevice) -> TestResult {
+    proto_screencopy_dmabuf(info, device, ScreencopyType::WlrScreencopy)
+}
+/** Test that basic ext-image-copy-capture operations work with dmabufs */
+#[cfg(feature = "dmabuf")]
+fn proto_screencopy_dmabuf_ext(info: TestInfo, device: RenderDevice) -> TestResult {
+    proto_screencopy_dmabuf(info, device, ScreencopyType::ExtImageCopyCapture)
 }
 
 fn main() -> ExitCode {
@@ -3354,7 +3739,18 @@ fn main() -> ExitCode {
     register_single(&mut tests, &f, "oversized", proto_oversized);
     register_single(&mut tests, &f, "pipe_write", proto_pipe_write);
     register_single(&mut tests, &f, "presentation_time", proto_presentation_time);
-    register_single(&mut tests, &f, "screencopy_shm", proto_screencopy_shm);
+    register_single(
+        &mut tests,
+        &f,
+        "screencopy_shm_wlr",
+        proto_screencopy_shm_wlr,
+    );
+    register_single(
+        &mut tests,
+        &f,
+        "screencopy_shm_ext",
+        proto_screencopy_shm_ext,
+    );
     register_single(&mut tests, &f, "shm_buffer", proto_shm_buffer);
     register_single(&mut tests, &f, "shm_damage", proto_shm_damage);
     register_single(&mut tests, &f, "shm_extend", proto_shm_extend);
@@ -3381,8 +3777,15 @@ fn main() -> ExitCode {
             &mut tests,
             &f,
             &vk_device_ids,
-            "screencopy_dmabuf",
-            proto_screencopy_dmabuf,
+            "screencopy_dmabuf_ext",
+            proto_screencopy_dmabuf_ext,
+        );
+        register_per_device(
+            &mut tests,
+            &f,
+            &vk_device_ids,
+            "screencopy_dmabuf_wlr",
+            proto_screencopy_dmabuf_wlr,
         );
     }
 
@@ -3641,7 +4044,8 @@ fn main() -> ExitCode {
         println!(" {}", s);
     }
 
-    if nfail > 0 {
+    /* Also consider 'no matching tests' a failure / something upstream testing framework must fix */
+    if nfail > 0 || tests.is_empty() {
         ExitCode::FAILURE
     } else if nskip == tests.len() {
         ExitCode::from(EXITCODE_SKIPPED)

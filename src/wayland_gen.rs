@@ -412,6 +412,33 @@ const EXT_IMAGE_CAPTURE_SOURCE_V1: WaylandData = WaylandData {
     }],
     version: 1,
 };
+pub fn write_req_ext_output_image_capture_source_manager_v1_create_source(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    source: ObjId,
+    output: ObjId,
+) {
+    let l = length_req_ext_output_image_capture_source_manager_v1_create_source();
+    write_header(dst, for_id, l, 0, 0);
+    write_obj(dst, source);
+    write_obj(dst, output);
+}
+pub fn length_req_ext_output_image_capture_source_manager_v1_create_source() -> usize {
+    16
+}
+pub fn parse_req_ext_output_image_capture_source_manager_v1_create_source<'a>(
+    mut msg: &'a [u8],
+) -> Result<(ObjId, ObjId), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    let arg2 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2))
+}
+pub const OPCODE_EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1_CREATE_SOURCE: MethodId =
+    MethodId::Request(0);
 const EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1: WaylandData = WaylandData {
     name: "ext_output_image_capture_source_manager_v1",
     evts: &[],
@@ -449,6 +476,35 @@ const EXT_FOREIGN_TOPLEVEL_IMAGE_CAPTURE_SOURCE_MANAGER_V1: WaylandData = Waylan
     ],
     version: 1,
 };
+pub fn write_req_ext_image_copy_capture_manager_v1_create_session(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    session: ObjId,
+    source: ObjId,
+    options: u32,
+) {
+    let l = length_req_ext_image_copy_capture_manager_v1_create_session();
+    write_header(dst, for_id, l, 0, 0);
+    write_obj(dst, session);
+    write_obj(dst, source);
+    write_u32(dst, options);
+}
+pub fn length_req_ext_image_copy_capture_manager_v1_create_session() -> usize {
+    20
+}
+pub fn parse_req_ext_image_copy_capture_manager_v1_create_session<'a>(
+    mut msg: &'a [u8],
+) -> Result<(ObjId, ObjId, u32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    let arg2 = parse_obj(&mut msg)?;
+    let arg3 = parse_u32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2, arg3))
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_CREATE_SESSION: MethodId = MethodId::Request(0);
 const EXT_IMAGE_COPY_CAPTURE_MANAGER_V1: WaylandData = WaylandData {
     name: "ext_image_copy_capture_manager_v1",
     evts: &[],
@@ -479,6 +535,163 @@ const EXT_IMAGE_COPY_CAPTURE_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub fn write_evt_ext_image_copy_capture_session_v1_buffer_size(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    width: u32,
+    height: u32,
+) {
+    let l = length_evt_ext_image_copy_capture_session_v1_buffer_size();
+    write_header(dst, for_id, l, 0, 0);
+    write_u32(dst, width);
+    write_u32(dst, height);
+}
+pub fn length_evt_ext_image_copy_capture_session_v1_buffer_size() -> usize {
+    16
+}
+pub fn parse_evt_ext_image_copy_capture_session_v1_buffer_size<'a>(
+    mut msg: &'a [u8],
+) -> Result<(u32, u32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_u32(&mut msg)?;
+    let arg2 = parse_u32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2))
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_BUFFER_SIZE: MethodId = MethodId::Event(0);
+pub fn write_evt_ext_image_copy_capture_session_v1_shm_format(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    format: u32,
+) {
+    let l = length_evt_ext_image_copy_capture_session_v1_shm_format();
+    write_header(dst, for_id, l, 1, 0);
+    write_u32(dst, format);
+}
+pub fn length_evt_ext_image_copy_capture_session_v1_shm_format() -> usize {
+    12
+}
+pub fn parse_evt_ext_image_copy_capture_session_v1_shm_format<'a>(
+    mut msg: &'a [u8],
+) -> Result<u32, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_u32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_SHM_FORMAT: MethodId = MethodId::Event(1);
+pub fn write_evt_ext_image_copy_capture_session_v1_dmabuf_device(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    device: &[u8],
+) {
+    let l = length_evt_ext_image_copy_capture_session_v1_dmabuf_device(device.len());
+    write_header(dst, for_id, l, 2, 0);
+    write_array(dst, device);
+}
+pub fn length_evt_ext_image_copy_capture_session_v1_dmabuf_device(device_len: usize) -> usize {
+    let mut v = 8;
+    v += length_array(device_len);
+    v
+}
+pub fn parse_evt_ext_image_copy_capture_session_v1_dmabuf_device<'a>(
+    mut msg: &'a [u8],
+) -> Result<&'a [u8], &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_array(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DMABUF_DEVICE: MethodId = MethodId::Event(2);
+pub fn write_evt_ext_image_copy_capture_session_v1_dmabuf_format(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    format: u32,
+    modifiers: &[u8],
+) {
+    let l = length_evt_ext_image_copy_capture_session_v1_dmabuf_format(modifiers.len());
+    write_header(dst, for_id, l, 3, 0);
+    write_u32(dst, format);
+    write_array(dst, modifiers);
+}
+pub fn length_evt_ext_image_copy_capture_session_v1_dmabuf_format(modifiers_len: usize) -> usize {
+    let mut v = 12;
+    v += length_array(modifiers_len);
+    v
+}
+pub fn parse_evt_ext_image_copy_capture_session_v1_dmabuf_format<'a>(
+    mut msg: &'a [u8],
+) -> Result<(u32, &'a [u8]), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_u32(&mut msg)?;
+    let arg2 = parse_array(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2))
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DMABUF_FORMAT: MethodId = MethodId::Event(3);
+pub fn write_evt_ext_image_copy_capture_session_v1_done(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_evt_ext_image_copy_capture_session_v1_done();
+    write_header(dst, for_id, l, 4, 0);
+}
+pub fn length_evt_ext_image_copy_capture_session_v1_done() -> usize {
+    8
+}
+pub fn parse_evt_ext_image_copy_capture_session_v1_done<'a>(
+    msg: &'a [u8],
+) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DONE: MethodId = MethodId::Event(4);
+pub fn write_req_ext_image_copy_capture_session_v1_create_frame(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    frame: ObjId,
+) {
+    let l = length_req_ext_image_copy_capture_session_v1_create_frame();
+    write_header(dst, for_id, l, 0, 0);
+    write_obj(dst, frame);
+}
+pub fn length_req_ext_image_copy_capture_session_v1_create_frame() -> usize {
+    12
+}
+pub fn parse_req_ext_image_copy_capture_session_v1_create_frame<'a>(
+    mut msg: &'a [u8],
+) -> Result<ObjId, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_CREATE_FRAME: MethodId = MethodId::Request(0);
+pub fn write_req_ext_image_copy_capture_session_v1_destroy(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_req_ext_image_copy_capture_session_v1_destroy();
+    write_header(dst, for_id, l, 1, 0);
+}
+pub fn length_req_ext_image_copy_capture_session_v1_destroy() -> usize {
+    8
+}
+pub fn parse_req_ext_image_copy_capture_session_v1_destroy<'a>(
+    msg: &'a [u8],
+) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DESTROY: MethodId = MethodId::Request(1);
 const EXT_IMAGE_COPY_CAPTURE_SESSION_V1: WaylandData = WaylandData {
     name: "ext_image_copy_capture_session_v1",
     evts: &[
@@ -527,6 +740,161 @@ const EXT_IMAGE_COPY_CAPTURE_SESSION_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub fn write_req_ext_image_copy_capture_frame_v1_destroy(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_req_ext_image_copy_capture_frame_v1_destroy();
+    write_header(dst, for_id, l, 0, 0);
+}
+pub fn length_req_ext_image_copy_capture_frame_v1_destroy() -> usize {
+    8
+}
+pub fn parse_req_ext_image_copy_capture_frame_v1_destroy<'a>(
+    msg: &'a [u8],
+) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_DESTROY: MethodId = MethodId::Request(0);
+pub fn write_req_ext_image_copy_capture_frame_v1_attach_buffer(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    buffer: ObjId,
+) {
+    let l = length_req_ext_image_copy_capture_frame_v1_attach_buffer();
+    write_header(dst, for_id, l, 1, 0);
+    write_obj(dst, buffer);
+}
+pub fn length_req_ext_image_copy_capture_frame_v1_attach_buffer() -> usize {
+    12
+}
+pub fn parse_req_ext_image_copy_capture_frame_v1_attach_buffer<'a>(
+    mut msg: &'a [u8],
+) -> Result<ObjId, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ATTACH_BUFFER: MethodId = MethodId::Request(1);
+pub fn write_req_ext_image_copy_capture_frame_v1_damage_buffer(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) {
+    let l = length_req_ext_image_copy_capture_frame_v1_damage_buffer();
+    write_header(dst, for_id, l, 2, 0);
+    write_i32(dst, x);
+    write_i32(dst, y);
+    write_i32(dst, width);
+    write_i32(dst, height);
+}
+pub fn length_req_ext_image_copy_capture_frame_v1_damage_buffer() -> usize {
+    24
+}
+pub fn parse_req_ext_image_copy_capture_frame_v1_damage_buffer<'a>(
+    mut msg: &'a [u8],
+) -> Result<(i32, i32, i32, i32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_i32(&mut msg)?;
+    let arg2 = parse_i32(&mut msg)?;
+    let arg3 = parse_i32(&mut msg)?;
+    let arg4 = parse_i32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2, arg3, arg4))
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_DAMAGE_BUFFER: MethodId = MethodId::Request(2);
+pub fn write_req_ext_image_copy_capture_frame_v1_capture(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_req_ext_image_copy_capture_frame_v1_capture();
+    write_header(dst, for_id, l, 3, 0);
+}
+pub fn length_req_ext_image_copy_capture_frame_v1_capture() -> usize {
+    8
+}
+pub fn parse_req_ext_image_copy_capture_frame_v1_capture<'a>(
+    msg: &'a [u8],
+) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_CAPTURE: MethodId = MethodId::Request(3);
+pub fn write_evt_ext_image_copy_capture_frame_v1_presentation_time(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    tv_sec_hi: u32,
+    tv_sec_lo: u32,
+    tv_nsec: u32,
+) {
+    let l = length_evt_ext_image_copy_capture_frame_v1_presentation_time();
+    write_header(dst, for_id, l, 2, 0);
+    write_u32(dst, tv_sec_hi);
+    write_u32(dst, tv_sec_lo);
+    write_u32(dst, tv_nsec);
+}
+pub fn length_evt_ext_image_copy_capture_frame_v1_presentation_time() -> usize {
+    20
+}
+pub fn parse_evt_ext_image_copy_capture_frame_v1_presentation_time<'a>(
+    mut msg: &'a [u8],
+) -> Result<(u32, u32, u32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_u32(&mut msg)?;
+    let arg2 = parse_u32(&mut msg)?;
+    let arg3 = parse_u32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2, arg3))
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_PRESENTATION_TIME: MethodId = MethodId::Event(2);
+pub fn write_evt_ext_image_copy_capture_frame_v1_ready(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_evt_ext_image_copy_capture_frame_v1_ready();
+    write_header(dst, for_id, l, 3, 0);
+}
+pub fn length_evt_ext_image_copy_capture_frame_v1_ready() -> usize {
+    8
+}
+pub fn parse_evt_ext_image_copy_capture_frame_v1_ready<'a>(
+    msg: &'a [u8],
+) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_READY: MethodId = MethodId::Event(3);
+pub fn write_evt_ext_image_copy_capture_frame_v1_failed(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    reason: u32,
+) {
+    let l = length_evt_ext_image_copy_capture_frame_v1_failed();
+    write_header(dst, for_id, l, 4, 0);
+    write_u32(dst, reason);
+}
+pub fn length_evt_ext_image_copy_capture_frame_v1_failed() -> usize {
+    12
+}
+pub fn parse_evt_ext_image_copy_capture_frame_v1_failed<'a>(
+    mut msg: &'a [u8],
+) -> Result<u32, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_u32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILED: MethodId = MethodId::Event(4);
 const EXT_IMAGE_COPY_CAPTURE_FRAME_V1: WaylandData = WaylandData {
     name: "ext_image_copy_capture_frame_v1",
     evts: &[
@@ -580,6 +948,30 @@ const EXT_IMAGE_COPY_CAPTURE_FRAME_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub fn write_req_ext_image_copy_capture_cursor_session_v1_get_capture_session(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    session: ObjId,
+) {
+    let l = length_req_ext_image_copy_capture_cursor_session_v1_get_capture_session();
+    write_header(dst, for_id, l, 1, 0);
+    write_obj(dst, session);
+}
+pub fn length_req_ext_image_copy_capture_cursor_session_v1_get_capture_session() -> usize {
+    12
+}
+pub fn parse_req_ext_image_copy_capture_cursor_session_v1_get_capture_session<'a>(
+    mut msg: &'a [u8],
+) -> Result<ObjId, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1_GET_CAPTURE_SESSION: MethodId =
+    MethodId::Request(1);
 const EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1: WaylandData = WaylandData {
     name: "ext_image_copy_capture_cursor_session_v1",
     evts: &[

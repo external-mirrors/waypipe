@@ -193,6 +193,25 @@ struct ObjZwlrScreencopyFrame {
     buffer: Option<(Rc<RefCell<ShadowFd>>, Option<ObjWlBufferShm>)>,
 }
 
+/** Additional information for ext_image_copy_capture_session_v1.
+ *
+ * The dmabuf device and formats need to be processed together in order to
+ * restrict to what the upstream device and Waypipe both support. shm formats
+ * are safe to pass through unmodified since, in the worst case, any shm format
+ * can be handled by replicating the entire shm pool.
+ */
+struct ObjExtImageCopyCaptureSession {
+    dmabuf_device: Option<u64>,
+    dmabuf_formats: Vec<(u32, Vec<u64>)>,
+}
+
+/** Additional information for ext_image_copy_capture_frame_v1 */
+struct ObjExtImageCopyCaptureFrame {
+    /* Store sfd and shm metadata of target buffer in case the wl_buffer is destroyed early */
+    buffer: Option<(Rc<RefCell<ShadowFd>>, Option<ObjWlBufferShm>)>,
+}
+
+/** Additional information for zwlr_gamma_control_v1 */
 struct ObjZwlrGammaControl {
     gamma_size: Option<u32>,
 }
@@ -206,6 +225,8 @@ enum WpExtra {
     ZwpDmabufFeedback(Box<ObjZwpLinuxDmabufFeedback>),
     ZwpDmabufParams(Box<ObjZwpLinuxDmabufParams>),
     ZwlrScreencopyFrame(Box<ObjZwlrScreencopyFrame>),
+    ExtImageCopyCaptureSession(Box<ObjExtImageCopyCaptureSession>),
+    ExtImageCopyCaptureFrame(Box<ObjExtImageCopyCaptureFrame>),
     ZwlrGammaControl(Box<ObjZwlrGammaControl>),
     WpDrmSyncobjSurface(Box<ObjWpDrmSyncobjSurface>),
     WpDrmSyncobjTimeline(Box<ObjWpDrmSyncobjTimeline>),
@@ -876,6 +897,30 @@ fn time_add(mut a: (u64, u32), b: (i64, u32)) -> Option<(u64, u32)> {
 
     // 64-bit time overflow should never happen in practice
     Some((a.0.checked_add_signed(b.0)?, nsec))
+}
+
+/** Convert the given timestamp from/to the specified clock ID to/from the realtime
+ * clock, depending on whether message is going toward the channel or not.  */
+fn translate_timestamp(
+    tv_sec_hi: u32,
+    tv_sec_lo: u32,
+    tv_nsec: u32,
+    clock_id: u32,
+    to_channel: bool,
+) -> Result<(u32, u32, u32), String> {
+    let tv_sec = join_u64(tv_sec_hi, tv_sec_lo);
+    let realtime = libc::CLOCK_REALTIME as u32;
+    let (new_sec, new_nsec) = if to_channel {
+        /* Convert from clock_id to CLOCK_REALTIME */
+        let (diff_sec, diff_nsec) = clock_sub(realtime, clock_id)?;
+        time_add((tv_sec, tv_nsec), (diff_sec, diff_nsec)).ok_or_else(|| tag!("overflow"))?
+    } else {
+        /* Convert from CLOCK_REALTIME to clock_id */
+        let (diff_sec, diff_nsec) = clock_sub(clock_id, realtime)?;
+        time_add((tv_sec, tv_nsec), (diff_sec, diff_nsec)).ok_or_else(|| tag!("overflow"))?
+    };
+    let (new_sec_hi, new_sec_lo) = split_u64(new_sec);
+    Ok((new_sec_hi, new_sec_lo, new_nsec))
 }
 
 /** A helper structure to print a Wayland method's arguments, on demand */
@@ -2690,6 +2735,226 @@ pub fn process_way_msg(
             copy_msg(msg, dst);
             Ok(ProcMsg::Done)
         }
+        (
+            WaylandInterface::ExtImageCopyCaptureManagerV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_CREATE_SESSION,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            let (frame, _output, _options) =
+                parse_req_ext_image_copy_capture_manager_v1_create_session(msg)?;
+            insert_new_object(
+                &mut glob.objects,
+                frame,
+                WpObject {
+                    obj_type: WaylandInterface::ExtImageCopyCaptureSessionV1,
+                    is_zombie: false,
+                    extra: WpExtra::ExtImageCopyCaptureSession(Box::new(
+                        ObjExtImageCopyCaptureSession {
+                            dmabuf_device: None,
+                            dmabuf_formats: Vec::new(),
+                        },
+                    )),
+                },
+            )?;
+            copy_msg(msg, dst);
+            Ok(ProcMsg::Done)
+        }
+        (
+            WaylandInterface::ExtImageCopyCaptureCursorSessionV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1_GET_CAPTURE_SESSION,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            let frame =
+                parse_req_ext_image_copy_capture_cursor_session_v1_get_capture_session(msg)?;
+            insert_new_object(
+                &mut glob.objects,
+                frame,
+                WpObject {
+                    obj_type: WaylandInterface::ExtImageCopyCaptureSessionV1,
+                    is_zombie: false,
+                    extra: WpExtra::ExtImageCopyCaptureSession(Box::new(
+                        ObjExtImageCopyCaptureSession {
+                            dmabuf_device: None,
+                            dmabuf_formats: Vec::new(),
+                        },
+                    )),
+                },
+            )?;
+            copy_msg(msg, dst);
+            Ok(ProcMsg::Done)
+        }
+        (
+            WaylandInterface::ExtImageCopyCaptureSessionV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DMABUF_DEVICE,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            if glob.opts.no_gpu {
+                return Ok(ProcMsg::Done);
+            }
+            let WpExtra::ExtImageCopyCaptureSession(ref mut session) = obj.extra else {
+                unreachable!();
+            };
+
+            let dev = parse_evt_ext_image_copy_capture_session_v1_dmabuf_device(msg)?;
+            let Ok(dev_bytes): Result<[u8; 8], _> = dev.try_into() else {
+                return Err(tag!("Invalid dev_t length"));
+            };
+            let main_device = u64::from_le_bytes(dev_bytes);
+            session.dmabuf_device = Some(main_device);
+
+            /* Drop message; will be recreated when ::done arrives */
+            Ok(ProcMsg::Done)
+        }
+        (
+            WaylandInterface::ExtImageCopyCaptureSessionV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DMABUF_FORMAT,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            if glob.opts.no_gpu {
+                return Ok(ProcMsg::Done);
+            }
+            let WpExtra::ExtImageCopyCaptureSession(ref mut session) = obj.extra else {
+                unreachable!();
+            };
+            let (fmt, modifiers) = parse_evt_ext_image_copy_capture_session_v1_dmabuf_format(msg)?;
+            let mut mod_list = Vec::new();
+            for mb in modifiers.chunks_exact(std::mem::size_of::<u64>()) {
+                let m = u64::from_le_bytes(mb.try_into().unwrap());
+                mod_list.push(m);
+            }
+            session.dmabuf_formats.push((fmt, mod_list));
+            /* Drop message; will be recreated when ::done arrives */
+            Ok(ProcMsg::Done)
+        }
+
+        (
+            WaylandInterface::ExtImageCopyCaptureSessionV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DONE,
+        ) => {
+            /* Replay messages */
+            let WpExtra::ExtImageCopyCaptureSession(ref mut session) = obj.extra else {
+                unreachable!();
+            };
+
+            let mut space_needed = length_evt_ext_image_copy_capture_session_v1_done();
+            if let Some(main_device) = session.dmabuf_device {
+                if glob.vulkan_instance.is_none() {
+                    glob.vulkan_instance =
+                        Some(setup_vulkan_instance(glob.opts.debug, &glob.opts.video)?);
+                }
+
+                if glob.vulkan_device.is_none() {
+                    /* Need to set up instance now, to filter dmabuf_format events */
+                    debug!(
+                        "Setting up Vulkan device for ext_image_copy_capture_session_v1::dmabuf_device"
+                    );
+                    let dev: Option<u64> = if glob.on_display_side {
+                        Some(main_device)
+                    } else if let Some(node) = &glob.opts.drm_node {
+                        Some(get_dev_for_drm_node_path(node)?)
+                    } else {
+                        None
+                    };
+                    glob.vulkan_device = Some(setup_vulkan_device(
+                        glob.vulkan_instance.as_ref().unwrap(),
+                        dev,
+                        &glob.opts.video,
+                        glob.opts.debug,
+                    )?);
+                }
+
+                let Some(ref vulk) = glob.vulkan_device else {
+                    unreachable!();
+                };
+                if main_device != vulk.get_device() {
+                    // todo: handle this case
+                    return Err(tag!("image copy device did not match existing device; multiple devices are not yet supported"));
+                }
+
+                space_needed += length_evt_ext_image_copy_capture_session_v1_dmabuf_device(
+                    std::mem::size_of::<u64>(),
+                );
+                for (fmt, mod_list) in session.dmabuf_formats.iter() {
+                    let new_list_len = if glob.on_display_side {
+                        mod_list
+                            .iter()
+                            .filter(|m| vulk.supports_format(*fmt, **m))
+                            .count()
+                    } else {
+                        vulk.get_supported_modifiers(*fmt).len()
+                    };
+                    if new_list_len == 0 {
+                        continue;
+                    }
+                    space_needed += length_evt_ext_image_copy_capture_session_v1_dmabuf_format(
+                        new_list_len * std::mem::size_of::<u64>(),
+                    );
+                }
+            }
+
+            check_space!(space_needed, 0, remaining_space);
+
+            if session.dmabuf_device.is_some() {
+                let vulk = glob.vulkan_device.as_ref().unwrap();
+                write_evt_ext_image_copy_capture_session_v1_dmabuf_device(
+                    dst,
+                    object_id,
+                    &u64::to_le_bytes(vulk.get_device()),
+                );
+
+                for (fmt, mod_list) in session.dmabuf_formats.iter() {
+                    let mut output = Vec::new();
+                    if glob.on_display_side {
+                        /* Filter list of available modifiers */
+                        for m in mod_list.iter() {
+                            if vulk.supports_format(*fmt, *m) {
+                                output.extend_from_slice(&u64::to_le_bytes(*m));
+                            }
+                        }
+                    } else {
+                        /* Replace modifier list with what is available locally */
+                        for m in vulk.get_supported_modifiers(*fmt) {
+                            output.extend_from_slice(&u64::to_le_bytes(m));
+                        }
+                    }
+                    if output.is_empty() {
+                        continue;
+                    }
+
+                    write_evt_ext_image_copy_capture_session_v1_dmabuf_format(
+                        dst, object_id, *fmt, &output,
+                    );
+                }
+            }
+            write_evt_ext_image_copy_capture_session_v1_done(dst, object_id);
+
+            /* Reset state: formats do not persist between ::done calls, because
+             * ext_image_copy_capture_session_v1 has no event to remove a format;
+             * presumably the dmabuf_device behaves similarly. */
+            session.dmabuf_device = None;
+            session.dmabuf_formats = Vec::new();
+            Ok(ProcMsg::Done)
+        }
+        (
+            WaylandInterface::ExtImageCopyCaptureSessionV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_CREATE_FRAME,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            let frame = parse_req_ext_image_copy_capture_session_v1_create_frame(msg)?;
+            insert_new_object(
+                &mut glob.objects,
+                frame,
+                WpObject {
+                    obj_type: WaylandInterface::ExtImageCopyCaptureFrameV1,
+                    is_zombie: false,
+                    extra: WpExtra::ExtImageCopyCaptureFrame(Box::new(
+                        ObjExtImageCopyCaptureFrame { buffer: None },
+                    )),
+                },
+            )?;
+            copy_msg(msg, dst);
+            Ok(ProcMsg::Done)
+        }
         (WaylandInterface::ZwlrScreencopyFrameV1, OPCODE_ZWLR_SCREENCOPY_FRAME_V1_COPY) => {
             check_space!(msg.len(), 0, remaining_space);
             copy_msg(msg, dst);
@@ -2718,9 +2983,129 @@ pub fn process_way_msg(
             frame.buffer = Some(buf_info);
             Ok(ProcMsg::Done)
         }
+        (
+            WaylandInterface::ExtImageCopyCaptureFrameV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ATTACH_BUFFER,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+
+            let buffer = parse_req_ext_image_copy_capture_frame_v1_attach_buffer(msg)?;
+            if buffer.0 == 0 {
+                return Err(tag!(
+                    "ext_image_copy_capture_frame_v1::attach_buffer requires non-null object"
+                ));
+            }
+            let buf_obj = glob.objects.get(&buffer).ok_or_else(|| {
+                tag!(
+                    "Failed to lookup buffer (id {}) for ext_image_copy_capture_frame_v1::attach_buffer",
+                     buffer
+                )
+            })?;
+            let WpExtra::WlBuffer(ref d) = buf_obj.extra else {
+                return Err(tag!("Expected wl_buffer object"));
+            };
+            let buf_info = (d.sfd.clone(), d.shm_info);
+
+            let object = glob.objects.get_mut(&object_id).unwrap();
+            let WpExtra::ExtImageCopyCaptureFrame(ref mut frame) = object.extra else {
+                unreachable!();
+            };
+            frame.buffer = Some(buf_info);
+            Ok(ProcMsg::Done)
+        }
         (WaylandInterface::ZwlrScreencopyFrameV1, OPCODE_ZWLR_SCREENCOPY_FRAME_V1_READY) => {
             check_space!(msg.len(), 0, remaining_space);
             let WpExtra::ZwlrScreencopyFrame(ref mut frame) = obj.extra else {
+                unreachable!();
+            };
+
+            let Some((ref sfd, ref shm_info)) = frame.buffer else {
+                return Err(tag!(
+                    "zwlr_screencopy_frame_v1::ready is missing buffer information"
+                ));
+            };
+
+            if !glob.on_display_side {
+                let b = sfd.borrow();
+                let apply_count = if let ShadowFdVariant::File(data) = &b.data {
+                    data.pending_apply_tasks
+                } else if let ShadowFdVariant::Dmabuf(data) = &b.data {
+                    /* Assuming no timelines for screencopy-frame-v1 */
+                    data.pending_apply_tasks
+                } else {
+                    return Err(tag!("Attached buffer is not of file or dmabuf type"));
+                };
+                if apply_count > 0 {
+                    return Ok(ProcMsg::WaitFor(b.remote_id));
+                }
+            }
+
+            let (tv_sec_hi, tv_sec_lo, tv_nsec) = parse_evt_zwlr_screencopy_frame_v1_ready(msg)?;
+            let (new_sec_hi, new_sec_lo, new_nsec) = translate_timestamp(
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+                libc::CLOCK_MONOTONIC as u32,
+                glob.on_display_side,
+            )?;
+            write_evt_zwlr_screencopy_frame_v1_ready(
+                dst, object_id, new_sec_hi, new_sec_lo, new_nsec,
+            );
+
+            if glob.on_display_side {
+                /* Mark damage */
+
+                let mut sfd = sfd.borrow_mut();
+                if let ShadowFdVariant::File(ref mut y) = &mut sfd.data {
+                    let damage_interval = damage_for_entire_buffer(shm_info.as_ref().unwrap());
+                    match &y.damage {
+                        Damage::Everything => {}
+                        Damage::Nothing => {
+                            y.damage = Damage::Intervals(vec![damage_interval]);
+                        }
+                        Damage::Intervals(old) => {
+                            let dmg = &[damage_interval];
+                            y.damage = Damage::Intervals(union_damage(&old[..], &dmg[..], 128));
+                        }
+                    }
+                } else if let ShadowFdVariant::Dmabuf(ref mut y) = &mut sfd.data {
+                    y.damage = Damage::Everything;
+                } else {
+                    return Err(tag!("Expected buffer shadowfd to be of file type"));
+                }
+            }
+            frame.buffer = None;
+            Ok(ProcMsg::Done)
+        }
+        (
+            WaylandInterface::ExtImageCopyCaptureFrameV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_PRESENTATION_TIME,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+
+            let (tv_sec_hi, tv_sec_lo, tv_nsec) =
+                parse_evt_ext_image_copy_capture_frame_v1_presentation_time(msg)?;
+            let (new_sec_hi, new_sec_lo, new_nsec) = translate_timestamp(
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+                libc::CLOCK_MONOTONIC as u32,
+                glob.on_display_side,
+            )?;
+            write_evt_ext_image_copy_capture_frame_v1_presentation_time(
+                dst, object_id, new_sec_hi, new_sec_lo, new_nsec,
+            );
+            Ok(ProcMsg::Done)
+        }
+
+        (
+            WaylandInterface::ExtImageCopyCaptureFrameV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_READY,
+        ) => {
+            // TODO: deduplicate with wlr_screencopy_frame_v1::ready
+            check_space!(msg.len(), 0, remaining_space);
+            let WpExtra::ExtImageCopyCaptureFrame(ref mut frame) = obj.extra else {
                 unreachable!();
             };
 
@@ -2781,6 +3166,18 @@ pub fn process_way_msg(
             frame.buffer = None;
             Ok(ProcMsg::Done)
         }
+        (
+            WaylandInterface::ExtImageCopyCaptureFrameV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILED,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+            let WpExtra::ExtImageCopyCaptureFrame(ref mut frame) = obj.extra else {
+                unreachable!();
+            };
+            frame.buffer = None;
+            Ok(ProcMsg::Done)
+        }
         (WaylandInterface::XdgToplevel, OPCODE_XDG_TOPLEVEL_SET_TITLE) => {
             let title = parse_req_xdg_toplevel_set_title(msg)?;
             let prefix = glob.opts.title_prefix.as_bytes();
@@ -2810,23 +3207,13 @@ pub fn process_way_msg(
                     x.clock,
                 ));
             };
-
-            /* Translate timestamp to/from a shared clock (CLOCK_REALTIME) */
-            let tv_sec = join_u64(tv_sec_hi, tv_sec_lo);
-            let realtime = libc::CLOCK_REALTIME as u32;
-            let (new_sec, new_nsec) = if glob.on_display_side {
-                /* Convert from clock_id to CLOCK_REALTIME */
-                let (diff_sec, diff_nsec) = clock_sub(realtime, clock_id)?;
-                time_add((tv_sec, tv_nsec), (diff_sec, diff_nsec))
-                    .ok_or_else(|| tag!("overflow"))?
-            } else {
-                /* Convert from CLOCK_REALTIME to clock_id */
-                let (diff_sec, diff_nsec) = clock_sub(clock_id, realtime)?;
-                time_add((tv_sec, tv_nsec), (diff_sec, diff_nsec))
-                    .ok_or_else(|| tag!("overflow"))?
-            };
-            let (new_sec_hi, new_sec_lo) = split_u64(new_sec);
-
+            let (new_sec_hi, new_sec_lo, new_nsec) = translate_timestamp(
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+                clock_id,
+                glob.on_display_side,
+            )?;
             write_evt_wp_presentation_feedback_presented(
                 dst, object_id, new_sec_hi, new_sec_lo, new_nsec, refresh, seq_hi, seq_lo, flags,
             );
