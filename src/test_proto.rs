@@ -179,7 +179,10 @@ fn test_interact(
         }
 
         /* Connections should not close before either error or end message is received */
-        assert!(!pfds.is_empty());
+        assert!(
+            !pfds.is_empty(),
+            "connections should not close before error or end message received"
+        );
 
         let res = nix::poll::ppoll(&mut pfds, Some(remaining), None);
         if let Err(e) = res {
@@ -986,8 +989,8 @@ fn proto_base_wire(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test to verify that keymap files can be transferred reliably */
 fn proto_keymap(info: TestInfo) -> TestResult {
-    /* Test to verify that keymap files can be transferred reliably */
     for length in [0, 9, 4096, 300001] {
         run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
             let source_text = "test data ".as_bytes();
@@ -1048,6 +1051,129 @@ fn proto_keymap(info: TestInfo) -> TestResult {
                 &new_data[..new_data.len().min(1000)],
                 &source_data[..source_data.len().min(1000)]
             );
+        })?;
+    }
+    Ok(StatusOk::Pass)
+}
+
+/** Test to verify that proper replication for wlr_gamma_control_unstable_v1 */
+fn proto_gamma_control(info: TestInfo) -> TestResult {
+    let gamma_size: usize = 4096;
+    const BYTES_PER_ENTRY: usize = 6;
+    let mut source_pattern = Vec::new(); /* Pattern for a single gamma ramp channel */
+    for i in 0..gamma_size {
+        source_pattern.extend_from_slice(&u16::to_le_bytes(i as u16));
+    }
+
+    println!("Subtest: sending gamma ramp fd before size provided");
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
+        let [display, registry, output, manager, gamma, ..] = ID_SEQUENCE;
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, registry);
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, registry, 1, b"wl_output", 4);
+            write_evt_wl_registry_global(dst, registry, 1, b"zwlr_gamma_control_manager_v1", 1);
+        }));
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, registry, 1, b"wl_output", 4, output);
+            write_req_wl_registry_bind(
+                dst,
+                registry,
+                1,
+                b"zwlr_gamma_control_manager_v1",
+                1,
+                manager,
+            );
+            write_req_zwlr_gamma_control_manager_v1_get_gamma_control(dst, manager, gamma, output);
+        }));
+
+        let source_data = source_pattern.repeat(3);
+        let source_fd = make_file_with_contents(&source_data).unwrap();
+
+        let msg = build_msgs(|dst| {
+            write_req_zwlr_gamma_control_v1_set_gamma(dst, gamma, false);
+        });
+        let err_msg = ctx
+            .prog_write(&msg, &[&source_fd])
+            .expect_err("sending ramp early should fail");
+        println!(
+            "Error message from sending gamma ramp fd too early: {} {} {}",
+            err_msg.0, err_msg.1, err_msg.2
+        );
+    })?;
+
+    let correct_length = gamma_size * BYTES_PER_ENTRY;
+    let lengths = [
+        /* correct size */
+        gamma_size * BYTES_PER_ENTRY,
+        /* oversize: OK */
+        gamma_size * BYTES_PER_ENTRY * 2,
+        /* slightly undersize (typically zero extended) */
+        // gamma_size * BYTES_PER_ENTRY - 2,
+        /* very undersize (SIGBUS) */
+        // gamma_size,
+    ];
+
+    for length in lengths {
+        println!(
+            "Subtest: specified size {}={}*{}, provided file size {}",
+            gamma_size * BYTES_PER_ENTRY,
+            gamma_size,
+            BYTES_PER_ENTRY,
+            length
+        );
+        run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
+            let mut source_data =
+                source_pattern.repeat(align(length, source_pattern.len()) / source_pattern.len());
+            source_data.truncate(length);
+            let source_fd = make_file_with_contents(&source_data).unwrap();
+            let [display, registry, output, manager, gamma, ..] = ID_SEQUENCE;
+
+            ctx.prog_write_passthrough(build_msgs(|dst| {
+                write_req_wl_display_get_registry(dst, display, registry);
+            }));
+            ctx.comp_write_passthrough(build_msgs(|dst| {
+                write_evt_wl_registry_global(dst, registry, 1, b"wl_output", 4);
+                write_evt_wl_registry_global(dst, registry, 1, b"zwlr_gamma_control_manager_v1", 1);
+            }));
+            ctx.prog_write_passthrough(build_msgs(|dst| {
+                write_req_wl_registry_bind(dst, registry, 1, b"wl_output", 4, output);
+                write_req_wl_registry_bind(
+                    dst,
+                    registry,
+                    1,
+                    b"zwlr_gamma_control_manager_v1",
+                    1,
+                    manager,
+                );
+                write_req_zwlr_gamma_control_manager_v1_get_gamma_control(
+                    dst, manager, gamma, output,
+                );
+            }));
+            ctx.comp_write_passthrough(build_msgs(|dst| {
+                write_evt_zwlr_gamma_control_v1_gamma_size(
+                    dst,
+                    gamma,
+                    gamma_size.try_into().unwrap(),
+                );
+            }));
+
+            let msg = build_msgs(|dst| {
+                write_req_zwlr_gamma_control_v1_set_gamma(dst, gamma, false);
+            });
+
+            let (msgs, mut fds) = ctx.prog_write(&msg, &[&source_fd]).unwrap();
+            drop(source_fd);
+            if length >= gamma_size * BYTES_PER_ENTRY {
+                assert!(msgs.concat() == msg);
+                assert!(fds.len() == 1);
+                let new_gamma_fd = fds.remove(0);
+                let new_data = get_file_contents(&new_gamma_fd, correct_length).unwrap();
+                assert!(new_data == source_data[..correct_length]);
+            } else {
+                /* Corruption, error message, or SIGBUS */
+            }
         })?;
     }
     Ok(StatusOk::Pass)
@@ -3221,6 +3347,7 @@ fn main() -> ExitCode {
 
     register_single(&mut tests, &f, "basic", proto_basic);
     register_single(&mut tests, &f, "base_wire", proto_base_wire);
+    register_single(&mut tests, &f, "gamma_control", proto_gamma_control);
     register_single(&mut tests, &f, "keymap", proto_keymap);
     register_single(&mut tests, &f, "many_fds", proto_many_fds);
     register_single(&mut tests, &f, "object_collision", proto_object_collision);

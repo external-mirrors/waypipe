@@ -89,6 +89,7 @@ mod proto {
 
     define_test! {basic}
     define_test! {base_wire}
+    define_test! {gamma_control}
     define_test! {keymap}
     define_test! {many_fds}
     define_test! {object_collision}

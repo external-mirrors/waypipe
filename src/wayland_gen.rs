@@ -4704,6 +4704,32 @@ const ZWLR_EXPORT_DMABUF_FRAME_V1: WaylandData = WaylandData {
     }],
     version: 1,
 };
+pub fn write_req_zwlr_gamma_control_manager_v1_get_gamma_control(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    id: ObjId,
+    output: ObjId,
+) {
+    let l = length_req_zwlr_gamma_control_manager_v1_get_gamma_control();
+    write_header(dst, for_id, l, 0, 0);
+    write_obj(dst, id);
+    write_obj(dst, output);
+}
+pub fn length_req_zwlr_gamma_control_manager_v1_get_gamma_control() -> usize {
+    16
+}
+pub fn parse_req_zwlr_gamma_control_manager_v1_get_gamma_control<'a>(
+    mut msg: &'a [u8],
+) -> Result<(ObjId, ObjId), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    let arg2 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2))
+}
+pub const OPCODE_ZWLR_GAMMA_CONTROL_MANAGER_V1_GET_GAMMA_CONTROL: MethodId = MethodId::Request(0);
 const ZWLR_GAMMA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
     name: "zwlr_gamma_control_manager_v1",
     evts: &[],
@@ -4721,6 +4747,25 @@ const ZWLR_GAMMA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub fn write_evt_zwlr_gamma_control_v1_gamma_size(dst: &mut &mut [u8], for_id: ObjId, size: u32) {
+    let l = length_evt_zwlr_gamma_control_v1_gamma_size();
+    write_header(dst, for_id, l, 0, 0);
+    write_u32(dst, size);
+}
+pub fn length_evt_zwlr_gamma_control_v1_gamma_size() -> usize {
+    12
+}
+pub fn parse_evt_zwlr_gamma_control_v1_gamma_size<'a>(
+    mut msg: &'a [u8],
+) -> Result<u32, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_u32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_ZWLR_GAMMA_CONTROL_V1_GAMMA_SIZE: MethodId = MethodId::Event(0);
 pub fn write_req_zwlr_gamma_control_v1_set_gamma(
     dst: &mut &mut [u8],
     for_id: ObjId,

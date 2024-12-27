@@ -87,6 +87,8 @@ handled_funcs = [
     ("zwlr_data_control_offer_v1", "receive"),
     ("zwlr_data_control_source_v1", "offer"),
     ("zwlr_data_control_source_v1", "send"),
+    ("zwlr_gamma_control_manager_v1", "get_gamma_control"),
+    ("zwlr_gamma_control_v1", "gamma_size"),
     ("zwlr_gamma_control_v1", "set_gamma"),
     ("zwlr_screencopy_frame_v1", "buffer"),
     ("zwlr_screencopy_frame_v1", "buffer_done"),

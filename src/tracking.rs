@@ -193,6 +193,10 @@ struct ObjZwlrScreencopyFrame {
     buffer: Option<(Rc<RefCell<ShadowFd>>, Option<ObjWlBufferShm>)>,
 }
 
+struct ObjZwlrGammaControl {
+    gamma_size: Option<u32>,
+}
+
 /** Additional information attached to specific Wayland objects */
 enum WpExtra {
     WlSurface(Box<ObjWlSurface>),
@@ -202,6 +206,7 @@ enum WpExtra {
     ZwpDmabufFeedback(Box<ObjZwpLinuxDmabufFeedback>),
     ZwpDmabufParams(Box<ObjZwpLinuxDmabufParams>),
     ZwlrScreencopyFrame(Box<ObjZwlrScreencopyFrame>),
+    ZwlrGammaControl(Box<ObjZwlrGammaControl>),
     WpDrmSyncobjSurface(Box<ObjWpDrmSyncobjSurface>),
     WpDrmSyncobjTimeline(Box<ObjWpDrmSyncobjTimeline>),
     WpPresentation(Box<ObjWpPresentation>),
@@ -2512,6 +2517,81 @@ pub fn process_way_msg(
                     let v = translate_shm_fd(
                         x.pop_front().ok_or_else(|| tag!("Missing fd"))?,
                         pos_size,
+                        &mut glob.map,
+                        &mut glob.max_local_id,
+                        true,
+                        true,
+                    )?;
+                    y.push(v);
+                }
+            };
+
+            copy_msg_tag_fd(msg, dst, from_channel)?;
+
+            Ok(ProcMsg::Done)
+        }
+        (
+            WaylandInterface::ZwlrGammaControlManagerV1,
+            OPCODE_ZWLR_GAMMA_CONTROL_MANAGER_V1_GET_GAMMA_CONTROL,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+
+            let (gamma, _output) = parse_req_zwlr_gamma_control_manager_v1_get_gamma_control(msg)?;
+            insert_new_object(
+                &mut glob.objects,
+                gamma,
+                WpObject {
+                    obj_type: WaylandInterface::ZwlrGammaControlV1,
+                    is_zombie: false,
+                    extra: WpExtra::ZwlrGammaControl(Box::new(ObjZwlrGammaControl {
+                        gamma_size: None,
+                    })),
+                },
+            )?;
+
+            copy_msg(msg, dst);
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::ZwlrGammaControlV1, OPCODE_ZWLR_GAMMA_CONTROL_V1_GAMMA_SIZE) => {
+            check_space!(msg.len(), 0, remaining_space);
+            let WpExtra::ZwlrGammaControl(ref mut gamma) = obj.extra else {
+                unreachable!();
+            };
+            let gamma_size = parse_evt_zwlr_gamma_control_v1_gamma_size(msg)?;
+            if gamma_size > u32::MAX / 6 {
+                return Err(tag!(
+                    "Gamma size too large (ramps would use >u32::MAX bytes)"
+                ));
+            }
+            gamma.gamma_size = Some(gamma_size);
+
+            copy_msg(msg, dst);
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::ZwlrGammaControlV1, OPCODE_ZWLR_GAMMA_CONTROL_V1_SET_GAMMA) => {
+            check_space!(msg.len(), 1, remaining_space);
+            let WpExtra::ZwlrGammaControl(ref gamma) = obj.extra else {
+                unreachable!();
+            };
+            let Some(gamma_size) = gamma.gamma_size else {
+                return Err(tag!(
+                    "zwlr_gamma_control_v1::set_gamma called before gamma size provided"
+                ));
+            };
+
+            match transl {
+                TranslationInfo::FromChannel((x, y)) => {
+                    let sfd = &x.front().ok_or_else(|| tag!("Missing fd"))?;
+                    let rid = sfd.borrow().remote_id;
+                    if file_has_pending_apply_tasks(sfd)? {
+                        return Ok(ProcMsg::WaitFor(rid));
+                    }
+                    y.push_back(x.pop_front().unwrap());
+                }
+                TranslationInfo::FromWayland((x, y)) => {
+                    let v = translate_shm_fd(
+                        x.pop_front().ok_or_else(|| tag!("Missing fd"))?,
+                        gamma_size.checked_mul(6).unwrap() as usize,
                         &mut glob.map,
                         &mut glob.max_local_id,
                         true,
