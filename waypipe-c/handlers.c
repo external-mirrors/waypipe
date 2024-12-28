@@ -194,6 +194,7 @@ struct obj_wlr_export_dmabuf_frame {
 
 /* List of interfaces which may be advertised as globals */
 static const struct wp_interface *const global_interfaces[] = {
+		&intf_ext_data_control_manager_v1,
 		&intf_gtk_primary_selection_device_manager,
 		&intf_wl_compositor,
 		&intf_wl_data_device_manager,
@@ -215,6 +216,9 @@ static const struct wp_interface *const global_interfaces[] = {
 };
 /* List of interfaces which are never advertised as globals */
 static const struct wp_interface *const non_global_interfaces[] = {
+		&intf_ext_data_control_device_v1,
+		&intf_ext_data_control_offer_v1,
+		&intf_ext_data_control_source_v1,
 		&intf_gtk_primary_selection_offer,
 		&intf_gtk_primary_selection_source,
 		&intf_wl_buffer,
@@ -1951,6 +1955,18 @@ void do_zwlr_data_control_offer_v1_req_receive(
 	(void)mime_type;
 }
 void do_zwlr_data_control_source_v1_evt_send(
+		struct context *ctx, const char *mime_type, int fd)
+{
+	translate_data_transfer_fd(ctx, fd);
+	(void)mime_type;
+}
+void do_ext_data_control_offer_v1_req_receive(
+		struct context *ctx, const char *mime_type, int fd)
+{
+	translate_data_transfer_fd(ctx, fd);
+	(void)mime_type;
+}
+void do_ext_data_control_source_v1_evt_send(
 		struct context *ctx, const char *mime_type, int fd)
 {
 	translate_data_transfer_fd(ctx, fd);

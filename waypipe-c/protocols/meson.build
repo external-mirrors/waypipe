@@ -13,6 +13,7 @@ protocols = [
     'xdg-shell.xml',
     'presentation-time.xml',
     'linux-dmabuf-v1.xml',
+    'ext-data-control-v1.xml',
     'gtk-primary-selection.xml',
     'input-method-unstable-v2.xml',
     'primary-selection-unstable-v1.xml',

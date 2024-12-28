@@ -1,3 +1,5 @@
+ext_data_control_offer_v1_req_receive
+ext_data_control_source_v1_evt_send
 gtk_primary_selection_offer_req_receive
 gtk_primary_selection_source_evt_send
 wl_buffer_evt_release
