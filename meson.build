@@ -2,7 +2,7 @@ project(
     'waypipe',
     'c',
     license: ['GPL3+', 'MIT/Expat'],
-    meson_version: '>=0.57.0',
+    meson_version: '>=0.56.0',
     default_options: ['c_std=c11', 'warning_level=3', 'werror=true'],
     version: '0.9.2',
 )
@@ -12,7 +12,10 @@ raw_version = '@0@'.format(meson.project_version())
 git = find_program('git', native: true, required: false)
 if git.found()
     dir_arg = '--git-dir=@0@/.git'.format(meson.project_source_root())
-    commit = run_command([git, dir_arg, 'rev-parse', '--verify', '-q', 'HEAD'])
+    commit = run_command(
+        [git, dir_arg, 'rev-parse', '--verify', '-q', 'HEAD'],
+        check: true,
+    )
     if commit.returncode() == 0
         raw_version = '@0@ (commit @1@)'.format(
             meson.project_version(),
@@ -125,13 +128,6 @@ if get_option('build_rs')
         'waypipe',
         build_always_stale: true,
         output: 'waypipe',
-        env: {
-            'WAYPIPE_VERSION': raw_version,
-            'WAYPIPE_FEATURE_LZ4': has_lz4.to_string('true', 'false'),
-            'WAYPIPE_FEATURE_ZSTD': has_zstd.to_string('true', 'false'),
-            'WAYPIPE_FEATURE_DMABUF': has_dmabuf.to_string('true', 'false'),
-            'WAYPIPE_FEATURE_VIDEO': has_video.to_string('true', 'false'),
-        },
         command: [
             sh,
             '@SOURCE_ROOT@' / 'compile_wrapper.sh',
@@ -140,6 +136,11 @@ if get_option('build_rs')
             target_dir,
             ','.join(features),
             '@OUTPUT@',
+            raw_version,
+            has_lz4.to_string('true', 'false'),
+            has_zstd.to_string('true', 'false'),
+            has_dmabuf.to_string('true', 'false'),
+            has_video.to_string('true', 'false'),
         ],
         install: true,
         install_dir: get_option('bindir'),

@@ -16,6 +16,7 @@ r = run_command(
     python3,
     '-c',
     prefix_finder.format(meson.current_source_dir(), meson.project_build_root()),
+    check: true,
 )
 relative_dir = r.stdout().strip()
 if cc.has_argument('-fmacro-prefix-map=/prefix/to/hide=')
