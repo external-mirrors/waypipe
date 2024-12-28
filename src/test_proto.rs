@@ -886,7 +886,7 @@ fn register_per_device<'a>(
     for (dev_name, dev_id) in devices {
         let ext_name = format!("proto::{}::{}", name, dev_name);
         if !test_is_included(&ext_name, filter) {
-            return;
+            continue;
         }
         let m: (String, u64) = (dev_name.clone(), *dev_id);
         tests.push((
@@ -2371,15 +2371,18 @@ fn test_dmavid_inner(vulk: &Arc<VulkanDevice>, info: &TestInfo, opts: &WaypipeOp
 }
 
 #[cfg(feature = "video")]
-fn test_video_combo(
-    vulk: &Arc<VulkanDevice>,
-    info: &TestInfo,
-    device: &RenderDevice,
+fn proto_dmavid(
+    info: TestInfo,
+    device: RenderDevice,
     video_format: VideoFormat,
     try_hw_dec: bool,
     try_hw_enc: bool,
     accurate_video_replication: bool,
-) -> bool {
+) -> TestResult {
+    let Ok(vulk) = setup_vulkan(device.id) else {
+        return Ok(StatusOk::Pass);
+    };
+
     let opts = WaypipeOptions {
         compression: Compression::None,
         video: VideoSetting {
@@ -2404,7 +2407,7 @@ fn test_video_combo(
         "\nTrying combination: video={:?}, try_hw_dec={}, try_hw_enc={}",
         video_format, try_hw_dec, try_hw_enc
     );
-    let pass = test_dmavid_inner(vulk, info, &opts);
+    let pass = test_dmavid_inner(&vulk, &info, &opts);
     println!(
         "Result for video={:?}, try_hw_dec={}, try_hw_enc={}: {}",
         video_format,
@@ -2419,48 +2422,7 @@ fn test_video_combo(
     if accurate_video_replication {
         assert!(pass);
     }
-    pass
-}
-
-#[cfg(feature = "video")]
-fn proto_dmavid_vp9(info: TestInfo, device: RenderDevice) -> TestResult {
-    let Ok(vulk) = setup_vulkan(device.id) else {
-        return Ok(StatusOk::Pass);
-    };
-    if test_video_combo(&vulk, &info, &device, VideoFormat::VP9, false, false, false) {
-        Ok(StatusOk::Pass)
-    } else {
-        Err(StatusBad::Unclear("Video replication not exact".into()))
-    }
-}
-
-#[cfg(feature = "video")]
-fn proto_dmavid_h264(info: TestInfo, device: RenderDevice) -> TestResult {
-    let Ok(vulk) = setup_vulkan(device.id) else {
-        return Ok(StatusOk::Pass);
-    };
-
-    /* Test all hardware encoding/decoding combinations to sure formats are compatible */
-    let mut all_pass = true;
-    for (try_hw_dec, try_hw_enc, accurate_video_replication) in [
-        (false, false, true),
-        (true, false, false),
-        (true, true, false),
-        (false, true, false),
-    ] {
-        if !test_video_combo(
-            &vulk,
-            &info,
-            &device,
-            VideoFormat::H264,
-            try_hw_dec,
-            try_hw_enc,
-            accurate_video_replication,
-        ) {
-            all_pass = false;
-        }
-    }
-    if all_pass {
+    if pass {
         Ok(StatusOk::Pass)
     } else {
         Err(StatusBad::Unclear("Video replication not exact".into()))
@@ -3673,6 +3635,54 @@ fn proto_screencopy_dmabuf_ext(info: TestInfo, device: RenderDevice) -> TestResu
     proto_screencopy_dmabuf(info, device, ScreencopyType::ExtImageCopyCapture)
 }
 
+#[cfg(feature = "video")]
+fn register_video_tests<'a>(
+    tests: &mut Vec<(String, Box<dyn Fn(TestInfo) -> TestResult + 'a>)>,
+    filter: &[&str],
+    devices: &[(String, u64)],
+) {
+    let table = [
+        (VideoFormat::H264, false, false, true),
+        (VideoFormat::H264, true, false, false),
+        (VideoFormat::H264, true, true, false),
+        (VideoFormat::H264, false, true, false),
+        (VideoFormat::VP9, false, false, true),
+        (VideoFormat::AV1, false, false, true),
+        (VideoFormat::AV1, false, true, false),
+    ];
+
+    for (format, try_hwenc, try_hwdec, expect_accurate) in table {
+        for (dev_name, dev_id) in devices {
+            let name = format!(
+                "proto::dmavid_{}::{}::{}::{}",
+                match format {
+                    VideoFormat::H264 => "h264",
+                    VideoFormat::VP9 => "vp9",
+                    VideoFormat::AV1 => "av1",
+                },
+                if try_hwenc { "try_hwenc" } else { "swenc" },
+                if try_hwdec { "try_hwdec" } else { "swdec" },
+                dev_name,
+            );
+            if !test_is_included(&name, filter) {
+                continue;
+            }
+            let m: (String, u64) = (dev_name.clone(), *dev_id);
+            tests.push((
+                name,
+                Box::new(move |info| {
+                    let s = &m;
+                    let dev = RenderDevice {
+                        name: &s.0,
+                        id: s.1,
+                    };
+                    proto_dmavid(info, dev, format, try_hwdec, try_hwenc, expect_accurate)
+                }),
+            ));
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let command = ClapCommand::new(env!("CARGO_BIN_NAME"))
         .help_expected(true)
@@ -3791,20 +3801,7 @@ fn main() -> ExitCode {
 
     #[cfg(feature = "video")]
     {
-        register_per_device(
-            &mut tests,
-            &f,
-            &vk_device_ids,
-            "dmavid_h264",
-            proto_dmavid_h264,
-        );
-        register_per_device(
-            &mut tests,
-            &f,
-            &vk_device_ids,
-            "dmavid_vp9",
-            proto_dmavid_vp9,
-        );
+        register_video_tests(&mut tests, &f, &vk_device_ids);
     }
 
     if matches.get_flag("list") {
