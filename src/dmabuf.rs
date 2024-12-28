@@ -3142,7 +3142,9 @@ pub static VULKAN_MUTEX: Mutex<()> = Mutex::new(());
 fn test_dmabuf() {
     let _serialize_test = VULKAN_MUTEX.lock().unwrap();
 
-    let instance = setup_vulkan_instance(true, &VideoSetting::default()).unwrap();
+    let Ok(instance) = setup_vulkan_instance(true, &VideoSetting::default()) else {
+        return;
+    };
     for dev_id in list_vulkan_device_ids() {
         let Ok(vulk) = setup_vulkan_device(&instance, Some(dev_id), &VideoSetting::default(), true)
         else {

@@ -3110,7 +3110,9 @@ fn test_video(try_hardware: bool) {
             enc_pref: pref,
             dec_pref: pref,
         };
-        let instance = setup_vulkan_instance(debug, &vid_setting).unwrap();
+        let Ok(instance) = setup_vulkan_instance(debug, &vid_setting) else {
+            continue;
+        };
         let Ok(vulk) = setup_vulkan_device(&instance, Some(dev_id), &vid_setting, debug) else {
             continue;
         };

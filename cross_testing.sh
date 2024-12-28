@@ -12,12 +12,12 @@ cargo test --no-default-features --features lz4,dmabuf,test_proto
 cargo test --no-default-features --features zstd,video,test_proto
 
 # Tier 1
-cross test --target x86_64-unknown-linux-gnu --no-default-features --features test_proto
-cross test --target aarch64-unknown-linux-gnu --no-default-features --features test_proto
+cross test --target x86_64-unknown-linux-gnu --no-default-features --features dmabuf,test_proto
+cross test --target aarch64-unknown-linux-gnu --no-default-features --features dmabuf,test_proto
 
 # Linux support, 32 bit
-cross test --target i686-unknown-linux-gnu --no-default-features --features test_proto
-cross test --target armv7-unknown-linux-gnueabihf --no-default-features --features test_proto
+cross test --target i686-unknown-linux-gnu --no-default-features --features dmabuf,test_proto
+cross test --target armv7-unknown-linux-gnueabihf --no-default-features --features dmabuf,test_proto
 
 # Big-endian representative
 cross test --target powerpc64-unknown-linux-gnu --no-default-features --features test_proto

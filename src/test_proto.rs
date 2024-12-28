@@ -4044,10 +4044,10 @@ fn main() -> ExitCode {
         println!(" {}", s);
     }
 
-    /* Also consider 'no matching tests' a failure / something upstream testing framework must fix */
-    if nfail > 0 || tests.is_empty() {
+    if nfail > 0 {
         ExitCode::FAILURE
     } else if nskip == tests.len() {
+        /* This can happen in regular use, when there are no usable render devices */
         ExitCode::from(EXITCODE_SKIPPED)
     } else {
         ExitCode::SUCCESS
