@@ -39,7 +39,8 @@
 #include <time.h>
 #include <unistd.h>
 
-static int parse_video_string(const char *str, struct main_config *config)
+static int parse_video_string(const char *str, struct main_config *config,
+		bool on_display_side)
 {
 	char tmp[128];
 	size_t l = strlen(str);
@@ -58,8 +59,24 @@ static int parse_video_string(const char *str, struct main_config *config)
 			config->video_fmt = VIDEO_AV1;
 		} else if (!strcmp(part, "hw")) {
 			config->prefer_hwvideo = true;
+		} else if (!strcmp(part, "hwenc")) {
+			if (!on_display_side) {
+				config->prefer_hwvideo = true;
+			}
+		} else if (!strcmp(part, "hwdec")) {
+			if (on_display_side) {
+				config->prefer_hwvideo = true;
+			}
 		} else if (!strcmp(part, "sw")) {
 			config->prefer_hwvideo = false;
+		} else if (!strcmp(part, "swenc")) {
+			if (!on_display_side) {
+				config->prefer_hwvideo = false;
+			}
+		} else if (!strcmp(part, "swdec")) {
+			if (on_display_side) {
+				config->prefer_hwvideo = false;
+			}
 		} else if (!strncmp(part, "bpf=", 4)) {
 			char *ep;
 			double bpf = strtod(part + 4, &ep);
@@ -234,8 +251,6 @@ int main(int argc, char **argv)
 		printf("A program which runs the main proxy loop of Waypipe.\n");
 		return EXIT_FAILURE;
 	}
-	bool display_side = false;
-	bool found_type = false;
 	bool debug = false;
 	struct main_config config = (struct main_config){
 			.drm_node = NULL,
@@ -254,19 +269,16 @@ int main(int argc, char **argv)
 			.title_prefix = NULL,
 			.secctx_app_id = NULL,
 	};
+	if (strcmp(argv[argc - 1], "client-conn") &&
+			strcmp(argv[argc - 1], "server-conn")) {
+		fprintf(stderr, "Last argument should be client-conn/server-conn\n");
+		return EXIT_FAILURE;
+	}
+	bool display_side = !strcmp(argv[argc - 1], "client-conn");
 
 	const char *value;
-	for (int i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "client-conn") ||
-				!strcmp(argv[i], "server-conn")) {
-			if (i != argc - 1) {
-				fprintf(stderr, "No arguments after client-conn/server-conn\n");
-				return EXIT_FAILURE;
-			}
-			display_side = !strcmp(argv[i], "client-conn");
-			found_type = true;
-			break;
-		} else if (!strcmp(argv[i], "--debug")) {
+	for (int i = 1; i < argc - 1; i++) {
+		if (!strcmp(argv[i], "--debug")) {
 			debug = true;
 		} else if (!strcmp(argv[i], "--no-gpu")) {
 			config.no_gpu = true;
@@ -299,8 +311,8 @@ int main(int argc, char **argv)
 			}
 			config.title_prefix = value;
 		} else if ((value = strip_prefix(argv[i], "--video="))) {
-
-			if (parse_video_string(value, &config) == -1) {
+			if (parse_video_string(value, &config, display_side) ==
+					-1) {
 				fprintf(stderr, "Failed to parse video config string '%s'\n",
 						value);
 				return EXIT_FAILURE;
@@ -317,10 +329,6 @@ int main(int argc, char **argv)
 					argv[i]);
 			return EXIT_FAILURE;
 		}
-	}
-	if (!found_type) {
-		fprintf(stderr, "Missing client-conn or server-conn\n");
-		return EXIT_FAILURE;
 	}
 
 	if (debug) {
