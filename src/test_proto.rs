@@ -75,6 +75,11 @@ const EXITCODE_SKIPPED: u8 = 77;
  * test set up, segfault, or something else very unexpected) */
 const EXITCODE_UNCLEAR: u8 = 99;
 
+struct Filter<'a> {
+    substrings: &'a [&'a str],
+    exact: bool,
+}
+
 struct TestInfo<'a> {
     test_name: &'a str,
     waypipe_client: &'a OsStr,
@@ -851,12 +856,18 @@ fn get_file_contents(fd: &OwnedFd, len: usize) -> Result<Vec<u8>, String> {
     Ok(data)
 }
 
-fn test_is_included(name: &str, filter: &[&str]) -> bool {
-    if filter.is_empty() {
+fn test_is_included(name: &str, filter: &Filter) -> bool {
+    if filter.substrings.is_empty() {
         return true;
     }
-    for x in filter {
-        if name.contains(x) {
+    for x in filter.substrings {
+        if filter.exact {
+            let extended_x = format!("::{}::", x);
+            let extended_name = format!("::{}::", name);
+            if extended_name.contains(&extended_x) {
+                return true;
+            }
+        } else if name.contains(x) {
             return true;
         }
     }
@@ -865,7 +876,7 @@ fn test_is_included(name: &str, filter: &[&str]) -> bool {
 
 fn register_single<'a>(
     tests: &mut Vec<(String, Box<dyn Fn(TestInfo) -> TestResult + 'a>)>,
-    filter: &[&str],
+    filter: &Filter,
     name: &str,
     func: fn(TestInfo) -> TestResult,
 ) {
@@ -878,7 +889,7 @@ fn register_single<'a>(
 
 fn register_per_device<'a>(
     tests: &mut Vec<(String, Box<dyn Fn(TestInfo) -> TestResult + 'a>)>,
-    filter: &[&str],
+    filter: &Filter,
     devices: &[(String, u64)],
     name: &str,
     func: fn(TestInfo, RenderDevice) -> TestResult,
@@ -3723,7 +3734,7 @@ fn proto_screencopy_dmabuf_ext(info: TestInfo, device: RenderDevice) -> TestResu
 #[cfg(feature = "video")]
 fn register_video_tests<'a>(
     tests: &mut Vec<(String, Box<dyn Fn(TestInfo) -> TestResult + 'a>)>,
-    filter: &[&str],
+    filter: &Filter,
     devices: &[(String, u64)],
 ) {
     let table = [
@@ -3806,6 +3817,12 @@ fn main() -> ExitCode {
                 .help("List available tests"),
         )
         .arg(
+            Arg::new("exact")
+                .long("exact")
+                .action(ArgAction::SetTrue)
+                .help("When matching test names, treat parts between :: as indivisible tokens"),
+        )
+        .arg(
             Arg::new("quiet")
                 .long("quiet")
                 .short('q')
@@ -3815,10 +3832,14 @@ fn main() -> ExitCode {
 
     let matches = command.get_matches();
 
-    let f: Vec<&str> = matches
+    let substrings: Vec<&str> = matches
         .get_many::<String>("test-filter")
         .map(|x| x.map(|y| y.as_str()).collect())
         .unwrap_or_default();
+    let f = Filter {
+        substrings: &substrings,
+        exact: matches.get_flag("exact"),
+    };
 
     let vk_device_ids = list_vulkan_device_ids();
 

@@ -19,13 +19,14 @@ fn do_test(name: &str) -> ExitCode {
     /* note: CROSS_TARGET_RUNNER is typically something like 'CROSS_TARGET_RUNNER=/linux-runner aarch64' */
     for chunk in cx.as_encoded_bytes().split(|x| *x == b' ') {
         if !chunk.is_empty() {
-            args.push(&OsStr::from_bytes(chunk));
+            args.push(OsStr::from_bytes(chunk));
         }
     }
-    args.push(&OsStr::new(test_proto_bin));
-    args.push(&OsStr::new(waypipe_bin));
-    args.push(&OsStr::new(waypipe_bin));
-    args.push(&OsStr::new(name));
+    args.push(OsStr::new(test_proto_bin));
+    args.push(OsStr::new("--exact"));
+    args.push(OsStr::new(waypipe_bin));
+    args.push(OsStr::new(waypipe_bin));
+    args.push(OsStr::new(name));
 
     let mut command = Command::new(args[0]);
     command
