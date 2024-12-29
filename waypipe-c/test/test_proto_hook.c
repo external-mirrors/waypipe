@@ -49,9 +49,12 @@ static int parse_video_string(const char *str, struct main_config *config,
 	}
 	memcpy(tmp, str, l + 1);
 
+	config->video_if_possible = true;
 	char *part = strtok(tmp, ",");
 	while (part) {
-		if (!strcmp(part, "h264")) {
+		if (!strcmp(part, "none")) {
+			config->video_if_possible = false;
+		} else if (!strcmp(part, "h264")) {
 			config->video_fmt = VIDEO_H264;
 		} else if (!strcmp(part, "vp9")) {
 			config->video_fmt = VIDEO_VP9;
