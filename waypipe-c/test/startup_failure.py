@@ -256,15 +256,32 @@ run_test(
 )
 run_test(
     "g_ssh_test_oneshot",
-    [waypipe_path, "--remote-bin",
-        waypipe_path, "-o", "-s", ssh_socket_path, "ssh", invalid_hostname] + wait_cmd,
+    [
+        waypipe_path,
+        "--remote-bin",
+        waypipe_path,
+        "-o",
+        "-s",
+        ssh_socket_path,
+        "ssh",
+        invalid_hostname,
+    ]
+    + wait_cmd,
     dict(ssh_env, WAYLAND_DISPLAY=wayland_display),
     EXPECT_TIMEOUT,
 )
 run_test(
     "g_ssh_test_reg",
-    [waypipe_path,"--remote-bin",
-        waypipe_path, "-s", ssh_socket_path, "ssh", invalid_hostname] + wait_cmd,
+    [
+        waypipe_path,
+        "--remote-bin",
+        waypipe_path,
+        "-s",
+        ssh_socket_path,
+        "ssh",
+        invalid_hostname,
+    ]
+    + wait_cmd,
     dict(ssh_env, WAYLAND_DISPLAY=wayland_display),
     EXPECT_TIMEOUT,
 )
