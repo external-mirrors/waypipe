@@ -1456,6 +1456,21 @@ fn process_sfd_msg(
                 ));
             };
 
+            if let Some(ref folder) = glob.opts.debug_store_video {
+                /* Debug option: all received video packets */
+                let mut full_path = folder.clone();
+                let filename = format!("packets-{}-{}", unistd::getpid(), remote_id);
+                full_path.push(std::ffi::OsStr::new(&filename));
+                let mut logfile = std::fs::File::options()
+                    .create(true)
+                    .append(true)
+                    .open(full_path)
+                    .unwrap();
+                let packet = &msg[8..];
+                use std::io::Write;
+                logfile.write_all(packet).unwrap();
+            }
+
             let task = VideoDecodeTask {
                 msg: msg_view,
                 remote_id,
@@ -4790,17 +4805,22 @@ impl Drop for ThreadShutdown<'_> {
 /** Options for the main interface loop */
 #[derive(Debug, Clone)]
 pub struct Options {
-    /* Whether to print debug messages and add extra correctness checks */
+    /** Whether to print debug messages and add extra correctness checks */
     pub debug: bool,
-    /* Compression type to use */
+    /** Compression type to use */
     pub compression: Compression,
-    /* If set, video encoding type to try to send */
+    /** If set, video encoding type to try to send */
     pub video: VideoSetting,
-    /* Number of worker threads to use for diff/compression operations; 0=autoselect */
+    /** Number of worker threads to use for diff/compression operations; 0=autoselect */
     pub threads: u32,
-    pub title_prefix: String, // this is valid UTF-8
-    pub no_gpu: bool,         /* filter out protocols using dmabufs */
+    /** A valid utf8 string with which to prefix xdg toplevel titles */
+    pub title_prefix: String,
+    /* If true, filter out protocols and messages using dmabufs */
+    pub no_gpu: bool,
+    /* The drm render node to use (if the Wayland compositor does not specify a specific node) */
     pub drm_node: Option<PathBuf>,
+    /** If nonzero, path to a folder in which all received video streams will be stored */
+    pub debug_store_video: Option<PathBuf>,
 }
 
 /** The main entrypoint for Wayland protocol proxying; should be given already opened and connected sockets

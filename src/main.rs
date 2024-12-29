@@ -325,6 +325,10 @@ fn build_connection_command<'a>(
     if anti_staircase {
         args.push(OsStr::new("--anti-staircase"));
     }
+    if let Some(ref path) = options.debug_store_video {
+        args.push(OsStr::new("--test-store-video"));
+        args.push(path.as_os_str());
+    }
     if client {
         args.push(OsStr::new("client-conn"));
     } else {
@@ -1678,6 +1682,13 @@ fn main() -> Result<(), String> {
             .value_parser(value_parser!(u32)),
         )
         .arg(
+            Arg::new("test-store-video")
+            .long("test-store-video")
+            .hide(true)
+            .help("Test option: client,server: save received video packets to folder")
+            .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
             Arg::new("test-fast-bench")
                 .long("test-fast-bench")
                 .hide(true)
@@ -1749,6 +1760,7 @@ fn main() -> Result<(), String> {
     let loop_test = matches.get_one::<bool>("test-loop").unwrap();
     let fast_bench = *matches.get_one::<bool>("test-fast-bench").unwrap();
     let test_wire_version: Option<u32> = matches.get_one::<u32>("test-wire-version").copied();
+    let test_store_video: Option<PathBuf> = matches.get_one::<PathBuf>("test-store-video").cloned();
     let secctx = matches.get_one::<String>("secctx");
     let vsock = *matches.get_one::<bool>("vsock").unwrap();
 
@@ -1803,6 +1815,7 @@ fn main() -> Result<(), String> {
         threads: *threads,
         title_prefix: (*title_prefix).clone(),
         drm_node: drm_node.cloned(),
+        debug_store_video: test_store_video,
     };
 
     /* Needed to revert back to original cwdir after

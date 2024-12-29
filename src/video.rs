@@ -1686,19 +1686,11 @@ pub fn start_dmavid_decode_sw(
 
         let dec_inner = state.inner.lock().unwrap();
 
-        let send_ret = video.bindings.avcodec_send_packet(dec_inner.ctx, av_packet);
-        if send_ret != 0 {
-            // ignoring EAGAIN, since Waypipe's video streaming does one packet, one frame
-            return Err(tag!("failed to send packet: {}", send_ret));
-        }
+        avcodec_send_packet(&video.bindings, dec_inner.ctx, av_packet)?;
 
         let frame: *mut AVFrame = video.bindings.av_frame_alloc();
 
-        let rcv_ret = video.bindings.avcodec_receive_frame(dec_inner.ctx, frame);
-        if rcv_ret != 0 {
-            // ignoring EAGAIN, since Waypipe's video streaming does one packet, one frame
-            return Err(tag!("failed to receive frame: {}", send_ret));
-        }
+        avcodec_receive_frame(&video.bindings, dec_inner.ctx, frame)?;
 
         let ext_w = (*dec_inner.ctx).width as usize;
         let ext_h = (*dec_inner.ctx).height as usize;
