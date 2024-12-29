@@ -1534,8 +1534,8 @@ fn proto_pipe_write(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test to verify that presentation time handling does not introduce major errors */
 fn proto_presentation_time(info: TestInfo) -> TestResult {
-    /* Test to verify that presentation time handling does not introduce major errors */
     for (pres_clock, fast_start) in [
         (libc::CLOCK_MONOTONIC as u32, true),
         (libc::CLOCK_REALTIME as u32, false),
@@ -1630,6 +1630,91 @@ fn proto_presentation_time(info: TestInfo) -> TestResult {
                 max_time_error.as_nanos()
             );
 
+            assert!(abs_diff < max_time_error.as_nanos());
+        })?;
+    }
+    Ok(StatusOk::Pass)
+}
+
+/** Test to verify that presentation time handling does not introduce major errors */
+fn proto_commit_timing(info: TestInfo) -> TestResult {
+    for pres_clock in [libc::CLOCK_MONOTONIC as u32, libc::CLOCK_REALTIME as u32] {
+        run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
+            let [display, registry, pres, comp, manager, surface, timer, ..] = ID_SEQUENCE;
+
+            ctx.prog_write_passthrough(build_msgs(|dst| {
+                write_req_wl_display_get_registry(dst, display, registry);
+            }));
+
+            ctx.comp_write_passthrough(build_msgs(|dst| {
+                write_evt_wl_registry_global(dst, registry, 1, b"wp_presentation", 1);
+                write_evt_wl_registry_global(dst, registry, 2, b"wp_commit_timing_manager_v1", 1);
+                write_evt_wl_registry_global(dst, registry, 3, b"wl_compositor", 1);
+            }));
+
+            let start = Instant::now();
+
+            ctx.prog_write_passthrough(build_msgs(|dst| {
+                write_req_wl_registry_bind(dst, registry, 1, b"wp_presentation", 1, pres);
+                write_req_wl_registry_bind(dst, registry, 3, b"wl_compositor", 1, comp);
+                write_req_wl_registry_bind(
+                    dst,
+                    registry,
+                    2,
+                    b"wp_commit_timing_manager_v1",
+                    1,
+                    manager,
+                );
+                write_req_wl_compositor_create_surface(dst, comp, surface);
+                write_req_wl_surface_damage(dst, surface, 0, 0, 64, 64);
+                write_req_wp_commit_timing_manager_v1_get_timer(dst, manager, timer, surface);
+            }));
+
+            ctx.comp_write_passthrough(build_msgs(|dst| {
+                write_evt_wp_presentation_clock_id(dst, pres, pres_clock);
+            }));
+
+            let init_time_ns = 11111111111111111111111u128;
+            let (tv_sec_hi, tv_sec_lo, tv_nsec) = (
+                ((init_time_ns / 1000000000) >> 32) as u32,
+                (init_time_ns / 1000000000) as u32,
+                (init_time_ns % 1000000000) as u32,
+            );
+            let data = build_msgs(|dst| {
+                write_req_wp_commit_timer_v1_set_timestamp(
+                    dst, timer, tv_sec_hi, tv_sec_lo, tv_nsec,
+                );
+            });
+            let (msgs, fds) = ctx.prog_write(&data, &[]).unwrap();
+            let end = Instant::now();
+            assert!(fds.is_empty());
+            assert!(msgs.len() == 1);
+            let msg = &msgs[0];
+            assert!(
+                parse_wl_header(msg)
+                    == (
+                        timer,
+                        length_req_wp_commit_timer_v1_set_timestamp(),
+                        OPCODE_WP_COMMIT_TIMER_V1_SET_TIMESTAMP.code()
+                    )
+            );
+            let (new_sec_hi, new_sec_lo, new_nsec) =
+                parse_req_wp_commit_timer_v1_set_timestamp(msg).unwrap();
+            let output_ns =
+                1000000000 * (join_u64(new_sec_hi, new_sec_lo) as u128) + (new_nsec as u128);
+
+            /* The time adjustment uses two XYX measurements, whose absolute error
+             * is ≤ half the elapsed time each, assuming the clocks run at the same
+             * rate and do not change. */
+            let max_time_error = end.duration_since(start).saturating_mul(2);
+
+            let abs_diff = output_ns.abs_diff(init_time_ns);
+            println!(
+                "clock {}: roundtrip diff: {} ns, max permissible error: {} ns",
+                pres_clock,
+                (abs_diff as i128) * (if output_ns > init_time_ns { 1 } else { -1 }),
+                max_time_error.as_nanos()
+            );
             assert!(abs_diff < max_time_error.as_nanos());
         })?;
     }
@@ -3742,6 +3827,7 @@ fn main() -> ExitCode {
 
     register_single(&mut tests, &f, "basic", proto_basic);
     register_single(&mut tests, &f, "base_wire", proto_base_wire);
+    register_single(&mut tests, &f, "commit_timing", proto_commit_timing);
     register_single(&mut tests, &f, "gamma_control", proto_gamma_control);
     register_single(&mut tests, &f, "keymap", proto_keymap);
     register_single(&mut tests, &f, "many_fds", proto_many_fds);

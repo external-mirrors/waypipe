@@ -158,35 +158,6 @@ struct ObjWpDrmSyncobjTimeline {
     timeline: Rc<RefCell<ShadowFd>>,
 }
 
-/** Either a clock id, or list of Wayland objects */
-enum ClockOrObjects {
-    Clock(u32),
-    Objects(Vec<ObjId>),
-}
-
-/** Additional information for wp_presentation */
-struct ObjWpPresentation {
-    /** Either the clock id, once set, or the list of feedback objects which are waiting to receive
-     * a clock id */
-    state: ClockOrObjects,
-}
-
-/** Either a clock id, Wayland object, or invalid condition marker */
-#[derive(Debug)]
-enum ClockOrObject {
-    Clock(u32),
-    Object(ObjId),
-    /* wp_presentation deleted before clock identified, cannot use */
-    Invalid,
-}
-
-/** Additional information for wp_presentation_feedback */
-struct ObjWpPresentationFeedback {
-    /* It is possible to create a wp_presentation_feedback object before the event setting
-     * the clock id onn wp_presentation is received; */
-    clock: ClockOrObject,
-}
-
 /** Additional information for zwlr_screencopy_frame_v1 */
 struct ObjZwlrScreencopyFrame {
     /* Store sfd and shm metadata of target buffer in case the wl_buffer is destroyed early */
@@ -230,8 +201,6 @@ enum WpExtra {
     ZwlrGammaControl(Box<ObjZwlrGammaControl>),
     WpDrmSyncobjSurface(Box<ObjWpDrmSyncobjSurface>),
     WpDrmSyncobjTimeline(Box<ObjWpDrmSyncobjTimeline>),
-    WpPresentation(Box<ObjWpPresentation>),
-    WpPresentationFeedback(Box<ObjWpPresentationFeedback>),
     None,
 }
 
@@ -1152,45 +1121,8 @@ pub fn process_way_msg(
                 return Err(tag!("Tried to delete wl_display object"));
             }
 
-            if let Some(removed) = glob.objects.remove(&object_id) {
-                /* Cleanup state for some client-created objects. This is done now,
-                 * instead of at destroy request time, since the compositor might send
-                 * events up until delete_id */
-
-                match removed.extra {
-                    WpExtra::WpPresentationFeedback(ref d) => {
-                        if let ClockOrObject::Object(pres) = d.clock {
-                            /* unregister from wp_presentation's waiting list */
-                            let f = glob
-                                .objects
-                                .get_mut(&pres)
-                                .ok_or_else(|| tag!("Failed to lookup presentation object"))?;
-                            let WpExtra::WpPresentation(ref mut r) = f.extra else {
-                                return Err(tag!("Unexpected object type"));
-                            };
-                            let ClockOrObjects::Objects(ref mut o) = r.state else {
-                                return Err(tag!("Unexpected wp_presentation state"));
-                            };
-                            o.retain(|x| *x != object_id);
-                        }
-                    }
-                    WpExtra::WpPresentation(ref d) => {
-                        if let ClockOrObjects::Objects(ref feedbacks) = d.state {
-                            /* unregister all waiting wp_presentation objects */
-                            for obj in feedbacks.iter() {
-                                let f = glob
-                                    .objects
-                                    .get_mut(obj)
-                                    .ok_or_else(|| tag!("Failed to lookup feedback object"))?;
-                                let WpExtra::WpPresentationFeedback(ref mut r) = f.extra else {
-                                    return Err(tag!("Unexpected object type"));
-                                };
-                                r.clock = ClockOrObject::Invalid;
-                            }
-                        }
-                    }
-                    _ => (),
-                }
+            if let Some(_removed) = glob.objects.remove(&object_id) {
+                /* Cleanup .extra state: currently nothing to do */
             } else {
                 debug!("Deleted untracked object");
             }
@@ -3197,16 +3129,11 @@ pub fn process_way_msg(
             check_space!(msg.len(), 0, remaining_space);
             let (tv_sec_hi, tv_sec_lo, tv_nsec, refresh, seq_hi, seq_lo, flags) =
                 parse_evt_wp_presentation_feedback_presented(msg)?;
-            let WpExtra::WpPresentationFeedback(ref x) = obj.extra else {
-                unreachable!();
-            };
-            let ClockOrObject::Clock(clock_id) = x.clock else {
-                return Err(tag!(
-                    "Feedback presented for {} before clock id available; state {:?}",
-                    object_id,
-                    x.clock,
-                ));
-            };
+            let clock_id = glob.presentation_clock.unwrap_or_else(|| {
+                error!("wp_presentation_feedback::presented timestamp was received before any wp_presentation::clock event,\
+                        so Waypipe assumes CLOCK_MONOTONIC was used and may misconvert times if wrong.");
+                libc::CLOCK_MONOTONIC as u32
+            }            );
             let (new_sec_hi, new_sec_lo, new_nsec) = translate_timestamp(
                 tv_sec_hi,
                 tv_sec_lo,
@@ -3219,78 +3146,44 @@ pub fn process_way_msg(
             );
             Ok(ProcMsg::Done)
         }
-        (WaylandInterface::WpPresentation, OPCODE_WP_PRESENTATION_FEEDBACK) => {
-            check_space!(msg.len(), 0, remaining_space);
-            let (_surf_id, callback_id) = parse_req_wp_presentation_feedback(msg)?;
-            let WpExtra::WpPresentation(ref mut x) = obj.extra else {
-                unreachable!();
-            };
-            let clock = match x.state {
-                ClockOrObjects::Clock(x) => ClockOrObject::Clock(x),
-                ClockOrObjects::Objects(ref mut v) => {
-                    v.push(callback_id);
-                    ClockOrObject::Object(object_id)
-                }
-            };
-
-            insert_new_object(
-                &mut glob.objects,
-                callback_id,
-                WpObject {
-                    obj_type: WaylandInterface::WpPresentationFeedback,
-                    is_zombie: false,
-                    extra: WpExtra::WpPresentationFeedback(Box::new(ObjWpPresentationFeedback {
-                        clock,
-                    })),
-                },
-            )?;
-
-            copy_msg(msg, dst);
-            Ok(ProcMsg::Done)
-        }
         (WaylandInterface::WpPresentation, OPCODE_WP_PRESENTATION_CLOCK_ID) => {
             check_space!(msg.len(), 0, remaining_space);
             let clock_id = parse_evt_wp_presentation_clock_id(msg)?;
-            let WpExtra::WpPresentation(ref mut x) = obj.extra else {
-                unreachable!();
-            };
-            let mut state = ClockOrObjects::Clock(clock_id);
-            std::mem::swap(&mut x.state, &mut state);
-            match state {
-                ClockOrObjects::Clock(x) => {
-                    // The protocol text requires that clock_id must be sent on bind, and may not change,
-                    // but does not forbid the same clock_id message to be sent multiple times.
-                    if x != clock_id {
-                        return Err(tag!(
-                            "wp_presentation clock already set to {}, but receiving invalid change to {}",
-                            x,
-                            clock_id
-                        ));
-                    }
-                }
-                ClockOrObjects::Objects(v) => {
-                    for id in &v {
-                        let obj = glob.objects.get_mut(id).ok_or_else(|| {
-                            tag!("Failed to lookup presentation feedback object {}", id)
-                        })?;
-                        let WpExtra::WpPresentationFeedback(ref mut d) = obj.extra else {
-                            return Err(tag!("Expected wp_presentation_feedback object"));
-                        };
-                        let ClockOrObject::Object(o) = d.clock else {
-                            return Err(tag!(
-                                "wp_presentation_feedback object in state: {:?}",
-                                d.clock
-                            ));
-                        };
-                        if o != object_id {
-                            return Err(tag!("Object id mismatch"));
-                        }
-                        d.clock = ClockOrObject::Clock(clock_id);
-                    }
+            if let Some(old) = glob.presentation_clock {
+                if clock_id != old {
+                    return Err(tag!(
+                        "The wp_presentation clock was already set to {} and cannot be changed to {}.",
+                        old,
+                        clock_id
+                    ));
                 }
             }
-
+            // note: in theory, `waypipe server` could choose a preferred clock of its
+            // own (like CLOCK_REALTIME or CLOCK_TAI) to reduce the number of clock
+            // conversions.
+            glob.presentation_clock = Some(clock_id);
             copy_msg(msg, dst);
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::WpCommitTimerV1, OPCODE_WP_COMMIT_TIMER_V1_SET_TIMESTAMP) => {
+            check_space!(msg.len(), 0, remaining_space);
+            let (tv_sec_hi, tv_sec_lo, tv_nsec) = parse_req_wp_commit_timer_v1_set_timestamp(msg)?;
+
+            let clock_id = glob.presentation_clock.unwrap_or_else(|| {
+                error!("wp_commit_timer_v1::set_timestamp was received before wp_presentation::clock,\
+                        so Waypipe assumes CLOCK_MONOTONIC was used and may misconvert times if wrong.");
+                libc::CLOCK_MONOTONIC as u32
+            }            );
+            let (new_sec_hi, new_sec_lo, new_nsec) = translate_timestamp(
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+                clock_id,
+                !glob.on_display_side,
+            )?;
+            write_req_wp_commit_timer_v1_set_timestamp(
+                dst, object_id, new_sec_hi, new_sec_lo, new_nsec,
+            );
             Ok(ProcMsg::Done)
         }
         (WaylandInterface::WlRegistry, OPCODE_WL_REGISTRY_GLOBAL) => {
@@ -3414,22 +3307,6 @@ pub fn process_way_msg(
                         is_zombie: false,
                         extra: WpExtra::ZwpDmabuf(Box::new(ObjZwpLinuxDmabuf {
                             formats_seen: BTreeSet::new(),
-                        })),
-                    },
-                )?;
-                return Ok(ProcMsg::Done);
-            }
-            if name == b"wp_presentation" {
-                check_space!(msg.len(), 0, remaining_space);
-                copy_msg(msg, dst);
-                insert_new_object(
-                    &mut glob.objects,
-                    oid,
-                    WpObject {
-                        obj_type: WaylandInterface::WpPresentation,
-                        is_zombie: false,
-                        extra: WpExtra::WpPresentation(Box::new(ObjWpPresentation {
-                            state: ClockOrObjects::Objects(Vec::new()),
                         })),
                     },
                 )?;

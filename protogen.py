@@ -79,6 +79,8 @@ handled_funcs = [
     ("wl_surface", "damage_buffer"),
     ("wl_surface", "set_buffer_scale"),
     ("wl_surface", "set_buffer_transform"),
+    ("wp_commit_timer_v1", "set_timestamp"),
+    ("wp_commit_timing_manager_v1", "get_timer"),
     ("wp_linux_drm_syncobj_manager_v1", "get_surface"),
     ("wp_linux_drm_syncobj_manager_v1", "import_timeline"),
     ("wp_linux_drm_syncobj_surface_v1", "set_acquire_point"),

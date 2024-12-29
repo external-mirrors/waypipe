@@ -97,8 +97,16 @@ pub struct Globals {
     // maps for regular objects (which need only store 1 or 2 bytes/object)
     // and extended objects (which include a Box)
     pub objects: BTreeMap<ObjId, WpObject>,
-    pub opts: Options,
+    /** Counter to distinguish buffer objects, because ObjIds can be recycled */
     pub max_buffer_uid: u64,
+    /** The clock id given by wp_presentation. This is guaranteed to never change for a
+     * given client connection, and therefore should be consistent over different
+     * instances of the wp_presentation global (or of different globals, if a weird
+     * compositor makes multiple of them). wp_commit_timer_v1 uses timestamps
+     * relative to this clock. */
+    pub presentation_clock: Option<u32>,
+
+    pub opts: Options,
 
     /* Waypipe communication protocol version. For waypipe-client, this is fixed;
      * for waypipe-server, this may increase from the baseline 16 to the actual
@@ -4868,8 +4876,9 @@ pub fn main_interface_loop(
         vulkan_device: None,
         max_local_id: if on_display_side { -1 } else { 1 },
         objects: setup_object_map(),
+        max_buffer_uid: 1, /* Start at 1 to ensure 0 is never valid */
+        presentation_clock: None,
         opts: (*opts).clone(), // todo: reference opts instead?
-        max_buffer_uid: 1,     /* Start at 1 to ensure 0 is never valid */
         wire_version: init_wire_version,
         has_first_message: false,
     };

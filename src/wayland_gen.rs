@@ -4,6 +4,95 @@ use crate::wayland::WaylandArgument::*;
 use crate::wayland::*;
 use WaylandInterface::*;
 
+pub fn write_req_wp_commit_timing_manager_v1_get_timer(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    id: ObjId,
+    surface: ObjId,
+) {
+    let l = length_req_wp_commit_timing_manager_v1_get_timer();
+    write_header(dst, for_id, l, 1, 0);
+    write_obj(dst, id);
+    write_obj(dst, surface);
+}
+pub fn length_req_wp_commit_timing_manager_v1_get_timer() -> usize {
+    16
+}
+pub fn parse_req_wp_commit_timing_manager_v1_get_timer<'a>(
+    mut msg: &'a [u8],
+) -> Result<(ObjId, ObjId), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    let arg2 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2))
+}
+pub const OPCODE_WP_COMMIT_TIMING_MANAGER_V1_GET_TIMER: MethodId = MethodId::Request(1);
+const WP_COMMIT_TIMING_MANAGER_V1: WaylandData = WaylandData {
+    name: "wp_commit_timing_manager_v1",
+    evts: &[],
+    reqs: &[
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "get_timer",
+            sig: &[NewId(WpCommitTimerV1), Object(WlSurface)],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub fn write_req_wp_commit_timer_v1_set_timestamp(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    tv_sec_hi: u32,
+    tv_sec_lo: u32,
+    tv_nsec: u32,
+) {
+    let l = length_req_wp_commit_timer_v1_set_timestamp();
+    write_header(dst, for_id, l, 0, 0);
+    write_u32(dst, tv_sec_hi);
+    write_u32(dst, tv_sec_lo);
+    write_u32(dst, tv_nsec);
+}
+pub fn length_req_wp_commit_timer_v1_set_timestamp() -> usize {
+    20
+}
+pub fn parse_req_wp_commit_timer_v1_set_timestamp<'a>(
+    mut msg: &'a [u8],
+) -> Result<(u32, u32, u32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_u32(&mut msg)?;
+    let arg2 = parse_u32(&mut msg)?;
+    let arg3 = parse_u32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2, arg3))
+}
+pub const OPCODE_WP_COMMIT_TIMER_V1_SET_TIMESTAMP: MethodId = MethodId::Request(0);
+const WP_COMMIT_TIMER_V1: WaylandData = WaylandData {
+    name: "wp_commit_timer_v1",
+    evts: &[],
+    reqs: &[
+        WaylandMethod {
+            name: "set_timestamp",
+            sig: &[Uint, Uint, Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+    ],
+    version: 1,
+};
 pub fn write_req_ext_data_control_manager_v1_create_data_source(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -5880,41 +5969,43 @@ pub enum WaylandInterface {
     WlSubsurface = 37,
     WlSurface = 38,
     WlTouch = 39,
-    WpLinuxDrmSyncobjManagerV1 = 40,
-    WpLinuxDrmSyncobjSurfaceV1 = 41,
-    WpLinuxDrmSyncobjTimelineV1 = 42,
-    WpPresentation = 43,
-    WpPresentationFeedback = 44,
-    WpSecurityContextManagerV1 = 45,
-    WpSecurityContextV1 = 46,
-    XdgPopup = 47,
-    XdgPositioner = 48,
-    XdgSurface = 49,
-    XdgToplevel = 50,
-    XdgWmBase = 51,
-    ZwlrDataControlDeviceV1 = 52,
-    ZwlrDataControlManagerV1 = 53,
-    ZwlrDataControlOfferV1 = 54,
-    ZwlrDataControlSourceV1 = 55,
-    ZwlrExportDmabufFrameV1 = 56,
-    ZwlrExportDmabufManagerV1 = 57,
-    ZwlrGammaControlManagerV1 = 58,
-    ZwlrGammaControlV1 = 59,
-    ZwlrScreencopyFrameV1 = 60,
-    ZwlrScreencopyManagerV1 = 61,
-    ZwpInputMethodKeyboardGrabV2 = 62,
-    ZwpInputMethodManagerV2 = 63,
-    ZwpInputMethodV2 = 64,
-    ZwpInputPopupSurfaceV2 = 65,
-    ZwpLinuxBufferParamsV1 = 66,
-    ZwpLinuxDmabufFeedbackV1 = 67,
-    ZwpLinuxDmabufV1 = 68,
-    ZwpPrimarySelectionDeviceManagerV1 = 69,
-    ZwpPrimarySelectionDeviceV1 = 70,
-    ZwpPrimarySelectionOfferV1 = 71,
-    ZwpPrimarySelectionSourceV1 = 72,
-    ZwpVirtualKeyboardManagerV1 = 73,
-    ZwpVirtualKeyboardV1 = 74,
+    WpCommitTimerV1 = 40,
+    WpCommitTimingManagerV1 = 41,
+    WpLinuxDrmSyncobjManagerV1 = 42,
+    WpLinuxDrmSyncobjSurfaceV1 = 43,
+    WpLinuxDrmSyncobjTimelineV1 = 44,
+    WpPresentation = 45,
+    WpPresentationFeedback = 46,
+    WpSecurityContextManagerV1 = 47,
+    WpSecurityContextV1 = 48,
+    XdgPopup = 49,
+    XdgPositioner = 50,
+    XdgSurface = 51,
+    XdgToplevel = 52,
+    XdgWmBase = 53,
+    ZwlrDataControlDeviceV1 = 54,
+    ZwlrDataControlManagerV1 = 55,
+    ZwlrDataControlOfferV1 = 56,
+    ZwlrDataControlSourceV1 = 57,
+    ZwlrExportDmabufFrameV1 = 58,
+    ZwlrExportDmabufManagerV1 = 59,
+    ZwlrGammaControlManagerV1 = 60,
+    ZwlrGammaControlV1 = 61,
+    ZwlrScreencopyFrameV1 = 62,
+    ZwlrScreencopyManagerV1 = 63,
+    ZwpInputMethodKeyboardGrabV2 = 64,
+    ZwpInputMethodManagerV2 = 65,
+    ZwpInputMethodV2 = 66,
+    ZwpInputPopupSurfaceV2 = 67,
+    ZwpLinuxBufferParamsV1 = 68,
+    ZwpLinuxDmabufFeedbackV1 = 69,
+    ZwpLinuxDmabufV1 = 70,
+    ZwpPrimarySelectionDeviceManagerV1 = 71,
+    ZwpPrimarySelectionDeviceV1 = 72,
+    ZwpPrimarySelectionOfferV1 = 73,
+    ZwpPrimarySelectionSourceV1 = 74,
+    ZwpVirtualKeyboardManagerV1 = 75,
+    ZwpVirtualKeyboardV1 = 76,
 }
 impl TryFrom<u32> for WaylandInterface {
     type Error = ();
@@ -5960,41 +6051,43 @@ impl TryFrom<u32> for WaylandInterface {
             37 => WaylandInterface::WlSubsurface,
             38 => WaylandInterface::WlSurface,
             39 => WaylandInterface::WlTouch,
-            40 => WaylandInterface::WpLinuxDrmSyncobjManagerV1,
-            41 => WaylandInterface::WpLinuxDrmSyncobjSurfaceV1,
-            42 => WaylandInterface::WpLinuxDrmSyncobjTimelineV1,
-            43 => WaylandInterface::WpPresentation,
-            44 => WaylandInterface::WpPresentationFeedback,
-            45 => WaylandInterface::WpSecurityContextManagerV1,
-            46 => WaylandInterface::WpSecurityContextV1,
-            47 => WaylandInterface::XdgPopup,
-            48 => WaylandInterface::XdgPositioner,
-            49 => WaylandInterface::XdgSurface,
-            50 => WaylandInterface::XdgToplevel,
-            51 => WaylandInterface::XdgWmBase,
-            52 => WaylandInterface::ZwlrDataControlDeviceV1,
-            53 => WaylandInterface::ZwlrDataControlManagerV1,
-            54 => WaylandInterface::ZwlrDataControlOfferV1,
-            55 => WaylandInterface::ZwlrDataControlSourceV1,
-            56 => WaylandInterface::ZwlrExportDmabufFrameV1,
-            57 => WaylandInterface::ZwlrExportDmabufManagerV1,
-            58 => WaylandInterface::ZwlrGammaControlManagerV1,
-            59 => WaylandInterface::ZwlrGammaControlV1,
-            60 => WaylandInterface::ZwlrScreencopyFrameV1,
-            61 => WaylandInterface::ZwlrScreencopyManagerV1,
-            62 => WaylandInterface::ZwpInputMethodKeyboardGrabV2,
-            63 => WaylandInterface::ZwpInputMethodManagerV2,
-            64 => WaylandInterface::ZwpInputMethodV2,
-            65 => WaylandInterface::ZwpInputPopupSurfaceV2,
-            66 => WaylandInterface::ZwpLinuxBufferParamsV1,
-            67 => WaylandInterface::ZwpLinuxDmabufFeedbackV1,
-            68 => WaylandInterface::ZwpLinuxDmabufV1,
-            69 => WaylandInterface::ZwpPrimarySelectionDeviceManagerV1,
-            70 => WaylandInterface::ZwpPrimarySelectionDeviceV1,
-            71 => WaylandInterface::ZwpPrimarySelectionOfferV1,
-            72 => WaylandInterface::ZwpPrimarySelectionSourceV1,
-            73 => WaylandInterface::ZwpVirtualKeyboardManagerV1,
-            74 => WaylandInterface::ZwpVirtualKeyboardV1,
+            40 => WaylandInterface::WpCommitTimerV1,
+            41 => WaylandInterface::WpCommitTimingManagerV1,
+            42 => WaylandInterface::WpLinuxDrmSyncobjManagerV1,
+            43 => WaylandInterface::WpLinuxDrmSyncobjSurfaceV1,
+            44 => WaylandInterface::WpLinuxDrmSyncobjTimelineV1,
+            45 => WaylandInterface::WpPresentation,
+            46 => WaylandInterface::WpPresentationFeedback,
+            47 => WaylandInterface::WpSecurityContextManagerV1,
+            48 => WaylandInterface::WpSecurityContextV1,
+            49 => WaylandInterface::XdgPopup,
+            50 => WaylandInterface::XdgPositioner,
+            51 => WaylandInterface::XdgSurface,
+            52 => WaylandInterface::XdgToplevel,
+            53 => WaylandInterface::XdgWmBase,
+            54 => WaylandInterface::ZwlrDataControlDeviceV1,
+            55 => WaylandInterface::ZwlrDataControlManagerV1,
+            56 => WaylandInterface::ZwlrDataControlOfferV1,
+            57 => WaylandInterface::ZwlrDataControlSourceV1,
+            58 => WaylandInterface::ZwlrExportDmabufFrameV1,
+            59 => WaylandInterface::ZwlrExportDmabufManagerV1,
+            60 => WaylandInterface::ZwlrGammaControlManagerV1,
+            61 => WaylandInterface::ZwlrGammaControlV1,
+            62 => WaylandInterface::ZwlrScreencopyFrameV1,
+            63 => WaylandInterface::ZwlrScreencopyManagerV1,
+            64 => WaylandInterface::ZwpInputMethodKeyboardGrabV2,
+            65 => WaylandInterface::ZwpInputMethodManagerV2,
+            66 => WaylandInterface::ZwpInputMethodV2,
+            67 => WaylandInterface::ZwpInputPopupSurfaceV2,
+            68 => WaylandInterface::ZwpLinuxBufferParamsV1,
+            69 => WaylandInterface::ZwpLinuxDmabufFeedbackV1,
+            70 => WaylandInterface::ZwpLinuxDmabufV1,
+            71 => WaylandInterface::ZwpPrimarySelectionDeviceManagerV1,
+            72 => WaylandInterface::ZwpPrimarySelectionDeviceV1,
+            73 => WaylandInterface::ZwpPrimarySelectionOfferV1,
+            74 => WaylandInterface::ZwpPrimarySelectionSourceV1,
+            75 => WaylandInterface::ZwpVirtualKeyboardManagerV1,
+            76 => WaylandInterface::ZwpVirtualKeyboardV1,
             _ => return Err(()),
         })
     }
@@ -6040,6 +6133,8 @@ pub const INTERFACE_TABLE: &[WaylandData] = &[
     WL_SUBSURFACE,
     WL_SURFACE,
     WL_TOUCH,
+    WP_COMMIT_TIMER_V1,
+    WP_COMMIT_TIMING_MANAGER_V1,
     WP_LINUX_DRM_SYNCOBJ_MANAGER_V1,
     WP_LINUX_DRM_SYNCOBJ_SURFACE_V1,
     WP_LINUX_DRM_SYNCOBJ_TIMELINE_V1,
