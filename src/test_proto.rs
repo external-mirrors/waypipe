@@ -2552,6 +2552,10 @@ fn proto_oversized(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Damage a buffer and return rectangles containing the damage.
+ *
+ * Individual sub-patterns are labeled by the high 4 bits of each byte, with the low 4 bits used
+ * to make data harder to replicate by accident. */
 fn get_diff_damage(
     iter: usize,
     base: &mut [u8],
@@ -2562,17 +2566,21 @@ fn get_diff_damage(
 ) -> Vec<(i32, i32, i32, i32)> {
     let iw: i32 = w.try_into().unwrap();
     let ih: i32 = h.try_into().unwrap();
+    let mut ctr = 0;
+    const CYCLE: u8 = 11;
     match iter {
         0 => {
             /* Test: large disjoint blocks, left side */
             for y in 0..h / 4 {
                 for x in 0..w / 4 {
-                    base[(y * stride + bpp * x)..(y * stride + bpp * x + bpp)].fill(0x40);
+                    base[(y * stride + bpp * x)..(y * stride + bpp * x + bpp)].fill(0x10 + ctr);
+                    ctr = (ctr + 1) % CYCLE;
                 }
             }
             for y in (3 * h) / 4..h {
                 for x in 0..w / 4 {
-                    base[(y * stride + bpp * x)..(y * stride + bpp * x + bpp)].fill(0x20);
+                    base[(y * stride + bpp * x)..(y * stride + bpp * x + bpp)].fill(0x20 + ctr);
+                    ctr = (ctr + 1) % CYCLE;
                 }
             }
             vec![
@@ -2584,7 +2592,8 @@ fn get_diff_damage(
             /* Test: sparse differences in middle */
             for y in (3 * h) / 8..(5 * h) / 8 {
                 let x = y.clamp(w / 8, (7 * w) / 8);
-                base[y * stride + bpp * x + bpp / 2] = 0xa0;
+                base[y * stride + bpp * x + bpp / 2] = 0x30 + ctr;
+                ctr = (ctr + 1) % CYCLE;
             }
             vec![(0, (3 * ih) / 8, iw, (5 * ih) / 8 - (3 * ih) / 8)]
         }
@@ -2592,12 +2601,14 @@ fn get_diff_damage(
             /* Test: large disjoint blocks, right side */
             for y in 0..h / 4 {
                 for x in (w / 8)..w {
-                    base[(y * stride + bpp * x)..(y * stride + bpp * x + bpp)].fill(0x40);
+                    base[(y * stride + bpp * x)..(y * stride + bpp * x + bpp)].fill(0x40 + ctr);
+                    ctr = (ctr + 1) % CYCLE;
                 }
             }
             for y in (3 * h) / 4..h {
                 for x in (w / 8)..w {
-                    base[(y * stride + bpp * x)..(y * stride + bpp * x + bpp)].fill(0x30);
+                    base[(y * stride + bpp * x)..(y * stride + bpp * x + bpp)].fill(0x50 + ctr);
+                    ctr = (ctr + 1) % CYCLE;
                 }
             }
             vec![
@@ -2646,7 +2657,11 @@ fn proto_shm_damage(info: TestInfo) -> TestResult {
             };
             let stride = align(bpp * w, 19);
             let file_sz = h * stride;
-            let mut base = vec![0x80; file_sz];
+            let mut base = vec![0xf0; file_sz];
+            for (i, x) in base.iter_mut().enumerate() {
+                *x = 0xf0 + (i % 11) as u8;
+            }
+
             let buffer_fd = make_file_with_contents(&base).unwrap();
             let msg = build_msgs(|dst| {
                 write_req_wl_shm_create_pool(dst, shm, false, pool, file_sz as i32);
@@ -2750,7 +2765,10 @@ fn proto_dmabuf_damage(info: TestInfo, device: RenderDevice) -> TestResult {
                     continue;
                 };
 
-                let mut base = vec![0x80; file_sz];
+                let mut base = vec![0xf0; file_sz];
+                for (i, x) in base.iter_mut().enumerate() {
+                    *x = 0xf0 + (i % 11) as u8;
+                }
 
                 let (img, mirror) = create_dmabuf_and_copy(
                     &vulk,
@@ -2778,13 +2796,23 @@ fn proto_dmabuf_damage(info: TestInfo, device: RenderDevice) -> TestResult {
                     Arc::new(vulkan_get_buffer(&vulk, img.nominal_size(None), true).unwrap());
 
                 let dup = copy_from_dmabuf(&mirror, &tmp_rd).unwrap();
+
+                fn freq_counts(s: &[u8]) -> Vec<usize> {
+                    let mut c = vec![0; 256];
+                    for x in s {
+                        c[*x as usize] += 1;
+                    }
+                    c
+                }
                 assert!(
                     dup == base,
-                    "initial mismatch {} {}\n{:?}\n{:?}",
+                    "initial mismatch {} {}\n{:?}\n{:?}\n{:?}\n{:?}",
                     dup.len(),
                     base.len(),
-                    dup,
-                    base
+                    &dup,
+                    &base,
+                    freq_counts(&dup),
+                    freq_counts(&base),
                 );
 
                 for iter in 0..3 {
