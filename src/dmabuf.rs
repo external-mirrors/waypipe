@@ -2353,8 +2353,10 @@ pub fn start_copy_segments_from_dmabuf(
             acq_barriers,
         );
 
-        vulk.dev
-            .cmd_copy_image_to_buffer(cb, img.image, op_layout, copy.buffer, &regions[..]);
+        if !regions.is_empty() {
+            vulk.dev
+                .cmd_copy_image_to_buffer(cb, img.image, op_layout, copy.buffer, &regions[..]);
+        }
 
         vulk.dev.cmd_pipeline_barrier(
             cb,
@@ -2420,6 +2422,12 @@ pub fn start_copy_segments_from_dmabuf(
     }
 }
 
+/** Given a collection of damaged segments for a linear view of the image, return a
+ * list of image copy operations.
+ *
+ * This can return an empty vector when all the segments are in the padding region of
+ * the linear view and do not correspond to actual pixels.
+ */
 fn make_copy_regions(
     segments: &[(u32, u32, u32)],
     format_info: FormatLayoutInfo,
@@ -2472,7 +2480,7 @@ fn make_copy_regions(
         let mut start_pos = (start % row_length) / ubpp;
         let mut end_pos = 1 + ((end - 1) % row_length) / ubpp;
         let w = img.width as u32;
-        if start_pos > w {
+        if start_pos >= w {
             /* Advance to next row */
             source_offset += row_length - start_pos * ubpp;
             start_pos = 0;
@@ -2641,8 +2649,10 @@ pub fn start_copy_segments_onto_dmabuf(
             &[],
         );
 
-        vulk.dev
-            .cmd_copy_buffer_to_image(cb, copy.buffer, img.image, op_layout, &regions[..]);
+        if !regions.is_empty() {
+            vulk.dev
+                .cmd_copy_buffer_to_image(cb, copy.buffer, img.image, op_layout, &regions[..]);
+        }
 
         vulk.dev.cmd_pipeline_barrier(
             cb,
