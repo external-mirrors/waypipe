@@ -279,6 +279,7 @@ void stride_shifted_copy(char *dest, const char *src, size_t src_start,
 	if (src_end > trow * src_stride) {
 		size_t local = src_end - trow * src_stride;
 		local = local > row_length ? row_length : local;
-		memcpy(dest + dst_stride * trow, src + src_end - local, local);
+		memcpy(dest + dst_stride * trow, src + trow * src_stride,
+				local);
 	}
 }
