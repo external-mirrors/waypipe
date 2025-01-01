@@ -3090,7 +3090,7 @@ fn test_video(try_hardware: bool) {
     // debug disabled as libavcodec logging escapes test framework
     let debug = false;
 
-    for dev_id in list_vulkan_device_ids() {
+    for dev_id in list_render_device_ids() {
         let pref = Some(if try_hardware {
             CodecPreference::HW
         } else {
@@ -3105,7 +3105,8 @@ fn test_video(try_hardware: bool) {
         let Ok(instance) = setup_vulkan_instance(debug, &vid_setting) else {
             continue;
         };
-        let Ok(vulk) = setup_vulkan_device(&instance, Some(dev_id), &vid_setting, debug) else {
+        let Ok(Some(vulk)) = setup_vulkan_device(&instance, Some(dev_id), &vid_setting, debug)
+        else {
             continue;
         };
 

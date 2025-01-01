@@ -7,23 +7,14 @@ use crate::util::*;
 pub use crate::video::*;
 use crate::wayland_gen::*;
 use ash::*;
-use log::debug;
+use log::{debug, error};
 use nix::{errno, libc};
 use std::collections::BTreeMap;
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString, OsString};
+use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
 use std::sync::{Arc, Mutex, MutexGuard};
-
-#[derive(Debug)]
-pub struct AddDmabufPlane {
-    pub fd: OwnedFd,
-    pub plane_idx: u32,
-    pub offset: u32,
-    pub stride: u32,
-    pub modifier: u64,
-}
 
 #[derive(Debug)]
 pub struct ModifierData {
@@ -305,10 +296,6 @@ pub struct FormatLayoutInfo {
     // would need to bump up canonical size to match
 }
 
-const fn fourcc(a: char, b: char, c: char, d: char) -> u32 {
-    u32::from_le_bytes([(a as u8), (b as u8), (c as u8), (d as u8)])
-}
-
 // TODO: determine if it is worth it to deduplicate shm and dmabuf format information.
 // (the code pathways will probably become very different.)
 const SUPPORTED_FORMAT_LIST: &[vk::Format] = &[
@@ -468,23 +455,6 @@ struct DrmSyncobjEventFd {
     pad: u32,
 }
 
-fn drm_open_render(minor: u32) -> Result<OwnedFd, String> {
-    let mut path = OsString::new();
-    path.push("/dev/dri/renderD");
-    path.push(OsString::from(minor.to_string()));
-    let p = PathBuf::from(path);
-    let raw_fd = nix::fcntl::open(
-        &p,
-        nix::fcntl::OFlag::O_CLOEXEC,
-        nix::sys::stat::Mode::empty(),
-    )
-    .map_err(|x| tag!("Failed to open drm node fd at '{:?}': {}", p, x))?;
-    Ok(unsafe {
-        // SAFETY: fd was just created, was checked valid, and is recorded nowhere else
-        OwnedFd::from_raw_fd(raw_fd)
-    })
-}
-
 /* Requirements: for the specific ioctl used, arg must be properly
  * aligned, have the right type, and have the correct lifespan */
 unsafe fn ioctl_loop(
@@ -566,32 +536,6 @@ fn drm_syncobj_destroy(drm_fd: &OwnedFd, handle: u32) -> Result<(), String> {
             "handle destroy",
         )
     }
-}
-
-#[cfg(test)]
-pub fn list_vulkan_device_ids() -> Vec<u64> {
-    use nix::sys::stat;
-    use std::os::unix::ffi::OsStrExt;
-
-    let mut dev_ids = Vec::new();
-    let Ok(dir_iter) = std::fs::read_dir("/dev/dri") else {
-        /* On failure, assume Vulkan is not available */
-        return dev_ids;
-    };
-
-    for r in dir_iter {
-        let std::io::Result::Ok(entry) = r else {
-            continue;
-        };
-        if !entry.file_name().as_bytes().starts_with(b"renderD") {
-            continue;
-        }
-        let Ok(result) = stat::stat(&entry.path()) else {
-            continue;
-        };
-        dev_ids.push(result.st_rdev);
-    }
-    dev_ids
 }
 
 fn get_max_external_image_size(
@@ -1058,15 +1002,14 @@ pub fn setup_vulkan_device_base(
     instance: &Arc<VulkanInstance>,
     main_device: Option<u64>,
     format_filter_for_video: bool,
-) -> Result<VulkanDevice, String> {
+) -> Result<Option<VulkanDevice>, String> {
     let Some(dev_info) = instance.pick_device(main_device) else {
         if let Some(d) = main_device {
-            return Err(tag!("Failed to find a Vulkan physical device with device id {}, or it does not meet all requirements.", d));
+            error!("Failed to find a Vulkan physical device with device id {}, or it does not meet all requirements.", d);
         } else {
-            return Err(tag!(
-                "Failed to find any Vulkan physical device meeting all requirements."
-            ));
+            error!("Failed to find any Vulkan physical device meeting all requirements.");
         }
+        return Ok(None);
     };
     debug!(
         "Chose physical device with device id: {}",
@@ -1316,11 +1259,11 @@ pub fn setup_vulkan_device_base(
         }
 
         let init_sem_value = 0;
-        let drm_fd = drm_open_render((dev_info.device_id & 0xff) as u32)?;
+        let drm_fd = drm_open_render((dev_info.device_id & 0xff) as u32, false)?;
         let (semaphore, semaphore_drm_handle, semaphore_fd, semaphore_event_fd) =
             vulkan_create_timeline_parts(&dev, &ext_semaphore_fd, &drm_fd, init_sem_value)?;
 
-        Ok(VulkanDevice {
+        Ok(Some(VulkanDevice {
             _instance: instance.clone(),
 
             dev_info: *dev_info,
@@ -1347,7 +1290,7 @@ pub fn setup_vulkan_device_base(
             device_id: dev_info.device_id,
             formats,
             queue_family,
-        })
+        }))
     }
 }
 
@@ -1357,8 +1300,11 @@ pub fn setup_vulkan_device(
     main_device: Option<u64>,
     video: &VideoSetting,
     debug: bool,
-) -> Result<Arc<VulkanDevice>, String> {
-    let mut dev = setup_vulkan_device_base(instance, main_device, video.format.is_some())?;
+) -> Result<Option<Arc<VulkanDevice>>, String> {
+    let Some(mut dev) = setup_vulkan_device_base(instance, main_device, video.format.is_some())?
+    else {
+        return Ok(None);
+    };
 
     #[cfg(feature = "video")]
     {
@@ -1383,7 +1329,7 @@ pub fn setup_vulkan_device(
         };
     }
 
-    Ok(Arc::new(dev))
+    Ok(Some(Arc::new(dev)))
 }
 
 fn vulkan_get_memory_type_index(
@@ -3155,8 +3101,9 @@ fn test_dmabuf() {
     let Ok(instance) = setup_vulkan_instance(true, &VideoSetting::default()) else {
         return;
     };
-    for dev_id in list_vulkan_device_ids() {
-        let Ok(vulk) = setup_vulkan_device(&instance, Some(dev_id), &VideoSetting::default(), true)
+    for dev_id in list_render_device_ids() {
+        let Ok(Some(vulk)) =
+            setup_vulkan_device(&instance, Some(dev_id), &VideoSetting::default(), true)
         else {
             continue;
         };

@@ -3,10 +3,12 @@
 use crate::damage::*;
 #[cfg(feature = "dmabuf")]
 use crate::dmabuf::*;
+#[cfg(feature = "gbmfallback")]
+use crate::gbm::*;
 use crate::kernel::*;
 use crate::mainloop::*;
 use crate::mirror::*;
-#[cfg(not(feature = "video"))]
+#[cfg(any(not(feature = "video"), not(feature = "gbmfallback")))]
 use crate::stub::*;
 use crate::tag;
 use crate::util::*;
@@ -420,8 +422,19 @@ fn get_damage_for_dmabuf(
     sfdd: &ShadowFdDmabuf,
     surface: &ObjWlSurface,
 ) -> Vec<(usize, usize)> {
-    let nom_len = sfdd.buf.nominal_size(sfdd.view_row_stride);
-    let (width, height) = (sfdd.buf.width, sfdd.buf.height);
+    // TODO: deduplicate implementations
+    let (nom_len, width, height) = match sfdd.buf {
+        DmabufImpl::Vulkan(ref buf) => (
+            buf.nominal_size(sfdd.view_row_stride),
+            buf.width,
+            buf.height,
+        ),
+        DmabufImpl::Gbm(ref buf) => (
+            buf.nominal_size(sfdd.view_row_stride),
+            buf.width as usize,
+            buf.height as usize,
+        ),
+    };
 
     let wayl_format = drm_to_wayland(sfdd.drm_format);
     let Some(bpp) = get_bpp(wayl_format) else {
@@ -438,7 +451,7 @@ fn get_damage_for_dmabuf(
 
 /** Construct a format table for use by the zwp_linux_dmabuf_v1 protocol */
 fn build_new_format_table(
-    vulk: &Arc<VulkanDevice>,
+    dmabuf_dev: &DmabufDevice,
     sfd: &Rc<RefCell<ShadowFd>>,
     feedback: &mut ObjZwpLinuxDmabufFeedback,
 ) -> Result<usize, String> {
@@ -461,7 +474,7 @@ fn build_new_format_table(
     /* Identify supported format/modifier pairs */
     let mut modifier_table = BTreeMap::<u32, (Vec<u64>, usize)>::new();
     for f in remote_formats.iter() {
-        let mods = vulk.get_supported_modifiers(*f);
+        let mods = dmabuf_dev_modifier_list(dmabuf_dev, *f);
         if !mods.is_empty() {
             modifier_table.insert(*f, (mods, 0));
         }
@@ -1483,6 +1496,8 @@ pub fn process_way_msg(
                         if let WpExtra::WlBuffer(ref buf_data) = buf.extra {
                             let mut sfd = buf_data.sfd.borrow_mut();
                             if let ShadowFdVariant::Dmabuf(ref mut y) = &mut sfd.data {
+                                dmabuf_post_apply_task_operations(y)?;
+
                                 if let Some((pt, timeline)) = acq_pt {
                                     y.acquires.push((pt, timeline));
                                 }
@@ -1768,15 +1783,25 @@ pub fn process_way_msg(
         }
         (WaylandInterface::ZwpLinuxDmabufV1, OPCODE_ZWP_LINUX_DMABUF_V1_FORMAT) => {
             let format = parse_evt_zwp_linux_dmabuf_v1_format(msg)?;
-            let mod_linear = 0;
-            if !glob
-                .vulkan_device
-                .as_ref()
-                .unwrap()
-                .supports_format(format, mod_linear)
-            {
-                /* Drop message, format not supported even for linear modifier */
-                return Ok(ProcMsg::Done);
+
+            match glob.dmabuf_device {
+                DmabufDevice::Unknown
+                | DmabufDevice::Unavailable
+                | DmabufDevice::VulkanSetup(_) => unreachable!(),
+                DmabufDevice::Vulkan((_, ref vulk)) => {
+                    let mod_linear = 0;
+                    if !vulk.supports_format(format, mod_linear) {
+                        /* Drop message, format not supported in standard scenario (linear modifier);
+                         * and this event cannot communicate any modifiers. */
+                        return Ok(ProcMsg::Done);
+                    }
+                }
+                DmabufDevice::Gbm(ref gbm) => {
+                    if gbm_supported_modifiers(gbm, format).is_empty() {
+                        /* Format not supported */
+                        return Ok(ProcMsg::Done);
+                    }
+                }
             }
             check_space!(msg.len(), 0, remaining_space);
             copy_msg(msg, dst);
@@ -1785,10 +1810,10 @@ pub fn process_way_msg(
         (WaylandInterface::ZwpLinuxDmabufV1, OPCODE_ZWP_LINUX_DMABUF_V1_MODIFIER) => {
             let (format, mod_hi, mod_lo) = parse_evt_zwp_linux_dmabuf_v1_modifier(msg)?;
             let modifier = join_u64(mod_hi, mod_lo);
-            let vulk = glob.vulkan_device.as_ref().unwrap();
+
             if glob.on_display_side {
                 /* Restrict the format/modifier pairs to what this instance of Waypipe supports */
-                if !vulk.supports_format(format, modifier) {
+                if !dmabuf_dev_supports_format(&glob.dmabuf_device, format, modifier) {
                     return Ok(ProcMsg::Done);
                 }
                 check_space!(msg.len(), 0, remaining_space);
@@ -1804,7 +1829,7 @@ pub fn process_way_msg(
                 }
                 d.formats_seen.insert(format);
 
-                let mods = vulk.get_supported_modifiers(format);
+                let mods = dmabuf_dev_modifier_list(&glob.dmabuf_device, format);
                 check_space!(
                     mods.len() * length_evt_zwp_linux_dmabuf_v1_modifier(),
                     0,
@@ -1949,7 +1974,7 @@ pub fn process_way_msg(
                         drm_format,
                         planes,
                         &glob.opts,
-                        glob.vulkan_device.as_ref().unwrap(),
+                        &glob.dmabuf_device,
                         &mut glob.max_local_id,
                         &mut glob.map,
                         buffer_id,
@@ -2072,7 +2097,7 @@ pub fn process_way_msg(
                         drm_format,
                         planes,
                         &glob.opts,
-                        glob.vulkan_device.as_ref().unwrap(),
+                        &glob.dmabuf_device,
                         &mut glob.max_local_id,
                         &mut glob.map,
                         ObjId(0),
@@ -2310,22 +2335,13 @@ pub fn process_way_msg(
                 return Err(tag!("Unexpected object extra type"));
             };
 
-            if glob.on_display_side && glob.vulkan_device.is_none() {
-                /* Try to initialize Vulkan, now that we know _a_ device to use */
-                // TODO: handle cases where surface_feedback disagrees with default_feedback, or
-                // where only surface_feedback is asked for and never default_feedback
+            if glob.on_display_side && matches!(glob.dmabuf_device, DmabufDevice::VulkanSetup(_)) {
                 let Some(dev) = feedback.main_device else {
                     return Err(tag!(
                         "zwp_linux_dmabuf_feedback_v1 did not provide a device"
                     ));
                 };
-
-                glob.vulkan_device = Some(setup_vulkan_device(
-                    glob.vulkan_instance.as_ref().unwrap(),
-                    Some(dev),
-                    &glob.opts.video,
-                    glob.opts.debug,
-                )?);
+                complete_dmabuf_setup(&glob.opts, Some(dev), &mut glob.dmabuf_device)?;
             }
 
             let dev_len = std::mem::size_of::<u64>();
@@ -2377,11 +2393,7 @@ pub fn process_way_msg(
                         drop(b);
                         feedback.format_table = parse_format_table(&data[..]);
 
-                        let new_size = build_new_format_table(
-                            glob.vulkan_device.as_ref().unwrap(),
-                            &sfd,
-                            feedback,
-                        )?;
+                        let new_size = build_new_format_table(&glob.dmabuf_device, &sfd, feedback)?;
 
                         y.push_back(sfd);
 
@@ -2427,8 +2439,7 @@ pub fn process_way_msg(
             }
 
             /* Write messages, filtering as necessary. */
-            let vulk: &VulkanDevice = glob.vulkan_device.as_ref().unwrap();
-            let dev_id: u64 = vulk.get_device();
+            let dev_id = dmabuf_dev_get_id(&glob.dmabuf_device);
             write_evt_zwp_linux_dmabuf_feedback_v1_main_device(
                 dst,
                 object_id,
@@ -2443,7 +2454,7 @@ pub fn process_way_msg(
                         .ok_or("Index error in format list")?;
                     /* This check is _technically_ redundant on application side, where
                      * the format table is remade via build_new_format_table */
-                    if vulk.supports_format(format.0, format.1) {
+                    if dmabuf_dev_supports_format(&glob.dmabuf_device, format.0, format.1) {
                         let a = i.to_le_bytes();
                         evec.push(a[0]);
                         evec.push(a[1]);
@@ -2770,35 +2781,39 @@ pub fn process_way_msg(
 
             let mut space_needed = length_evt_ext_image_copy_capture_session_v1_done();
             if let Some(main_device) = session.dmabuf_device {
-                if glob.vulkan_instance.is_none() {
-                    glob.vulkan_instance =
-                        Some(setup_vulkan_instance(glob.opts.debug, &glob.opts.video)?);
-                }
-
-                if glob.vulkan_device.is_none() {
-                    /* Need to set up instance now, to filter dmabuf_format events */
-                    debug!(
-                        "Setting up Vulkan device for ext_image_copy_capture_session_v1::dmabuf_device"
-                    );
-                    let dev: Option<u64> = if glob.on_display_side {
+                let dev: Option<u64> = if matches!(
+                    glob.dmabuf_device,
+                    DmabufDevice::Unknown | DmabufDevice::VulkanSetup(_)
+                ) {
+                    /* Identify which device to use, if needed */
+                    if glob.on_display_side {
                         Some(main_device)
                     } else if let Some(node) = &glob.opts.drm_node {
                         Some(get_dev_for_drm_node_path(node)?)
                     } else {
                         None
-                    };
-                    glob.vulkan_device = Some(setup_vulkan_device(
-                        glob.vulkan_instance.as_ref().unwrap(),
-                        dev,
-                        &glob.opts.video,
-                        glob.opts.debug,
-                    )?);
+                    }
+                } else {
+                    None
+                };
+
+                match glob.dmabuf_device {
+                    DmabufDevice::Unknown => {
+                        glob.dmabuf_device = try_setup_dmabuf_instance_full(&glob.opts, dev)?;
+                    }
+                    DmabufDevice::VulkanSetup(_) => {
+                        complete_dmabuf_setup(&glob.opts, dev, &mut glob.dmabuf_device)?;
+                    }
+                    _ => (),
                 }
 
-                let Some(ref vulk) = glob.vulkan_device else {
-                    unreachable!();
-                };
-                if main_device != vulk.get_device() {
+                if matches!(glob.dmabuf_device, DmabufDevice::Unavailable) {
+                    return Err(tag!(
+                        "DMABUF device specified, but DMABUFs are not supported"
+                    ));
+                }
+                let current_device_id = dmabuf_dev_get_id(&glob.dmabuf_device);
+                if main_device != current_device_id {
                     // todo: handle this case
                     return Err(tag!("image copy device did not match existing device; multiple devices are not yet supported"));
                 }
@@ -2810,10 +2825,10 @@ pub fn process_way_msg(
                     let new_list_len = if glob.on_display_side {
                         mod_list
                             .iter()
-                            .filter(|m| vulk.supports_format(*fmt, **m))
+                            .filter(|m| dmabuf_dev_supports_format(&glob.dmabuf_device, *fmt, **m))
                             .count()
                     } else {
-                        vulk.get_supported_modifiers(*fmt).len()
+                        dmabuf_dev_modifier_list(&glob.dmabuf_device, *fmt).len()
                     };
                     if new_list_len == 0 {
                         continue;
@@ -2827,11 +2842,11 @@ pub fn process_way_msg(
             check_space!(space_needed, 0, remaining_space);
 
             if session.dmabuf_device.is_some() {
-                let vulk = glob.vulkan_device.as_ref().unwrap();
+                let current_device_id = dmabuf_dev_get_id(&glob.dmabuf_device);
                 write_evt_ext_image_copy_capture_session_v1_dmabuf_device(
                     dst,
                     object_id,
-                    &u64::to_le_bytes(vulk.get_device()),
+                    &u64::to_le_bytes(current_device_id),
                 );
 
                 for (fmt, mod_list) in session.dmabuf_formats.iter() {
@@ -2839,13 +2854,13 @@ pub fn process_way_msg(
                     if glob.on_display_side {
                         /* Filter list of available modifiers */
                         for m in mod_list.iter() {
-                            if vulk.supports_format(*fmt, *m) {
+                            if dmabuf_dev_supports_format(&glob.dmabuf_device, *fmt, *m) {
                                 output.extend_from_slice(&u64::to_le_bytes(*m));
                             }
                         }
                     } else {
                         /* Replace modifier list with what is available locally */
-                        for m in vulk.get_supported_modifiers(*fmt) {
+                        for m in dmabuf_dev_modifier_list(&glob.dmabuf_device, *fmt) {
                             output.extend_from_slice(&u64::to_le_bytes(m));
                         }
                     }
@@ -2985,6 +3000,13 @@ pub fn process_way_msg(
                 dst, object_id, new_sec_hi, new_sec_lo, new_nsec,
             );
 
+            if !glob.on_display_side {
+                let mut sfd = sfd.borrow_mut();
+                if let ShadowFdVariant::Dmabuf(ref mut y) = &mut sfd.data {
+                    dmabuf_post_apply_task_operations(y)?;
+                }
+            }
+
             if glob.on_display_side {
                 /* Mark damage */
 
@@ -3063,6 +3085,13 @@ pub fn process_way_msg(
             }
 
             copy_msg(msg, dst);
+
+            if !glob.on_display_side {
+                let mut sfd = sfd.borrow_mut();
+                if let ShadowFdVariant::Dmabuf(ref mut y) = &mut sfd.data {
+                    dmabuf_post_apply_task_operations(y)?;
+                }
+            }
 
             if glob.on_display_side {
                 /* Mark damage */
@@ -3215,34 +3244,33 @@ pub fn process_way_msg(
             }
 
             if intf == b"zwp_linux_dmabuf_v1" {
-                if glob.opts.no_gpu {
-                    debug!("no-gpu option: Dropping interface: {}", EscapeWlName(intf));
-                    return Ok(ProcMsg::Done);
+                /* waypipe-server side: Filter out dmabuf support if the target device (or _any_ device)
+                 * is not available; this must be done now to prevent advertising this global when
+                 * DMABUF support is not actually available. */
+                match glob.dmabuf_device {
+                    DmabufDevice::Unavailable => (), /* case handled later */
+                    DmabufDevice::Vulkan(_) | DmabufDevice::Gbm(_) => (),
+                    DmabufDevice::VulkanSetup(_) => (),
+                    DmabufDevice::Unknown => {
+                        if !glob.on_display_side {
+                            let dev = if let Some(node) = &glob.opts.drm_node {
+                                /* Pick specified device */
+                                Some(get_dev_for_drm_node_path(node)?)
+                            } else {
+                                /* Pick best device */
+                                None
+                            };
+                            glob.dmabuf_device = try_setup_dmabuf_instance_light(&glob.opts, dev)?;
+                            assert!(!matches!(glob.dmabuf_device, DmabufDevice::Unknown));
+                        }
+                    }
                 }
-
-                if !glob.on_display_side {
-                    /* waypipe-server side: Filter out dmabuf support if the target device (or _any_ device)
-                     * is not available; this must be done now to prevent advertising this global when
-                     * DMABUF support is not actually available. */
-                    if glob.vulkan_instance.is_none() {
-                        glob.vulkan_instance =
-                            Some(setup_vulkan_instance(glob.opts.debug, &glob.opts.video)?);
-                    }
-
-                    let dev = if let Some(node) = &glob.opts.drm_node {
-                        /* Pick specified device */
-                        Some(get_dev_for_drm_node_path(node)?)
-                    } else {
-                        /* Pick best device */
-                        None
-                    };
-                    if !glob.vulkan_instance.as_ref().unwrap().has_device(dev) {
-                        debug!(
-                            "Desired Vulkan device not available; dropping interface: {}",
-                            EscapeWlName(intf)
-                        );
-                        return Ok(ProcMsg::Done);
-                    }
+                if matches!(glob.dmabuf_device, DmabufDevice::Unavailable) {
+                    debug!(
+                        "No DMABUF handling device available: Dropping interface: {}",
+                        EscapeWlName(intf)
+                    );
+                    return Ok(ProcMsg::Done);
                 }
 
                 let max_v = INTERFACE_TABLE[WaylandInterface::ZwpLinuxDmabufV1 as usize].version;
@@ -3256,6 +3284,17 @@ pub fn process_way_msg(
                     );
                 }
             }
+            if intf == b"wp_linux_drm_syncobj_manager_v1"
+                && (glob.opts.test_skip_vulkan || glob.opts.no_gpu)
+            {
+                // TODO: either implement explicit sync for gbm, or delay advertisement of
+                // drm_syncobj until linux-dmabuf arrives and dmabuf_device status is known.
+
+                /* In general, if Vulkan is not available, then drm_syncobj also probably
+                 * will not be, so in practice this global may not be used by clients on
+                 * systems where Vulkan are not supported. */
+                return Ok(ProcMsg::Done);
+            }
             check_space!(msg.len(), 0, remaining_space);
             write_evt_wl_registry_global(dst, object_id, name, intf, version);
             Ok(ProcMsg::Done)
@@ -3264,24 +3303,8 @@ pub fn process_way_msg(
             // filter out events
             let (_id, name, version, oid) = parse_req_wl_registry_bind(msg)?;
             if name == b"zwp_linux_dmabuf_v1" {
-                if glob.on_display_side {
-                    /* On application side, vulkan_instance will be created on global advertisement */
-                    if glob.vulkan_instance.is_none() {
-                        glob.vulkan_instance =
-                            Some(setup_vulkan_instance(glob.opts.debug, &glob.opts.video)?);
-                    }
-                }
-                /* If version >= 4 and on display side, compositor will provide the preferred device in
-                 * dmabuf_feedback.main_device. Otherwise, set up the device here. */
-                if glob.vulkan_device.is_none() && (version < 4 || !glob.on_display_side) {
-                    let Some(ref instance) = glob.vulkan_instance else {
-                        return Err(tag!("Vulkan instance setup required before device"));
-                    };
-
-                    debug!(
-                            "Client bound zwp_linux_dmabuf_v1 at version {} older than 4, using best-or-specified drm node",
-                            version
-                        );
+                let light_setup = version >= 4 && glob.on_display_side;
+                if matches!(glob.dmabuf_device, DmabufDevice::Unknown) {
                     let dev = if let Some(node) = &glob.opts.drm_node {
                         /* Pick specified device */
                         Some(get_dev_for_drm_node_path(node)?)
@@ -3289,12 +3312,29 @@ pub fn process_way_msg(
                         /* Pick best device */
                         None
                     };
-                    glob.vulkan_device = Some(setup_vulkan_device(
-                        instance,
-                        dev,
-                        &glob.opts.video,
-                        glob.opts.debug,
-                    )?);
+                    if light_setup {
+                        /* In this case, device will be provided later through dmabuf-feedback
+                         * main_device event */
+                        glob.dmabuf_device = try_setup_dmabuf_instance_light(&glob.opts, dev)?;
+                    } else {
+                        debug!(
+                            "Client bound zwp_linux_dmabuf_v1 at version {} older than 4, using best-or-specified drm node",
+                            version
+                        );
+                        glob.dmabuf_device = try_setup_dmabuf_instance_full(&glob.opts, dev)?;
+                    }
+                    assert!(!matches!(glob.dmabuf_device, DmabufDevice::Unknown));
+                }
+                if !light_setup && matches!(glob.dmabuf_device, DmabufDevice::VulkanSetup(_)) {
+                    let dev = if let Some(node) = &glob.opts.drm_node {
+                        Some(get_dev_for_drm_node_path(node)?)
+                    } else {
+                        None
+                    };
+                    complete_dmabuf_setup(&glob.opts, dev, &mut glob.dmabuf_device)?;
+                }
+                if matches!(glob.dmabuf_device, DmabufDevice::Unavailable) {
+                    return Err(tag!("Failed to set up a device to handle DMABUFS"));
                 }
 
                 check_space!(msg.len(), 0, remaining_space);

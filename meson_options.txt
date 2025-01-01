@@ -10,7 +10,10 @@ option('with_dmabuf', type : 'feature', value : 'auto', description : 'Support D
 option('with_lz4', type : 'feature', value : 'auto', description : 'Support LZ4 as a compression mechanism')
 option('with_zstd', type : 'feature', value : 'auto', description : 'Support ZStandard as a compression mechanism')
 
-# Options for: waypipe-c specific options
+# Options for: waypipe
+option('with_gbm', type : 'feature', value : 'auto', description : 'Use libgbm as a limited fallback path to support DMABUFs')
+
+# Options for: waypipe-c
 option('with_vaapi', type : 'feature', value : 'auto', description : 'C only: Link with libva and use VAAPI to perform hardware video output color space conversions on GPU')
 option('with_systemtap', type: 'boolean', value: true, description: 'C only: Enable tracing using sdt and provide static tracepoints for profiling')
 option('with_secctx', type: 'feature', value: 'auto', description: 'C only: Enable support for the Wayland security context protocol')

@@ -17,11 +17,12 @@ path = "src/test_proto.rs"
 required-features = ["test_proto"]
 
 [features]
-default = ["video", "dmabuf", "lz4", "zstd", "test_proto"]
+default = ["video", "dmabuf", "lz4", "zstd", "gbmfallback", "test_proto"]
 video = ["dep:waypipe-ffmpeg-wrapper", "dep:waypipe-shaders", "dmabuf"]
 dmabuf = ["dep:ash"]
 lz4 = ["dep:waypipe-lz4-wrapper"]
 zstd = ["dep:waypipe-zstd-wrapper"]
+gbmfallback = ["dep:waypipe-gbm-wrapper"]
 test_proto = []
 
 [dependencies]
@@ -33,6 +34,7 @@ ash = { version = "0.38.0", optional = true }
 waypipe-ffmpeg-wrapper = { path = "wrap-ffmpeg", optional = true}
 waypipe-lz4-wrapper = { path = "wrap-lz4", optional = true}
 waypipe-zstd-wrapper = { path = "wrap-zstd", optional = true}
+waypipe-gbm-wrapper = { path = "wrap-gbm", optional = true}
 waypipe-shaders= { path = "shaders", optional = true}
 
 # Build profiles. The default 'release' and 'dev' are for use when building

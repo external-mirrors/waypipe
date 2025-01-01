@@ -10,6 +10,7 @@ cargo test
 cargo test --no-default-features
 cargo test --no-default-features --features lz4,dmabuf,test_proto
 cargo test --no-default-features --features zstd,video,test_proto
+cargo test --no-default-features --features gbmfallback,test_proto
 
 # Tier 1
 cross test --target x86_64-unknown-linux-gnu --no-default-features --features dmabuf,test_proto

@@ -1,0 +1,11 @@
+[package]
+name = "waypipe-gbm-wrapper"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.65.0"
+
+[dependencies]
+libloading = "0.8.5"
+
+[build-dependencies]
+pkg-config = "0.3.31"

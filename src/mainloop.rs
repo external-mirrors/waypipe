@@ -3,10 +3,12 @@
 use crate::compress::*;
 #[cfg(feature = "dmabuf")]
 use crate::dmabuf::*;
+#[cfg(feature = "gbmfallback")]
+use crate::gbm::*;
 use crate::kernel::*;
 use crate::mirror::*;
 use crate::read::*;
-#[cfg(not(feature = "video"))]
+#[cfg(any(not(feature = "video"), not(feature = "gbmfallback")))]
 use crate::stub::*;
 use crate::tracking::*;
 use crate::util::*;
@@ -76,6 +78,23 @@ fn allocate_rid(max_local_id: &mut i32) -> Rid {
     Rid(v)
 }
 
+/** State of DMABUF handling instances and devices. */
+pub enum DmabufDevice {
+    /** Initial state, not yet known if device should be checked for */
+    Unknown,
+    /** Tried to create a device but failed / not available; will not try again */
+    Unavailable,
+    /** Partially set up Vulkan instance, device not yet chosen. This delayed setup
+     * is only done on the display side to avoid setting up a device before a client
+     * would use it. */
+    VulkanSetup(Arc<VulkanInstance>),
+    // TODO: support multiple devices properly
+    /** Vulkan instance and device set up */
+    Vulkan((Arc<VulkanInstance>, Arc<VulkanDevice>)),
+    /** libgbm device */
+    Gbm(Rc<RefCell<GBMDevice>>),
+}
+
 /** Most of the state used by the main loop (excluding in progress tasks and read/write buffers) */
 pub struct Globals {
     /* Index of ShadowFd by ID; ShadowFds stay alive as long as they have
@@ -90,8 +109,7 @@ pub struct Globals {
     pub max_local_id: i32,
 
     /* Vulkan instance and other data; lazily loaded after client binds linux-dmabuf-v1 */
-    pub vulkan_instance: Option<Arc<VulkanInstance>>,
-    pub vulkan_device: Option<Arc<VulkanDevice>>,
+    pub dmabuf_device: DmabufDevice,
 
     // note: slight space/time perf improvement may be possible by using different
     // maps for regular objects (which need only store 1 or 2 bytes/object)
@@ -172,6 +190,15 @@ struct DecompTaskFile {
     target: Arc<ShadowFdFileCore>,
 }
 
+/** Reference to a mirror object and associated metadata */
+#[derive(Clone)]
+struct DecompTaskMirror {
+    mirror: Arc<Mirror>,
+    /** If true, update RID apply task counter when the operation has been fully
+     * applied; if false, silently apply with no notification. */
+    notify_on_completion: bool,
+}
+
 /** Destination information when applying a diff or fill to a DMABUF */
 struct ApplyTaskDmabuf {
     target: DecompTaskDmabuf,
@@ -184,7 +211,7 @@ struct ApplyTaskDmabuf {
 enum ApplyTaskTarget {
     Dmabuf(ApplyTaskDmabuf),
     Shm(DecompTaskFile),
-    MirrorOnly(Arc<Mirror>),
+    MirrorOnly(DecompTaskMirror),
 }
 
 /** A task to apply a diff or fill operation to some object */
@@ -208,6 +235,7 @@ struct ApplyTask {
 enum DecompTarget {
     Dmabuf(DecompTaskDmabuf),
     File(DecompTaskFile),
+    MirrorOnly(DecompTaskMirror),
 }
 
 /** A task to decompress a diff or fill message.
@@ -346,6 +374,11 @@ struct DiffDmabufTask {
     acquires: Vec<(Arc<VulkanTimelineSemaphore>, u64)>,
 }
 
+enum ReadDmabufResult {
+    Vulkan(Arc<VulkanBuffer>),
+    Shm(Vec<u8>),
+}
+
 /** Task to compute the changed data for a DMABUF: final step to compute the diff */
 struct DiffDmabufTask2 {
     rid: Rid,
@@ -358,7 +391,7 @@ struct DiffDmabufTask2 {
 
     wait_until: u64,
     nominal_size: usize,
-    read_buf: Arc<VulkanBuffer>,
+    read_buf: ReadDmabufResult,
     mirror: Arc<Mirror>,
 }
 
@@ -384,7 +417,7 @@ struct FillDmabufTask2 {
 
     wait_until: u64, // timeline value for copy to complete
     mirror: Option<Arc<Mirror>>,
-    read_buf: Arc<VulkanBuffer>,
+    read_buf: ReadDmabufResult,
 }
 
 /** Task to encode DMABUF changes as a video packet */
@@ -403,7 +436,7 @@ struct VideoDecodeTask {
 
 /** A task to be performed by a worker thread */
 enum WorkTask {
-    Fill(FillDmabufTask),
+    FillDmabuf(FillDmabufTask),
     FillDmabuf2(FillDmabufTask2),
     Diff(DiffTask),
     DiffDmabuf(DiffDmabufTask),
@@ -458,9 +491,15 @@ pub struct ShadowFdFile {
     pub pending_apply_tasks: u64,
 }
 
+/** Structure to hold a DMABUF */
+pub enum DmabufImpl {
+    Vulkan(Arc<VulkanDmabuf>),
+    Gbm(GBMDmabuf),
+}
+
 /** A ShadowFd associated with a DMABUF */
 pub struct ShadowFdDmabuf {
-    pub buf: Arc<VulkanDmabuf>,
+    pub buf: DmabufImpl,
     /* Mirror copy of the dmabuf; only present after the first request */
     mirror: Option<Arc<Mirror>>,
     pub drm_format: u32,
@@ -880,6 +919,107 @@ fn read_from_channel(socket: &OwnedFd, from_chan: &mut FromChannel) -> Result<bo
     Ok(eof)
 }
 
+/** Set up a vulkan or gbm instance but do not fully initialize it (since it is not yet clear if the
+ * client will try to use it). Will return Unavailable if there are no devices available. */
+pub fn try_setup_dmabuf_instance_light(
+    opts: &Options,
+    device: Option<u64>,
+) -> Result<DmabufDevice, String> {
+    if !opts.test_skip_vulkan {
+        let instance = setup_vulkan_instance(opts.debug, &opts.video)?;
+        if instance.has_device(device) {
+            return Ok(DmabufDevice::VulkanSetup(instance));
+        }
+    }
+    /* Fallback path if Vulkan is not available */
+    if let Some(dev) = setup_gbm_device(device)? {
+        return Ok(DmabufDevice::Gbm(dev));
+    }
+    Ok(DmabufDevice::Unavailable)
+}
+
+/** Set up a vulkan or gbm instance and initialize it */
+pub fn try_setup_dmabuf_instance_full(
+    opts: &Options,
+    device: Option<u64>,
+) -> Result<DmabufDevice, String> {
+    if !opts.test_skip_vulkan {
+        let instance = setup_vulkan_instance(opts.debug, &opts.video)?;
+        if let Some(device) = setup_vulkan_device(&instance, device, &opts.video, opts.debug)? {
+            return Ok(DmabufDevice::Vulkan((instance, device)));
+        }
+    }
+    /* Fallback path if Vulkan is not available */
+    if let Some(dev) = setup_gbm_device(device)? {
+        return Ok(DmabufDevice::Gbm(dev));
+    }
+    Ok(DmabufDevice::Unavailable)
+}
+/** Fully initialize Vulkan device, and error if this does not work */
+pub fn complete_dmabuf_setup(
+    opts: &Options,
+    device: Option<u64>,
+    dmabuf_dev: &mut DmabufDevice,
+) -> Result<(), String> {
+    if matches!(dmabuf_dev, DmabufDevice::VulkanSetup(_)) {
+        let mut tmp = DmabufDevice::Unknown;
+        std::mem::swap(dmabuf_dev, &mut tmp);
+        let DmabufDevice::VulkanSetup(instance) = tmp else {
+            unreachable!();
+        };
+        let device = setup_vulkan_device(&instance, device, &opts.video, opts.debug)?
+            .expect("Vulkan device existence should already have been checked");
+        *dmabuf_dev = DmabufDevice::Vulkan((instance, device));
+    }
+    Ok(())
+}
+pub fn dmabuf_dev_supports_format(dmabuf_dev: &DmabufDevice, format: u32, modifier: u64) -> bool {
+    match dmabuf_dev {
+        DmabufDevice::Unknown | DmabufDevice::Unavailable | DmabufDevice::VulkanSetup(_) => {
+            unreachable!()
+        }
+
+        DmabufDevice::Vulkan((_, vulk)) => vulk.supports_format(format, modifier),
+        DmabufDevice::Gbm(gbm) => gbm_supported_modifiers(gbm, format).contains(&modifier),
+    }
+}
+pub fn dmabuf_dev_modifier_list(dmabuf_dev: &DmabufDevice, format: u32) -> Vec<u64> {
+    match dmabuf_dev {
+        DmabufDevice::Unknown | DmabufDevice::Unavailable | DmabufDevice::VulkanSetup(_) => {
+            unreachable!()
+        }
+
+        DmabufDevice::Vulkan((_, vulk)) => vulk.get_supported_modifiers(format),
+        DmabufDevice::Gbm(gbm) => gbm_supported_modifiers(gbm, format),
+    }
+}
+pub fn dmabuf_dev_get_id(dmabuf_dev: &DmabufDevice) -> u64 {
+    match dmabuf_dev {
+        DmabufDevice::Unknown | DmabufDevice::Unavailable | DmabufDevice::VulkanSetup(_) => {
+            unreachable!()
+        }
+        DmabufDevice::Vulkan((_, vulk)) => vulk.get_device(),
+        DmabufDevice::Gbm(gbm) => gbm_get_device_id(gbm),
+    }
+}
+/** When using GBM for DMABUFs, changes are accumulated in the mirror and synchronously
+ * copied to the DMABUF after all changes have been received. This function does this */
+pub fn dmabuf_post_apply_task_operations(data: &mut ShadowFdDmabuf) -> Result<(), String> {
+    if let DmabufImpl::Gbm(ref mut buf) = data.buf {
+        /* Synchronize mirror, which has collected all updates so far,
+         * with the DMABUF. */
+        let len = buf.nominal_size(data.view_row_stride);
+        let src = data
+            .mirror
+            .as_ref()
+            .unwrap()
+            .get_mut_range(0..len)
+            .ok_or_else(|| tag!("Failed to get entire mirror, to apply changes to DMABUF"))?;
+        buf.copy_onto_dmabuf(data.view_row_stride, src.data)?;
+    }
+    Ok(())
+}
+
 /** Construct a ShadowFd for a shared memory file descriptor
  *
  * `readonce`: is this just a raw file transfer? */
@@ -932,7 +1072,7 @@ pub fn translate_dmabuf_fd(
     drm_format: u32,
     planes: Vec<AddDmabufPlane>,
     opts: &Options,
-    vulk: &Arc<VulkanDevice>,
+    device: &DmabufDevice,
     max_local_id: &mut i32,
     map: &mut BTreeMap<Rid, Weak<RefCell<ShadowFd>>>,
     wayland_id: ObjId,
@@ -946,36 +1086,49 @@ pub fn translate_dmabuf_fd(
     assert!(planes[0].plane_idx == 0);
     let view_row_stride = Some(planes[0].stride);
 
-    let mut use_video = false;
-    if let Some(ref f) = opts.video.format {
-        if supports_video_format(vulk, *f, drm_format, width, height) {
-            use_video = true;
+    let (buf, video_encode) = match device {
+        DmabufDevice::Unknown | DmabufDevice::Unavailable | DmabufDevice::VulkanSetup(_) => {
+            unreachable!()
         }
-    }
-    if use_video {
-        if !vulk.can_import_image(drm_format, width, height, &planes, true) {
-            use_video = false;
-        }
-    }
-    if !use_video {
-        if !vulk.can_import_image(drm_format, width, height, &planes, false) {
-            return Err(tag!("Cannot import DMABUF, unsupported format/size/modifier combination: {:x}, {}x{}, {:x}", drm_format, width, height, planes[0].modifier));
-        }
-    }
-    let buf = vulkan_import_dmabuf(vulk, planes, width, height, drm_format, use_video)?;
+        DmabufDevice::Vulkan((_, vulk)) => {
+            let mut use_video = false;
+            if let Some(ref f) = opts.video.format {
+                if supports_video_format(vulk, *f, drm_format, width, height) {
+                    use_video = true;
+                }
+            }
+            if use_video {
+                if !vulk.can_import_image(drm_format, width, height, &planes, true) {
+                    use_video = false;
+                }
+            }
+            if !use_video {
+                if !vulk.can_import_image(drm_format, width, height, &planes, false) {
+                    return Err(tag!("Cannot import DMABUF, unsupported format/size/modifier combination: {:x}, {}x{}, {:x}", drm_format, width, height, planes[0].modifier));
+                }
+            }
+            let buf = vulkan_import_dmabuf(vulk, planes, width, height, drm_format, use_video)?;
 
-    let video_encode = if use_video {
-        if let Some(f) = opts.video.format {
-            Some(Arc::new(setup_video_encode(
-                &buf,
-                f,
-                opts.video.bits_per_frame,
-            )?))
-        } else {
-            None
+            let video_encode = if use_video {
+                if let Some(f) = opts.video.format {
+                    Some(Arc::new(setup_video_encode(
+                        &buf,
+                        f,
+                        opts.video.bits_per_frame,
+                    )?))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            (DmabufImpl::Vulkan(buf), video_encode)
         }
-    } else {
-        None
+        DmabufDevice::Gbm(gbm) => (
+            DmabufImpl::Gbm(gbm_import_dmabuf(gbm, planes, width, height, drm_format)?),
+            None,
+        ),
     };
 
     let sfd = Rc::new(RefCell::new(ShadowFd {
@@ -1013,7 +1166,11 @@ pub fn translate_timeline(
 
     debug!("Translating timeline semaphore fd");
 
-    let tm = vulkan_import_timeline(glob.vulkan_device.as_ref().unwrap(), fd)?;
+    let DmabufDevice::Vulkan((_, ref vulk)) = glob.dmabuf_device else {
+        unreachable!();
+    };
+
+    let tm = vulkan_import_timeline(vulk, fd)?;
 
     let sfd = Rc::new(RefCell::new(ShadowFd {
         remote_id,
@@ -1210,23 +1367,42 @@ fn process_sfd_msg(
 
             match &mut sfd.data {
                 ShadowFdVariant::Dmabuf(data) => {
-                    // TODO: check that all preceding releases actually were signalled beforehand
-                    // (i.e., check for client misbehavior)
+                    match data.buf {
+                        DmabufImpl::Vulkan(ref buf) => {
+                            // TODO: check that all preceding releases actually were signalled beforehand
+                            // (i.e., check for client misbehavior)
 
-                    data.pending_apply_tasks += 1;
-                    let t = DecompTask {
-                        sequence: None,
-                        msg_view,
-                        file_size: data.buf.nominal_size(data.view_row_stride),
-                        compression: glob.opts.compression,
-                        target: DecompTarget::Dmabuf(DecompTaskDmabuf {
-                            dst: data.buf.clone(),
-                            view_row_stride: data.view_row_stride,
-                            mirror: data.mirror.clone(),
-                        }),
-                    };
-                    tasksys.tasks.lock().unwrap().decompress.push_back(t);
-                    tasksys.task_notify.notify_one();
+                            data.pending_apply_tasks += 1;
+                            let t = DecompTask {
+                                sequence: None,
+                                msg_view,
+                                file_size: buf.nominal_size(data.view_row_stride),
+                                compression: glob.opts.compression,
+                                target: DecompTarget::Dmabuf(DecompTaskDmabuf {
+                                    dst: buf.clone(),
+                                    view_row_stride: data.view_row_stride,
+                                    mirror: data.mirror.clone(),
+                                }),
+                            };
+                            tasksys.tasks.lock().unwrap().decompress.push_back(t);
+                            tasksys.task_notify.notify_one();
+                        }
+                        DmabufImpl::Gbm(ref buf) => {
+                            data.pending_apply_tasks += 1;
+                            let t = DecompTask {
+                                sequence: None,
+                                msg_view,
+                                file_size: buf.nominal_size(data.view_row_stride),
+                                compression: glob.opts.compression,
+                                target: DecompTarget::MirrorOnly(DecompTaskMirror {
+                                    mirror: data.mirror.as_ref().unwrap().clone(),
+                                    notify_on_completion: true,
+                                }),
+                            };
+                            tasksys.tasks.lock().unwrap().decompress.push_back(t);
+                            tasksys.task_notify.notify_one();
+                        }
+                    }
 
                     Ok(())
                 }
@@ -1260,20 +1436,41 @@ fn process_sfd_msg(
 
             match &mut sfd.data {
                 ShadowFdVariant::Dmabuf(data) => {
-                    data.pending_apply_tasks += 1;
-                    let t = DecompTask {
-                        sequence: None,
-                        msg_view,
-                        compression: glob.opts.compression,
-                        file_size: data.buf.nominal_size(data.view_row_stride),
-                        target: DecompTarget::Dmabuf(DecompTaskDmabuf {
-                            dst: data.buf.clone(),
-                            view_row_stride: data.view_row_stride,
-                            mirror: data.mirror.clone(),
-                        }),
-                    };
-                    tasksys.tasks.lock().unwrap().decompress.push_back(t);
-                    tasksys.task_notify.notify_one();
+                    match data.buf {
+                        DmabufImpl::Vulkan(ref buf) => {
+                            data.pending_apply_tasks += 1;
+                            let t = DecompTask {
+                                sequence: None,
+                                msg_view,
+                                compression: glob.opts.compression,
+                                file_size: buf.nominal_size(data.view_row_stride),
+                                target: DecompTarget::Dmabuf(DecompTaskDmabuf {
+                                    dst: buf.clone(),
+                                    view_row_stride: data.view_row_stride,
+                                    mirror: data.mirror.clone(),
+                                }),
+                            };
+                            tasksys.tasks.lock().unwrap().decompress.push_back(t);
+                            tasksys.task_notify.notify_one();
+                        }
+                        DmabufImpl::Gbm(ref buf) => {
+                            data.pending_apply_tasks += 1;
+                            let t = DecompTask {
+                                sequence: None,
+                                msg_view,
+                                compression: glob.opts.compression,
+                                file_size: buf.nominal_size(data.view_row_stride),
+                                target: DecompTarget::MirrorOnly(DecompTaskMirror {
+                                    mirror: data.mirror.as_ref().unwrap().clone(),
+                                    notify_on_completion: true,
+                                }),
+                            };
+                            tasksys.tasks.lock().unwrap().decompress.push_back(t);
+                            tasksys.task_notify.notify_one();
+                            /* The mirror will be copied onto the DMABUF synchronously
+                             * when the next Wayland message requires it */
+                        }
+                    }
 
                     Ok(())
                 }
@@ -1310,27 +1507,41 @@ fn process_sfd_msg(
                 msg[12..76].try_into().unwrap(),
             ));
 
-            // TODO: filter this by compositor preference exposed through dmabuf-feedback (if it exists?)
-            // if client never requested dmabuf-feedback before creating buffers, warn and try linear?
-            let modifier_list = glob
-                .vulkan_device
-                .as_ref()
-                .unwrap()
-                .get_supported_modifiers(drm_format);
+            let (buf, nom_size, add_planes) = match glob.dmabuf_device {
+                DmabufDevice::Unknown
+                | DmabufDevice::Unavailable
+                | DmabufDevice::VulkanSetup(_) => {
+                    return Err(tag!("Received OpenDMABUF too early"));
+                }
+                DmabufDevice::Vulkan((_, ref vulk)) => {
+                    // TODO: filter this by compositor preference exposed through dmabuf-feedback (if it exists?)
+                    // if client never requested dmabuf-feedback before creating buffers, warn and try linear?
+                    let modifier_list = vulk.get_supported_modifiers(drm_format);
 
-            let (buf, add_planes) = vulkan_create_dmabuf(
-                glob.vulkan_device.as_ref().unwrap(),
-                width,
-                height,
-                drm_format,
-                &modifier_list[..],
-                /* force linear; these might be the fastest to create/update on compositor side,
-                although they might make compositor rendering a bit less efficient. */
-                // &[0],
-                false,
-            )?;
+                    let (buf, add_planes) = vulkan_create_dmabuf(
+                        vulk,
+                        width,
+                        height,
+                        drm_format,
+                        &modifier_list[..],
+                        /* force linear; these might be the fastest to create/update on compositor side,
+                         * although they might make compositor rendering a bit less efficient. */
+                        // &[0],
+                        false,
+                    )?;
 
-            let nom_size = buf.nominal_size(view_row_stride);
+                    let nom_size = buf.nominal_size(view_row_stride);
+                    (DmabufImpl::Vulkan(buf), nom_size, add_planes)
+                }
+                DmabufDevice::Gbm(ref gbm) => {
+                    let mods = gbm_supported_modifiers(gbm, drm_format);
+                    let (buf, add_planes) =
+                        gbm_create_dmabuf(gbm, width, height, drm_format, &mods)?;
+                    let nom_size = buf.nominal_size(view_row_stride);
+                    (DmabufImpl::Gbm(buf), nom_size, add_planes)
+                }
+            };
+
             /* Eagerly create a mirror copy of the dmabuf contents; this is currently needed
              * to properly handle non-texel-aligned diff messages, as those cannot be directly
              * written to the dmabuf and must update the mirror first. */
@@ -1391,7 +1602,11 @@ fn process_sfd_msg(
                 }
             };
 
-            let vulk: &Arc<VulkanDevice> = glob.vulkan_device.as_ref().unwrap();
+            let DmabufDevice::Vulkan((_, ref vulk)) = glob.dmabuf_device else {
+                return Err(tag!(
+                    "Received OpenDMAVidDstV2 before Vulkan device was set up"
+                ));
+            };
             if !supports_video_format(vulk, vid_type, drm_format, width, height) {
                 return Err(tag!(
                     "Video format {:?} is not supported at {}x{}",
@@ -1423,7 +1638,7 @@ fn process_sfd_msg(
                 remote_id,
                 only_here: false,
                 data: ShadowFdVariant::Dmabuf(ShadowFdDmabuf {
-                    buf,
+                    buf: DmabufImpl::Vulkan(buf),
                     mirror: None,
                     drm_format,
                     view_row_stride,
@@ -1471,10 +1686,14 @@ fn process_sfd_msg(
                 logfile.write_all(packet).unwrap();
             }
 
+            let DmabufDevice::Vulkan((_, ref vulk)) = glob.dmabuf_device else {
+                unreachable!();
+            };
+
             let task = VideoDecodeTask {
                 msg: msg_view,
                 remote_id,
-                vulk: glob.vulkan_device.as_ref().unwrap().clone(),
+                vulk: vulk.clone(),
                 state: video_decode.clone(),
             };
             tasksys
@@ -1491,9 +1710,14 @@ fn process_sfd_msg(
         }
 
         WmsgType::OpenTimeline => {
+            let DmabufDevice::Vulkan((_, ref vulk)) = glob.dmabuf_device else {
+                return Err(tag!(
+                    "Received OpenTimeline before Vulkan device was set up"
+                ));
+            };
+
             let start_pt = u64::from_le_bytes(msg[8..16].try_into().unwrap());
-            let (timeline, fd) =
-                vulkan_create_timeline(glob.vulkan_device.as_ref().unwrap(), start_pt)?;
+            let (timeline, fd) = vulkan_create_timeline(vulk, start_pt)?;
 
             let sfd = Rc::new(RefCell::new(ShadowFd {
                 remote_id,
@@ -1906,13 +2130,17 @@ fn collect_updates(
         }
         ShadowFdVariant::Dmabuf(data) => {
             if let Some(ref vid_enc) = data.video_encode {
+                let DmabufImpl::Vulkan(ref buf) = data.buf else {
+                    unreachable!();
+                };
+
                 if sfd.only_here {
-                    let msg2 = data.buf.ideal_slice_data(data.drm_format);
+                    let msg2 = buf.ideal_slice_data(data.drm_format);
                     let vid_flags: u32 = 0xff & (opts.video.format.unwrap() as u32);
                     let msg = cat4x4(
                         build_wmsg_header(WmsgType::OpenDMAVidDstV2, 16 + msg2.len()).to_le_bytes(),
                         sfd.remote_id.0.to_le_bytes(),
-                        (data.buf.nominal_size(data.view_row_stride) as u32).to_le_bytes(),
+                        (buf.nominal_size(data.view_row_stride) as u32).to_le_bytes(),
                         vid_flags.to_le_bytes(),
                     );
 
@@ -1922,7 +2150,7 @@ fn collect_updates(
                 }
 
                 /* Get damage as a list of intervals */
-                let full_region = &[(0, align(data.buf.nominal_size(data.view_row_stride), 64))];
+                let full_region = &[(0, align(buf.nominal_size(data.view_row_stride), 64))];
                 let damaged_intervals: &[(usize, usize)] = match &data.damage {
                     Damage::Nothing => &[],
                     Damage::Everything => full_region,
@@ -1936,7 +2164,7 @@ fn collect_updates(
 
                 let task = VideoEncodeTask {
                     remote_id: sfd.remote_id,
-                    vulk: data.buf.vulk.clone(),
+                    vulk: buf.vulk.clone(),
                     state: vid_enc.clone(),
                 };
                 tasksys
@@ -1952,22 +2180,31 @@ fn collect_updates(
                 return Ok(true);
             }
 
+            let nominal_size = match data.buf {
+                DmabufImpl::Vulkan(ref vulk_buf) => vulk_buf.nominal_size(data.view_row_stride),
+                DmabufImpl::Gbm(ref gbm_buf) => gbm_buf.nominal_size(data.view_row_stride),
+            };
+
             if sfd.only_here {
                 // Send creation message
-                let msg2 = data.buf.ideal_slice_data(data.drm_format);
+                let slice_data = match data.buf {
+                    DmabufImpl::Vulkan(ref vulk_buf) => vulk_buf.ideal_slice_data(data.drm_format),
+                    DmabufImpl::Gbm(ref gbm_buf) => gbm_buf.ideal_slice_data(),
+                };
+
                 let msg = cat3x4(
-                    build_wmsg_header(WmsgType::OpenDMABUF, 12 + msg2.len()).to_le_bytes(),
+                    build_wmsg_header(WmsgType::OpenDMABUF, 12 + slice_data.len()).to_le_bytes(),
                     sfd.remote_id.0.to_le_bytes(),
-                    (data.buf.nominal_size(data.view_row_stride) as u32).to_le_bytes(),
+                    (nominal_size as u32).to_le_bytes(),
                 );
 
                 way_msg_output.other_messages.push(Vec::from(msg));
-                way_msg_output.other_messages.push(Vec::from(msg2));
+                way_msg_output.other_messages.push(Vec::from(slice_data));
                 sfd.only_here = false;
             }
 
             /* Get damage as a list of intervals */
-            let full_region = &[(0, align(data.buf.nominal_size(data.view_row_stride), 64))];
+            let full_region = &[(0, align(nominal_size, 64))];
             let damaged_intervals: &[(usize, usize)] = match &data.damage {
                 Damage::Nothing => &[],
                 Damage::Everything => full_region,
@@ -1988,21 +2225,30 @@ fn collect_updates(
                 acquires.push((timeline_data.timeline.clone(), pt));
             }
 
-            if data.first_damage {
+            let copied = if let DmabufImpl::Gbm(ref mut gbm_buf) = data.buf {
+                /* Copy out entire contents of buffer immediately and synchronously, do avoid
+                 * running into possible threading issues with libgbm. */
+                let mut v = vec![0; nominal_size];
+                gbm_buf.copy_from_dmabuf(data.view_row_stride, &mut v)?;
+                v
+            } else {
+                Vec::new()
+            };
+
+            if data.first_damage || !copied.is_empty() {
                 /* The first time _any_ damage is reported, do a fill transfer and
                  * set up the mirror for future diffs. */
                 data.first_damage = false;
 
-                let nom_size = data.buf.nominal_size(data.view_row_stride);
                 if data.mirror.is_none() {
                     /* Create mirror for use by future diff operations */
-                    data.mirror = Some(Arc::new(Mirror::new(nom_size, false)?));
+                    data.mirror = Some(Arc::new(Mirror::new(nominal_size, false)?));
                 }
 
-                let div_intv = (0_u32, (nom_size / 64) as u32);
+                let div_intv = (0_u32, (nominal_size / 64) as u32);
                 let len = div_intv.1 - div_intv.0;
                 let nshards = ceildiv(len, DIFF_CHUNKSIZE / 64);
-                let trail_size = nom_size % 64;
+                let trail_size = nominal_size % 64;
 
                 for i in 0..nshards {
                     let start = 64 * split_interval(div_intv.0, div_intv.1, nshards, i);
@@ -2012,16 +2258,30 @@ fn collect_updates(
                         end += trail_size as u32;
                     }
 
-                    let t = WorkTask::Fill(FillDmabufTask {
-                        rid: sfd.remote_id,
-                        compression,
-                        region_start: start,
-                        region_end: end,
-                        mirror: data.mirror.clone(),
-                        dst: data.buf.clone(),
-                        view_row_stride: data.view_row_stride,
-                        acquires: acquires.clone(),
-                    });
+                    let t = match data.buf {
+                        DmabufImpl::Vulkan(ref vulk_buf) => WorkTask::FillDmabuf(FillDmabufTask {
+                            rid: sfd.remote_id,
+                            compression,
+                            region_start: start,
+                            region_end: end,
+                            mirror: data.mirror.clone(),
+                            dst: vulk_buf.clone(),
+                            view_row_stride: data.view_row_stride,
+                            acquires: acquires.clone(),
+                        }),
+                        DmabufImpl::Gbm(_) => WorkTask::FillDmabuf2(FillDmabufTask2 {
+                            rid: sfd.remote_id,
+                            compression,
+                            region_start: start,
+                            region_end: end,
+                            mirror: data.mirror.clone(),
+                            wait_until: 0,
+                            read_buf: ReadDmabufResult::Shm(Vec::from(
+                                &copied[start as usize..end as usize],
+                            )),
+                        }),
+                    };
+
                     way_msg_output.expected_recvd_msgs += 1;
                     tasksys.tasks.lock().unwrap().construct.push_back(t);
                     tasksys.task_notify.notify_one();
@@ -2030,10 +2290,7 @@ fn collect_updates(
                 // Then make diff tasks that copy the _bound_ of the slice ,
                 // and run the diff routine inside it (against the mirror)
                 // via diff_two
-                let (trail_len, parts) = split_damage(
-                    damaged_intervals,
-                    data.buf.nominal_size(data.view_row_stride),
-                );
+                let (trail_len, parts) = split_damage(damaged_intervals, nominal_size);
                 let nparts = parts.len();
 
                 for (i, output) in parts.into_iter().enumerate() {
@@ -2055,17 +2312,20 @@ fn collect_updates(
                         0
                     };
 
-                    let t = WorkTask::DiffDmabuf(DiffDmabufTask {
-                        rid: sfd.remote_id,
-                        region,
-                        intervals: output,
-                        trailing,
-                        compression,
-                        mirror: data.mirror.as_ref().unwrap().clone(),
-                        img: data.buf.clone(),
-                        view_row_stride: data.view_row_stride,
-                        acquires: acquires.clone(),
-                    });
+                    let t = match data.buf {
+                        DmabufImpl::Vulkan(ref vulk_buf) => WorkTask::DiffDmabuf(DiffDmabufTask {
+                            rid: sfd.remote_id,
+                            region,
+                            intervals: output,
+                            trailing,
+                            compression,
+                            mirror: data.mirror.as_ref().unwrap().clone(),
+                            img: vulk_buf.clone(),
+                            view_row_stride: data.view_row_stride,
+                            acquires: acquires.clone(),
+                        }),
+                        DmabufImpl::Gbm(_) => todo!(),
+                    };
                     way_msg_output.expected_recvd_msgs += 1;
                     tasksys.tasks.lock().unwrap().construct.push_back(t);
                     tasksys.task_notify.notify_one();
@@ -2341,7 +2601,13 @@ fn run_diff_task(task: &DiffTask, cache: &mut ThreadCache) -> TaskResult {
  */
 fn diff_dmabuf_inner(task: &DiffDmabufTask2, dst: &mut [u8]) -> Result<(u32, u32), String> {
     let img_len = task.nominal_size;
-    let data = task.read_buf.get_read_view();
+    let data = match task.read_buf {
+        ReadDmabufResult::Vulkan(ref buf) => {
+            buf.prepare_read()?;
+            buf.get_read_view().data
+        }
+        ReadDmabufResult::Shm(ref v) => &v[..],
+    };
 
     let mut dst_view = dst;
     let diff_len: u32 = if let Some((region_start, region_end)) = task.region {
@@ -2364,7 +2630,7 @@ fn diff_dmabuf_inner(task: &DiffDmabufTask2, dst: &mut [u8]) -> Result<(u32, u32
 
             let mut diff_segment_len = construct_diff_segment_two(
                 dst_view,
-                &data.data[start..start + intv_len],
+                &data[start..start + intv_len],
                 mirr_range,
                 intv.0,
                 32, // skip gaps of size 4*32 ; every individual transfer is _expensive_
@@ -2373,7 +2639,7 @@ fn diff_dmabuf_inner(task: &DiffDmabufTask2, dst: &mut [u8]) -> Result<(u32, u32
                 // test: copy entire damaged region
                 dst_view[..4].copy_from_slice((intv.0 / 4).to_le_bytes().as_slice());
                 dst_view[4..8].copy_from_slice((intv.1 / 4).to_le_bytes().as_slice());
-                dst_view[8..8 + intv_len].copy_from_slice(&data.data[start..start + intv_len]);
+                dst_view[8..8 + intv_len].copy_from_slice(&data[start..start + intv_len]);
                 diff_segment_len = (intv_len + 8) as u32;
             }
 
@@ -2382,7 +2648,7 @@ fn diff_dmabuf_inner(task: &DiffDmabufTask2, dst: &mut [u8]) -> Result<(u32, u32
             diff_len += diff_segment_len;
             start += intv_len;
         }
-        assert!(start + (task.trailing as usize) == data.data.len());
+        assert!(start + (task.trailing as usize) == data.len());
         diff_len
     } else {
         0
@@ -2394,7 +2660,7 @@ fn diff_dmabuf_inner(task: &DiffDmabufTask2, dst: &mut [u8]) -> Result<(u32, u32
             .mirror
             .get_mut_range((img_len - (task.trailing as usize))..img_len)
             .ok_or("Failed to acquire trailing mirror")?;
-        let tail_segment: &[u8] = &data.data[data.data.len() - task.trailing as usize..];
+        let tail_segment: &[u8] = &data[data.len() - task.trailing as usize..];
         assert!(tail_segment.len() == trail_mirror.data.len());
         if tail_segment != trail_mirror.data {
             trail_mirror.data.copy_from_slice(tail_segment);
@@ -2464,15 +2730,13 @@ fn run_diff_dmabuf_task(
         intervals: task.intervals,
         trailing: task.trailing,
         wait_until: pt,
-        read_buf,
+        read_buf: ReadDmabufResult::Vulkan(read_buf),
         mirror: task.mirror,
         nominal_size: task.img.nominal_size(task.view_row_stride),
     })
 }
 /** Run a [DiffDmabufTask2] */
 fn run_diff_dmabuf_task_2(task: DiffDmabufTask2, cache: &mut ThreadCache) -> TaskResult {
-    task.read_buf.prepare_read()?;
-
     // Maximum space usage
     let mut diffspace = 0;
     for t in task.intervals.iter() {
@@ -2615,15 +2879,20 @@ fn run_fill_dmabuf_task(
         region_start: task.region_start,
         region_end: task.region_end,
         mirror: task.mirror,
-        read_buf,
+        read_buf: ReadDmabufResult::Vulkan(read_buf),
         wait_until: pt,
     })
 }
 
 /** Run a [FillDmabufTask2] */
 fn run_dmabuf_fill_task_2(task: FillDmabufTask2, cache: &mut ThreadCache) -> TaskResult {
-    task.read_buf.prepare_read()?;
-    let data = task.read_buf.get_read_view();
+    let data = match task.read_buf {
+        ReadDmabufResult::Vulkan(ref buf) => {
+            buf.prepare_read()?;
+            buf.get_read_view().data
+        }
+        ReadDmabufResult::Shm(ref v) => &v[..],
+    };
 
     // TODO: parallelizable sub tasks, after 'prepare_read' is done: compress staging buffer (critical path),
     // and copy to mirror (not so critical, but must complete before next fill/diff op in region)
@@ -2631,10 +2900,10 @@ fn run_dmabuf_fill_task_2(task: FillDmabufTask2, cache: &mut ThreadCache) -> Tas
         let range = mir
             .get_mut_range(task.region_start as usize..task.region_end as usize)
             .ok_or("failed to acquire mirror range")?;
-        range.data.copy_from_slice(data.data);
+        range.data.copy_from_slice(data);
     }
 
-    let mut msg: Vec<u8> = comp_into_vec(task.compression, &mut cache.comp, data.data, 16, 4)?;
+    let mut msg: Vec<u8> = comp_into_vec(task.compression, &mut cache.comp, data, 16, 4)?;
     let msg_len = msg.len() - 4;
     msg.truncate(align4(msg_len));
 
@@ -2811,7 +3080,10 @@ fn run_decomp_task(task: &DecompTask, cache: &mut ThreadCache) -> Result<DecompR
                             data,
                             is_diff_type: true,
                             ntrailing: ntrailing as usize,
-                            target: ApplyTaskTarget::MirrorOnly((*mir).clone()),
+                            target: ApplyTaskTarget::MirrorOnly(DecompTaskMirror {
+                                mirror: (*mir).clone(),
+                                notify_on_completion: false,
+                            }),
                             region_start,
                             region_end,
                             remote_id,
@@ -2879,6 +3151,29 @@ fn run_decomp_task(task: &DecompTask, cache: &mut ThreadCache) -> Result<DecompR
                     remote_id,
                 }))
             }
+            DecompTarget::MirrorOnly(target) => {
+                let diff = decomp_into_vec(
+                    task.compression,
+                    &mut cache.comp,
+                    &msg[16..len],
+                    (diff_size + ntrailing) as usize,
+                )?;
+
+                /* Compute region from diff */
+                let (region_start, region_end) =
+                    compute_diff_span(&diff, ntrailing as usize, task.file_size)?;
+
+                Ok(DecompReturn::Shm(ApplyTask {
+                    sequence: task.sequence.unwrap(),
+                    data: diff,
+                    is_diff_type: true,
+                    ntrailing: ntrailing as usize,
+                    target: ApplyTaskTarget::MirrorOnly(target.clone()),
+                    region_start,
+                    region_end,
+                    remote_id,
+                }))
+            }
         }
     } else if t == WmsgType::BufferFill {
         let region_start = u32::from_le_bytes(msg[8..12].try_into().unwrap()) as usize;
@@ -2934,7 +3229,10 @@ fn run_decomp_task(task: &DecompTask, cache: &mut ThreadCache) -> Result<DecompR
                             data,
                             is_diff_type: false,
                             ntrailing: 0,
-                            target: ApplyTaskTarget::MirrorOnly((*mir).clone()),
+                            target: ApplyTaskTarget::MirrorOnly(DecompTaskMirror {
+                                mirror: (*mir).clone(),
+                                notify_on_completion: false,
+                            }),
                             region_start,
                             region_end,
                             remote_id,
@@ -2993,6 +3291,20 @@ fn run_decomp_task(task: &DecompTask, cache: &mut ThreadCache) -> Result<DecompR
                     remote_id,
                 }))
             }
+            DecompTarget::MirrorOnly(target) => {
+                let fill =
+                    decomp_into_vec(task.compression, &mut cache.comp, &msg[16..len], reg_len)?;
+                Ok(DecompReturn::Shm(ApplyTask {
+                    sequence: task.sequence.unwrap(),
+                    data: fill,
+                    is_diff_type: false,
+                    ntrailing: 0,
+                    target: ApplyTaskTarget::MirrorOnly(target.clone()),
+                    region_start,
+                    region_end,
+                    remote_id,
+                }))
+            }
         }
     } else {
         unreachable!();
@@ -3005,29 +3317,37 @@ fn run_apply_task(task: &ApplyTask, cache: &mut ThreadCache) -> TaskResult {
         ApplyTaskTarget::MirrorOnly(ref d) => {
             if task.is_diff_type {
                 let v = d
+                    .mirror
                     .get_mut_range(task.region_start..task.region_end)
                     .ok_or_else(|| {
                         tag!(
-                            "Failed to get mirror segment {}..{}",
+                            "Failed to get mirror segment {}..{} from mirror of length {}",
                             task.region_start,
-                            task.region_end
+                            task.region_end,
+                            d.mirror.len(),
                         )
                     })?;
                 apply_diff_one(&task.data, task.ntrailing, task.region_start, v.data)?;
             } else {
                 let v = d
+                    .mirror
                     .get_mut_range(task.region_start..task.region_end)
                     .ok_or_else(|| {
                         tag!(
-                            "Failed to get mirror segment {}..{}",
+                            "Failed to get mirror segment {}..{} from mirror of length {}",
                             task.region_start,
-                            task.region_end
+                            task.region_end,
+                            d.mirror.len(),
                         )
                     })?;
                 v.data.copy_from_slice(&task.data);
             }
 
-            Ok(TaskOutput::MirrorApply)
+            if d.notify_on_completion {
+                Ok(TaskOutput::ApplyDone(task.remote_id))
+            } else {
+                Ok(TaskOutput::MirrorApply)
+            }
         }
         ApplyTaskTarget::Dmabuf(ref d) => {
             assert!(
@@ -3597,11 +3917,10 @@ fn process_vulkan_updates(
     tasksys: &TaskSystem,
     from_chan: &mut FromChannel,
 ) -> Result<(), String> {
-    let current: u64 = glob
-        .vulkan_device
-        .as_ref()
-        .unwrap()
-        .get_current_timeline_pt()?;
+    let DmabufDevice::Vulkan((_, ref vulk)) = glob.dmabuf_device else {
+        unreachable!();
+    };
+    let current: u64 = vulk.get_current_timeline_pt()?;
 
     let mut g = tasksys.tasks.lock().unwrap();
     // TODO: more efficient filtering, this is O(n^2) as typically only
@@ -3869,7 +4188,7 @@ fn work_thread(tasksys: &TaskSystem, output: Sender<TaskResult>) {
                 /* one task, one message */
                 output.send(result).unwrap();
             }
-            WorkTask::Fill(x) => {
+            WorkTask::FillDmabuf(x) => {
                 let result = run_fill_dmabuf_task(x, &mut cache);
                 match result {
                     Err(z) => {
@@ -4092,7 +4411,7 @@ fn loop_inner(
         };
 
         let (vulk_id, borrowed_fd): (Option<usize>, Option<BorrowedFd>) =
-            if let Some(ref vulk) = glob.vulkan_device {
+            if let DmabufDevice::Vulkan((_, ref vulk)) = glob.dmabuf_device {
                 let g = tasksys.tasks.lock().unwrap();
                 let mut first_pt = u64::MAX;
                 first_pt = std::cmp::min(
@@ -4821,6 +5140,8 @@ pub struct Options {
     pub drm_node: Option<PathBuf>,
     /** If nonzero, path to a folder in which all received video streams will be stored */
     pub debug_store_video: Option<PathBuf>,
+    /** If true, make vulkan initialization fail so that gbm fallback will be tried if available */
+    pub test_skip_vulkan: bool,
 }
 
 /** The main entrypoint for Wayland protocol proxying; should be given already opened and connected sockets
@@ -4892,8 +5213,11 @@ pub fn main_interface_loop(
         fresh: BTreeMap::new(),
         pipes: Vec::new(),
         on_display_side,
-        vulkan_instance: None,
-        vulkan_device: None,
+        dmabuf_device: if opts.no_gpu {
+            DmabufDevice::Unavailable
+        } else {
+            DmabufDevice::Unknown
+        },
         max_local_id: if on_display_side { -1 } else { 1 },
         objects: setup_object_map(),
         max_buffer_uid: 1, /* Start at 1 to ensure 0 is never valid */

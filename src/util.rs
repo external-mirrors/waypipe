@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*! Misc utilities and types */
 use nix::fcntl;
+use std::ffi::OsString;
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::path::Path;
 use std::str::FromStr;
 
 /** Like `format!`, but prepends file and line number.
@@ -571,6 +573,64 @@ fn video_setting_roundtrip() {
         println!("{}", VideoSetting::to_string(&v));
         assert_eq!(VideoSetting::from_str(&VideoSetting::to_string(&v)), Ok(v));
     }
+}
+
+#[derive(Debug)]
+pub struct AddDmabufPlane {
+    pub fd: OwnedFd,
+    pub plane_idx: u32,
+    pub offset: u32,
+    pub stride: u32,
+    pub modifier: u64,
+}
+
+pub const fn fourcc(a: char, b: char, c: char, d: char) -> u32 {
+    u32::from_le_bytes([(a as u8), (b as u8), (c as u8), (d as u8)])
+}
+
+pub fn list_render_device_ids() -> Vec<u64> {
+    use nix::sys::stat;
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut dev_ids = Vec::new();
+    let Ok(dir_iter) = std::fs::read_dir("/dev/dri") else {
+        /* On failure, assume Vulkan is not available */
+        return dev_ids;
+    };
+
+    for r in dir_iter {
+        let std::io::Result::Ok(entry) = r else {
+            continue;
+        };
+        if !entry.file_name().as_bytes().starts_with(b"renderD") {
+            continue;
+        }
+        let Ok(result) = stat::stat(&entry.path()) else {
+            continue;
+        };
+        /* st_rdev size varies by platform, is <= 8 and typically =8 */
+        #[allow(clippy::unnecessary_cast)]
+        dev_ids.push(result.st_rdev as u64);
+    }
+    dev_ids
+}
+
+/** Open the render node with specified minor value */
+pub fn drm_open_render(minor: u32, rdrw: bool) -> Result<OwnedFd, String> {
+    let mut path = OsString::new();
+    path.push("/dev/dri/renderD");
+    path.push(OsString::from(minor.to_string()));
+    let p = Path::new(&path);
+    let mut flags = fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NOCTTY;
+    if rdrw {
+        flags |= fcntl::OFlag::O_RDWR;
+    }
+    let raw_fd = fcntl::open(p, flags, nix::sys::stat::Mode::empty())
+        .map_err(|x| tag!("Failed to open drm node fd at '{:?}': {}", p, x))?;
+    Ok(unsafe {
+        // SAFETY: fd was just created, was checked valid, and is recorded nowhere else
+        OwnedFd::from_raw_fd(raw_fd)
+    })
 }
 
 /** Set the close-on-exec flag for a file descriptor */

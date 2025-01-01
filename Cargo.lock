@@ -212,6 +212,7 @@ dependencies = [
  "log",
  "nix",
  "waypipe-ffmpeg-wrapper",
+ "waypipe-gbm-wrapper",
  "waypipe-lz4-wrapper",
  "waypipe-shaders",
  "waypipe-zstd-wrapper",
@@ -219,6 +220,14 @@ dependencies = [
 
 [[package]]
 name = "waypipe-ffmpeg-wrapper"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "pkg-config",
+]
+
+[[package]]
+name = "waypipe-gbm-wrapper"
 version = "0.1.0"
 dependencies = [
  "libloading",

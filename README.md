@@ -80,6 +80,9 @@ Optional linked dependencies, broken out by feature:
 - dmabuf support:
   - vulkan (to support programs using GPU rendering and DMABUFs)
   - vulkan validation layers (runtime, optional, used for tests and with --debug flag)
+- dmabuf support fallback with gbm:
+  - libgbm (mesa, ≥ 11.0.0)
+  - bindgen (build, ≥ 0.70.0)
 - video encoding/decoding support:
   - dmabuf support
   - ffmpeg (≥ 7.1, needs avcodec/avutil for lossy video encoding)
@@ -100,8 +103,7 @@ Originally, Waypipe was developed in C; it was later ported to use Rust. The
 C implementation, now producing an executable called `waypipe-c`, has been kept
 in the repository for use on older systems which do not have the Rust version's
 dependencies installed. `waypipe-c` also includes some features (like reconnection
-support, libgbm backend for dmabufs) dropped in later versions. There are two ways to
-build it: with `meson`,
+support) dropped in later versions. There are two ways to build it: with `meson`,
 ```
 cd /path/to/waypipe/ && cd ..
 mkdir build-waypipe

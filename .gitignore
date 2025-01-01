@@ -10,4 +10,5 @@
 /wrap-ffmpeg/target
 /wrap-lz4/target
 /wrap-zstd/target
+/wrap-gbm/target
 /shaders/target

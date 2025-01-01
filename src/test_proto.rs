@@ -810,11 +810,10 @@ fn run_protocol_test(
 #[cfg(feature = "dmabuf")]
 fn setup_vulkan(device_id: u64) -> Result<Arc<VulkanDevice>, String> {
     let instance = setup_vulkan_instance(true, &VideoSetting::default())?;
-    Ok(Arc::new(setup_vulkan_device_base(
-        &instance,
-        Some(device_id),
-        false,
-    )?))
+    Ok(Arc::new(
+        setup_vulkan_device_base(&instance, Some(device_id), false)?
+            .ok_or_else(|| tag!("Vulkan device {} not available", device_id))?,
+    ))
 }
 
 fn get_intf_name(intf: WaylandInterface) -> &'static [u8] {

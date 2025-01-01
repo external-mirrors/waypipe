@@ -314,6 +314,9 @@ impl Mirror {
         guard.region_size = new_size;
         Ok(())
     }
+    pub fn len(&self) -> usize {
+        self.data.lock().unwrap().region_size
+    }
 }
 
 #[cfg(test)]

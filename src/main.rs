@@ -22,6 +22,7 @@ mod bench;
 mod compress;
 mod damage;
 mod dmabuf;
+mod gbm;
 mod kernel;
 mod mainloop;
 mod mirror;
@@ -328,6 +329,9 @@ fn build_connection_command<'a>(
     if let Some(ref path) = options.debug_store_video {
         args.push(OsStr::new("--test-store-video"));
         args.push(path.as_os_str());
+    }
+    if options.test_skip_vulkan {
+        args.push(OsStr::new("--test-skip-vulkan"));
     }
     if client {
         args.push(OsStr::new("client-conn"));
@@ -1689,6 +1693,13 @@ fn main() -> Result<(), String> {
             .value_parser(value_parser!(PathBuf)),
         )
         .arg(
+            Arg::new("test-skip-vulkan")
+            .long("test-skip-vulkan")
+            .hide(true)
+            .help("Test option: make Vulkan initialization fail and fall back to gbm backend if available")
+            .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("test-fast-bench")
                 .long("test-fast-bench")
                 .hide(true)
@@ -1761,6 +1772,7 @@ fn main() -> Result<(), String> {
     let fast_bench = *matches.get_one::<bool>("test-fast-bench").unwrap();
     let test_wire_version: Option<u32> = matches.get_one::<u32>("test-wire-version").copied();
     let test_store_video: Option<PathBuf> = matches.get_one::<PathBuf>("test-store-video").cloned();
+    let test_skip_vulkan: bool = *matches.get_one::<bool>("test-skip-vulkan").unwrap();
     let secctx = matches.get_one::<String>("secctx");
     let vsock = *matches.get_one::<bool>("vsock").unwrap();
 
@@ -1816,6 +1828,7 @@ fn main() -> Result<(), String> {
         title_prefix: (*title_prefix).clone(),
         drm_node: drm_node.cloned(),
         debug_store_video: test_store_video,
+        test_skip_vulkan,
     };
 
     /* Needed to revert back to original cwdir after
@@ -1951,6 +1964,9 @@ fn main() -> Result<(), String> {
             if !oneshot {
                 ssh_cmd.push(OsStr::new("--display"));
                 ssh_cmd.push(&wayland_display);
+            }
+            if opts.test_skip_vulkan {
+                ssh_cmd.push(OsStr::new("--test-skip-vulkan"));
             }
             ssh_cmd.push(OsStr::new("server"));
             ssh_cmd.extend_from_slice(&ssh_args[destination_idx + 1..]);

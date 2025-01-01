@@ -35,15 +35,21 @@ if get_option('build_rs')
     features = []
     has_lz4 = false
     has_zstd = false
+    has_gbm = false
     has_dmabuf = false
     has_video = false
 
-    # compute maximum of with_lz4/with_zstd/with_video features
+    # compute maximum of with_lz4/with_zstd/with_gbm/with_video features
     max_feature = get_option('with_lz4')
     if (max_feature.auto() and get_option('with_zstd').enabled()) or (not max_feature.enabled() and get_option(
         'with_zstd',
     ).auto())
         max_feature = get_option('with_zstd')
+    endif
+    if (max_feature.auto() and get_option('with_gbm').enabled()) or (not max_feature.enabled() and get_option(
+        'with_gbm',
+    ).auto())
+        max_feature = get_option('with_gbm')
     endif
     if (max_feature.auto() and get_option('with_video').enabled()) or (not max_feature.enabled() and get_option(
         'with_video',
@@ -80,6 +86,15 @@ if get_option('build_rs')
         # Note: 'ash' is the vulkan wrapper used, and may require other libraries/programs to be present
         has_dmabuf = true
         features += ['dmabuf']
+    endif
+    libgbm = dependency(
+        'gbm',
+        version: '>=11.0.0',  # gbm is part of Mesa and has a matching version
+        required: get_option('with_gbm'),
+    )
+    if bindgen.found() and libzstd.found()
+        has_zstd = true
+        features += ['gbmfallback']
     endif
     glslc = find_program(
         'glslc',

@@ -3,18 +3,12 @@
 #![allow(unused_variables)]
 #[cfg(not(feature = "dmabuf"))]
 mod dmabuf_stub {
+    use crate::util::AddDmabufPlane;
     use std::os::fd::{BorrowedFd, OwnedFd};
     use std::path::PathBuf;
     use std::sync::Arc;
 
     use crate::VideoSetting;
-    pub struct AddDmabufPlane {
-        pub fd: OwnedFd,
-        pub plane_idx: u32,
-        pub offset: u32,
-        pub stride: u32,
-        pub modifier: u64,
-    }
     pub struct VulkanInstance(());
     pub struct VulkanDevice(());
     pub struct VulkanCommandPool {
@@ -45,7 +39,7 @@ mod dmabuf_stub {
         instance: &Arc<VulkanInstance>,
         main_device: Option<u64>,
         format_filter_for_video: bool,
-    ) -> Result<VulkanDevice, String> {
+    ) -> Result<Option<VulkanDevice>, String> {
         unreachable!();
     }
     pub fn setup_vulkan_device(
@@ -53,7 +47,7 @@ mod dmabuf_stub {
         main_device: Option<u64>,
         video: &VideoSetting,
         debug: bool,
-    ) -> Result<Arc<VulkanDevice>, String> {
+    ) -> Result<Option<Arc<VulkanDevice>>, String> {
         unreachable!();
     }
 
@@ -218,6 +212,71 @@ mod dmabuf_stub {
 }
 #[cfg(not(feature = "dmabuf"))]
 pub use dmabuf_stub::*;
+
+#[cfg(not(feature = "gbmfallback"))]
+mod gbm_stub {
+    use crate::util::AddDmabufPlane;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    pub struct GBMDevice {}
+    pub struct GBMDmabuf {
+        pub width: u32,
+        pub height: u32,
+    }
+    pub fn setup_gbm_device(device: Option<u64>) -> Result<Option<Rc<RefCell<GBMDevice>>>, String> {
+        Ok(None)
+    }
+    pub fn gbm_create_dmabuf(
+        device: &Rc<RefCell<GBMDevice>>,
+        width: u32,
+        height: u32,
+        format: u32,
+        modifier_options: &[u64],
+    ) -> Result<(GBMDmabuf, Vec<AddDmabufPlane>), String> {
+        unreachable!();
+    }
+    pub fn gbm_import_dmabuf(
+        device: &Rc<RefCell<GBMDevice>>,
+        planes: Vec<AddDmabufPlane>,
+        width: u32,
+        height: u32,
+        drm_format: u32,
+    ) -> Result<GBMDmabuf, String> {
+        unreachable!();
+    }
+    pub fn gbm_supported_modifiers(device: &Rc<RefCell<GBMDevice>>, format: u32) -> Vec<u64> {
+        unreachable!();
+    }
+    pub fn gbm_get_device_id(device: &Rc<RefCell<GBMDevice>>) -> u64 {
+        unreachable!();
+    }
+
+    impl GBMDmabuf {
+        pub fn copy_from_dmabuf(
+            &mut self,
+            view_row_stride: Option<u32>,
+            data: &mut [u8],
+        ) -> Result<(), String> {
+            unreachable!();
+        }
+        pub fn copy_onto_dmabuf(
+            &mut self,
+            view_row_stride: Option<u32>,
+            data: &[u8],
+        ) -> Result<(), String> {
+            unreachable!();
+        }
+        pub fn nominal_size(&self, view_row_length: Option<u32>) -> usize {
+            unreachable!();
+        }
+        pub fn ideal_slice_data(&self) -> [u8; 64] {
+            unreachable!();
+        }
+    }
+}
+#[cfg(not(feature = "gbmfallback"))]
+pub use gbm_stub::*;
 
 #[cfg(not(feature = "video"))]
 mod video_stub {
