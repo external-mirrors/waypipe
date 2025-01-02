@@ -189,10 +189,19 @@ struct ObjZwlrGammaControl {
     gamma_size: Option<u32>,
 }
 
+/** Additional information for wl_registry */
+struct ObjWlRegistry {
+    /** Store global advertisements for wp_linux_drm_syncobj_manager_v1
+     * until zwp_linux_dmabuf_v1 arrives and it is known whether Waypipe
+     * is able to handle DMABUFs and timeline semaphores. */
+    syncobj_manager_replay: Vec<(u32, u32)>,
+}
+
 /** Additional information attached to specific Wayland objects */
 enum WpExtra {
     WlSurface(Box<ObjWlSurface>),
     WlBuffer(Box<ObjWlBuffer>),
+    WlRegistry(Box<ObjWlRegistry>),
     WlShmPool(Box<ObjWlShmPool>),
     ZwpDmabuf(Box<ObjZwpLinuxDmabuf>),
     ZwpDmabufFeedback(Box<ObjZwpLinuxDmabufFeedback>),
@@ -1142,6 +1151,24 @@ pub fn process_way_msg(
 
             copy_msg(msg, dst);
 
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::WlDisplay, OPCODE_WL_DISPLAY_GET_REGISTRY) => {
+            check_space!(msg.len(), 0, remaining_space);
+
+            let registry_id = parse_req_wl_display_get_registry(msg)?;
+            insert_new_object(
+                &mut glob.objects,
+                registry_id,
+                WpObject {
+                    obj_type: WaylandInterface::WlRegistry,
+                    is_zombie: false,
+                    extra: WpExtra::WlRegistry(Box::new(ObjWlRegistry {
+                        syncobj_manager_replay: Vec::new(),
+                    })),
+                },
+            )?;
+            copy_msg(msg, dst);
             Ok(ProcMsg::Done)
         }
         (WaylandInterface::WlCallback, OPCODE_WL_CALLBACK_DONE) => {
@@ -3284,19 +3311,58 @@ pub fn process_way_msg(
                     );
                 }
             }
-            if intf == b"wp_linux_drm_syncobj_manager_v1"
-                && (glob.opts.test_skip_vulkan || glob.opts.no_gpu)
-            {
-                // TODO: either implement explicit sync for gbm, or delay advertisement of
-                // drm_syncobj until linux-dmabuf arrives and dmabuf_device status is known.
-
-                /* In general, if Vulkan is not available, then drm_syncobj also probably
-                 * will not be, so in practice this global may not be used by clients on
-                 * systems where Vulkan are not supported. */
-                return Ok(ProcMsg::Done);
+            if intf == b"wp_linux_drm_syncobj_manager_v1" {
+                match glob.dmabuf_device {
+                    DmabufDevice::Unknown => {
+                        /* store globals for replay later */
+                        let WpExtra::WlRegistry(ref mut reg) = obj.extra else {
+                            return Err(tag!("Unexpected extra type for wl_registry"));
+                        };
+                        reg.syncobj_manager_replay.push((name, version));
+                    }
+                    DmabufDevice::Gbm(_) | DmabufDevice::Unavailable => {
+                        /* drop, not supported */
+                        debug!(
+                            "No timeline semaphore handling device available: Dropping interface: {}",
+                            EscapeWlName(intf)
+                        );
+                        return Ok(ProcMsg::Done);
+                    }
+                    DmabufDevice::VulkanSetup(_) | DmabufDevice::Vulkan(_) => { /* keep */ }
+                }
             }
-            check_space!(msg.len(), 0, remaining_space);
+
+            let mut space = msg.len();
+            if intf == b"zwp_linux_dmabuf_v1" {
+                let WpExtra::WlRegistry(ref mut reg) = obj.extra else {
+                    return Err(tag!("Unexpected extra type for wl_registry"));
+                };
+                if !reg.syncobj_manager_replay.is_empty() {
+                    space +=
+                        length_evt_wl_registry_global(b"wp_linux_drm_syncobj_manager_v1".len())
+                            * reg.syncobj_manager_replay.len();
+                }
+            }
+
+            check_space!(space, 0, remaining_space);
             write_evt_wl_registry_global(dst, object_id, name, intf, version);
+
+            if intf == b"zwp_linux_dmabuf_v1" {
+                /* Replay syncobj manager events once it is certain zwp_linux_dmabuf_v1 has been resolved. */
+                let WpExtra::WlRegistry(ref mut reg) = obj.extra else {
+                    return Err(tag!("Unexpected extra type for wl_registry"));
+                };
+                for (sync_name, sync_version) in reg.syncobj_manager_replay.drain(..) {
+                    write_evt_wl_registry_global(
+                        dst,
+                        object_id,
+                        sync_name,
+                        b"wp_linux_drm_syncobj_manager_v1",
+                        sync_version,
+                    );
+                }
+            }
+
             Ok(ProcMsg::Done)
         }
         (WaylandInterface::WlRegistry, OPCODE_WL_REGISTRY_BIND) => {
