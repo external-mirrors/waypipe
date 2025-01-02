@@ -812,7 +812,6 @@ fn write_to_channel(socket: &OwnedFd, queue: &mut TransferQueue) -> Result<bool,
             nwritten -= v.len();
         } else {
             if let Some(ackmsg) = opt_whole_ack {
-                debug!("Early ack injection");
                 // only inject ack message after a complete message
                 if !injected_whole_ack && nwritten == 0 {
                     iovs.push(IoSlice::new(ackmsg));
@@ -830,7 +829,6 @@ fn write_to_channel(socket: &OwnedFd, queue: &mut TransferQueue) -> Result<bool,
 
     if let Some(ackmsg) = opt_whole_ack {
         // only inject ack message after a complete message
-        debug!("Late ack injection");
         if !injected_whole_ack && nwritten == 0 {
             iovs.push(IoSlice::new(ackmsg));
             injected_whole_ack = true;
