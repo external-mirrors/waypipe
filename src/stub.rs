@@ -183,12 +183,6 @@ mod dmabuf_stub {
         pub fn get_bpp(&self) -> usize {
             unreachable!();
         }
-        pub fn ideal_slice_data(self: &VulkanDmabuf, drm_format: u32) -> [u8; 64] {
-            unreachable!();
-        }
-        pub fn get_first_stride(data: [u8; 64]) -> u32 {
-            unreachable!();
-        }
     }
 
     impl VulkanTimelineSemaphore {
@@ -270,7 +264,7 @@ mod gbm_stub {
         pub fn nominal_size(&self, view_row_length: Option<u32>) -> usize {
             unreachable!();
         }
-        pub fn ideal_slice_data(&self) -> [u8; 64] {
+        pub fn get_bpp(&self) -> u32 {
             unreachable!();
         }
     }

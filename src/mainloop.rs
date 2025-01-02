@@ -1079,11 +1079,6 @@ pub fn translate_dmabuf_fd(
 
     debug!("Translating dmabuf fd");
 
-    /* For compatibility reasons, we act as-if the stride matches the official stride, even
-     * though it would probably be more efficient to perform diffs on a packed layout */
-    assert!(planes[0].plane_idx == 0);
-    let view_row_stride = Some(planes[0].stride);
-
     let (buf, video_encode) = match device {
         DmabufDevice::Unknown | DmabufDevice::Unavailable | DmabufDevice::VulkanSetup(_) => {
             unreachable!()
@@ -1144,7 +1139,8 @@ pub fn translate_dmabuf_fd(
             acquires: Vec::new(),
             releases: BTreeMap::new(),
             pending_apply_tasks: 0,
-            view_row_stride,
+            /* Use the optimal (packed) stride for fill/diff operations */
+            view_row_stride: None,
             debug_wayland_id: wayland_id,
         }),
     }));
@@ -1501,7 +1497,7 @@ fn process_sfd_msg(
 
             /* For compatibility reasons, will interpret dmabuf data diff/fill ops as having
              * linear layout with the specified stride */
-            let view_row_stride = Some(VulkanDmabuf::get_first_stride(
+            let view_row_stride = Some(dmabuf_slice_get_first_stride(
                 msg[12..76].try_into().unwrap(),
             ));
 
@@ -1583,8 +1579,8 @@ fn process_sfd_msg(
 
             /* For compatibility reasons, will interpret dmabuf data diff/fill ops as having
              * linear layout with the specified stride */
-            // TODO: need method to prevent diff/fill ops from conflicting with video
-            let view_row_stride = Some(VulkanDmabuf::get_first_stride(
+            // TODO: need method to prevent diff/fill ops from conflicting with video: is this even needed?
+            let view_row_stride = Some(dmabuf_slice_get_first_stride(
                 msg[12..76].try_into().unwrap(),
             ));
 
@@ -2133,17 +2129,23 @@ fn collect_updates(
                 };
 
                 if sfd.only_here {
-                    let msg2 = buf.ideal_slice_data(data.drm_format);
+                    let slice_data = dmabuf_slice_make_ideal(
+                        data.drm_format,
+                        buf.width as u32,
+                        buf.height as u32,
+                        buf.get_bpp() as u32,
+                    );
                     let vid_flags: u32 = 0xff & (opts.video.format.unwrap() as u32);
                     let msg = cat4x4(
-                        build_wmsg_header(WmsgType::OpenDMAVidDstV2, 16 + msg2.len()).to_le_bytes(),
+                        build_wmsg_header(WmsgType::OpenDMAVidDstV2, 16 + slice_data.len())
+                            .to_le_bytes(),
                         sfd.remote_id.0.to_le_bytes(),
                         (buf.nominal_size(data.view_row_stride) as u32).to_le_bytes(),
                         vid_flags.to_le_bytes(),
                     );
 
                     way_msg_output.other_messages.push(Vec::from(msg));
-                    way_msg_output.other_messages.push(Vec::from(msg2));
+                    way_msg_output.other_messages.push(Vec::from(slice_data));
                     sfd.only_here = false;
                 }
 
@@ -2185,11 +2187,17 @@ fn collect_updates(
 
             if sfd.only_here {
                 // Send creation message
-                let slice_data = match data.buf {
-                    DmabufImpl::Vulkan(ref vulk_buf) => vulk_buf.ideal_slice_data(data.drm_format),
-                    DmabufImpl::Gbm(ref gbm_buf) => gbm_buf.ideal_slice_data(),
+                let (width, height, bpp) = match data.buf {
+                    DmabufImpl::Vulkan(ref vulk_buf) => (
+                        vulk_buf.width as u32,
+                        vulk_buf.height as u32,
+                        vulk_buf.get_bpp() as u32,
+                    ),
+                    DmabufImpl::Gbm(ref gbm_buf) => {
+                        (gbm_buf.width, gbm_buf.height, gbm_buf.get_bpp())
+                    }
                 };
-
+                let slice_data = dmabuf_slice_make_ideal(data.drm_format, width, height, bpp);
                 let msg = cat3x4(
                     build_wmsg_header(WmsgType::OpenDMABUF, 12 + slice_data.len()).to_le_bytes(),
                     sfd.remote_id.0.to_le_bytes(),

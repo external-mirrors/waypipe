@@ -2486,11 +2486,11 @@ fn make_copy_regions(
                     prototype
                         .buffer_offset(mid_row_start as u64)
                         .image_offset(z.x(0).y(mid_start as i32))
-                        .image_extent(e.width(w).height(mid_end - mid_start + 1)),
+                        .image_extent(e.width(w).height(mid_end + 1 - mid_start)),
                 );
             }
             if end_pos < w {
-                let adv2 = mid_row_start + (row_length * (mid_end - mid_start + 1));
+                let adv2 = mid_row_start + (row_length * (mid_end + 1 - mid_start));
                 regions.push(
                     prototype
                         .buffer_offset(adv2 as u64)
@@ -2783,39 +2783,6 @@ impl VulkanDmabuf {
     pub fn get_bpp(&self) -> usize {
         let format_info = get_vulkan_info(self.vk_format);
         format_info.bpp
-    }
-
-    /* Provide contents of dmabuf_slice_data */
-    pub fn ideal_slice_data(self: &VulkanDmabuf, drm_format: u32) -> [u8; 64] {
-        let mut out = [0; 64];
-        out[0..4].copy_from_slice(&(self.width as u32).to_le_bytes());
-        out[4..8].copy_from_slice(&(self.height as u32).to_le_bytes());
-        out[8..12].copy_from_slice(&drm_format.to_le_bytes());
-        let nmemory_planes = self.memory_planes.len();
-        out[12..16].copy_from_slice(&(nmemory_planes as u32).to_le_bytes());
-
-        for i in 0..4 {
-            let (offset, stride) = if let Some((_mem, o, s)) = self.memory_planes.get(i) {
-                (*o, *s)
-            } else {
-                (0, 0)
-            };
-            out[16 + 4 * i..16 + 4 * (i + 1)].copy_from_slice(&offset.to_le_bytes());
-            out[32 + 4 * i..32 + 4 * (i + 1)].copy_from_slice(&stride.to_le_bytes());
-        }
-        let modifier: u64 = 0;
-        out[48..56].copy_from_slice(&modifier.to_le_bytes());
-
-        /* Originally used to track which planes correspond to which dmabuf;
-         * however, now multiplanar formats are handled as one dmabuf */
-        for i in 0..nmemory_planes {
-            out[56 + i] = 1;
-        }
-
-        out
-    }
-    pub fn get_first_stride(data: [u8; 64]) -> u32 {
-        u32::from_le_bytes(data[32..36].try_into().unwrap())
     }
 }
 

@@ -33,9 +33,6 @@ pub struct GBMDmabuf {
     pub width: u32,
     pub height: u32,
     pub format: u32,
-    /* Actual stride of the buffer */
-    stride: u32,
-    pub modifier: u64,
 }
 
 impl Drop for GBMDevice {
@@ -206,9 +203,7 @@ pub fn gbm_import_dmabuf(
             bo,
             width,
             height,
-            stride,
             format: drm_format,
-            modifier,
         })
     }
 }
@@ -284,8 +279,6 @@ pub fn gbm_create_dmabuf(
                 width,
                 height,
                 format,
-                stride,
-                modifier: actual_mod,
             },
             vec![AddDmabufPlane {
                 fd,
@@ -436,24 +429,8 @@ impl GBMDmabuf {
         }
     }
 
-    pub fn ideal_slice_data(&self) -> [u8; 64] {
-        // TODO: deduplicate with Vulkan
-        let mut out = [0; 64];
-        out[0..4].copy_from_slice(&self.width.to_le_bytes());
-        out[4..8].copy_from_slice(&self.height.to_le_bytes());
-        out[8..12].copy_from_slice(&self.format.to_le_bytes());
-        out[12..16].copy_from_slice(&1u32.to_le_bytes());
-
-        let offset = 0_u32;
-        out[16..20].copy_from_slice(&offset.to_le_bytes());
-        out[32..36].copy_from_slice(&self.stride.to_le_bytes());
-
-        /* This modifier is only ever used by waypipe-c */
-        out[48..56].copy_from_slice(&self.modifier.to_le_bytes());
-        /* Link plane to dmabuf */
-        out[56] = 1;
-
-        out
+    pub fn get_bpp(&self) -> u32 {
+        get_bpp_if_rgb_planar(self.format).unwrap()
     }
 }
 

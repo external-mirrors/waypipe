@@ -633,6 +633,33 @@ pub fn drm_open_render(minor: u32, rdrw: bool) -> Result<OwnedFd, String> {
     })
 }
 
+/** Provide contents of dmabuf_slice_data, pretending the buffer has a linear modifier
+ * and is tightly packed. */
+pub fn dmabuf_slice_make_ideal(drm_format: u32, width: u32, height: u32, bpp: u32) -> [u8; 64] {
+    let mut out = [0; 64];
+    out[0..4].copy_from_slice(&width.to_le_bytes());
+    out[4..8].copy_from_slice(&height.to_le_bytes());
+    out[8..12].copy_from_slice(&drm_format.to_le_bytes());
+    out[12..16].copy_from_slice(&1u32.to_le_bytes());
+
+    let offset = 0_u32;
+    out[16..20].copy_from_slice(&offset.to_le_bytes());
+    let stride = width.checked_mul(bpp).unwrap();
+    out[32..36].copy_from_slice(&stride.to_le_bytes());
+
+    /* This modifier is only ever used by waypipe-c to decide what buffer type to create */
+    out[48..56].copy_from_slice(&0_u64.to_le_bytes());
+    /* Link plane to dmabuf */
+    out[56] = 1;
+
+    out
+}
+
+/** Get the stride from a dmabuf_slice_data; waypipe-c will interpret this as the nominal stride. */
+pub fn dmabuf_slice_get_first_stride(data: [u8; 64]) -> u32 {
+    u32::from_le_bytes(data[32..36].try_into().unwrap())
+}
+
 /** Set the close-on-exec flag for a file descriptor */
 pub fn set_cloexec(fd: &OwnedFd, cloexec: bool) -> Result<(), String> {
     fcntl::fcntl(
