@@ -816,10 +816,6 @@ fn setup_vulkan(device_id: u64) -> Result<Arc<VulkanDevice>, String> {
     ))
 }
 
-fn get_intf_name(intf: WaylandInterface) -> &'static [u8] {
-    INTERFACE_TABLE[intf as usize].name.as_bytes()
-}
-
 fn make_file_with_contents(data: &[u8]) -> Result<OwnedFd, String> {
     let local_fd = memfd::memfd_create(
         c"/waypipe",
@@ -964,7 +960,7 @@ fn proto_basic(info: TestInfo) -> TestResult {
         assert!(resp.concat() == write_prog);
 
         let write_comp = build_msgs(|dst| {
-            write_evt_wl_registry_global(dst, ObjId(2), 1, "wl_compositor".as_bytes(), 3);
+            write_evt_wl_registry_global(dst, ObjId(2), 1, WL_COMPOSITOR, 3);
             write_evt_wl_callback_done(dst, ObjId(3), 0);
         });
         assert!(is_plain_msgs(ctx.comp_write(&write_comp, &[]), write_comp));
@@ -1018,12 +1014,12 @@ fn proto_keymap(info: TestInfo) -> TestResult {
             }));
 
             ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_wl_registry_global(dst, registry, 1, "wl_seat".as_bytes(), 7);
+                write_evt_wl_registry_global(dst, registry, 1, WL_SEAT, 7);
                 write_evt_wl_callback_done(dst, callback, 0);
             }));
 
             ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_wl_registry_bind(dst, registry, 1, "wl_seat".as_bytes(), 7, seat);
+                write_req_wl_registry_bind(dst, registry, 1, WL_SEAT, 7, seat);
             }));
 
             ctx.comp_write_passthrough(build_msgs(|dst| {
@@ -1082,19 +1078,12 @@ fn proto_gamma_control(info: TestInfo) -> TestResult {
             write_req_wl_display_get_registry(dst, display, registry);
         }));
         ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_registry_global(dst, registry, 1, b"wl_output", 4);
-            write_evt_wl_registry_global(dst, registry, 1, b"zwlr_gamma_control_manager_v1", 1);
+            write_evt_wl_registry_global(dst, registry, 1, WL_OUTPUT, 4);
+            write_evt_wl_registry_global(dst, registry, 1, ZWLR_GAMMA_CONTROL_MANAGER_V1, 1);
         }));
         ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_wl_registry_bind(dst, registry, 1, b"wl_output", 4, output);
-            write_req_wl_registry_bind(
-                dst,
-                registry,
-                1,
-                b"zwlr_gamma_control_manager_v1",
-                1,
-                manager,
-            );
+            write_req_wl_registry_bind(dst, registry, 1, WL_OUTPUT, 4, output);
+            write_req_wl_registry_bind(dst, registry, 1, ZWLR_GAMMA_CONTROL_MANAGER_V1, 1, manager);
             write_req_zwlr_gamma_control_manager_v1_get_gamma_control(dst, manager, gamma, output);
         }));
 
@@ -1144,16 +1133,16 @@ fn proto_gamma_control(info: TestInfo) -> TestResult {
                 write_req_wl_display_get_registry(dst, display, registry);
             }));
             ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_wl_registry_global(dst, registry, 1, b"wl_output", 4);
-                write_evt_wl_registry_global(dst, registry, 1, b"zwlr_gamma_control_manager_v1", 1);
+                write_evt_wl_registry_global(dst, registry, 1, WL_OUTPUT, 4);
+                write_evt_wl_registry_global(dst, registry, 1, ZWLR_GAMMA_CONTROL_MANAGER_V1, 1);
             }));
             ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_wl_registry_bind(dst, registry, 1, b"wl_output", 4, output);
+                write_req_wl_registry_bind(dst, registry, 1, WL_OUTPUT, 4, output);
                 write_req_wl_registry_bind(
                     dst,
                     registry,
                     1,
-                    b"zwlr_gamma_control_manager_v1",
+                    ZWLR_GAMMA_CONTROL_MANAGER_V1,
                     1,
                     manager,
                 );
@@ -1279,12 +1268,12 @@ fn check_pipe_transfer(pipe_w: OwnedFd, pipe_r: OwnedFd, data: &[u8]) {
 fn proto_pipe_write(info: TestInfo) -> TestResult {
     let (display, registry, manager, seat, dev, source) =
         (ObjId(1), ObjId(2), ObjId(3), ObjId(4), ObjId(5), ObjId(6));
-    let seat_name = get_intf_name(WaylandInterface::WlSeat);
-    let ddev_name = get_intf_name(WaylandInterface::WlDataDeviceManager);
-    let prim_name = get_intf_name(WaylandInterface::ZwpPrimarySelectionDeviceManagerV1);
-    let data_name = get_intf_name(WaylandInterface::ExtDataControlManagerV1);
-    let gtk_name = get_intf_name(WaylandInterface::GtkPrimarySelectionDeviceManager);
-    let wlr_name = get_intf_name(WaylandInterface::ZwlrDataControlManagerV1);
+    let seat_name = WL_SEAT;
+    let ddev_name = WL_DATA_DEVICE_MANAGER;
+    let prim_name = ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1;
+    let data_name = EXT_DATA_CONTROL_MANAGER_V1;
+    let gtk_name = GTK_PRIMARY_SELECTION_DEVICE_MANAGER;
+    let wlr_name = ZWLR_DATA_CONTROL_MANAGER_V1;
     let mime = "text/plain;charset=utf-8".as_bytes();
 
     /* Protocol sequences leading to a pipe receipt; in all cases the pipe is provided with the last message */
@@ -1559,15 +1548,15 @@ fn proto_presentation_time(info: TestInfo) -> TestResult {
             }));
 
             ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_wl_registry_global(dst, registry, 1, "wp_presentation".as_bytes(), 1);
-                write_evt_wl_registry_global(dst, registry, 2, "wl_compositor".as_bytes(), 1);
+                write_evt_wl_registry_global(dst, registry, 1, WP_PRESENTATION, 1);
+                write_evt_wl_registry_global(dst, registry, 2, WL_COMPOSITOR, 1);
             }));
 
             let start = Instant::now();
 
             ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_wl_registry_bind(dst, registry, 1, "wp_presentation".as_bytes(), 1, pres);
-                write_req_wl_registry_bind(dst, registry, 2, "wl_compositor".as_bytes(), 1, comp);
+                write_req_wl_registry_bind(dst, registry, 1, WP_PRESENTATION, 1, pres);
+                write_req_wl_registry_bind(dst, registry, 2, WL_COMPOSITOR, 1, comp);
                 write_req_wl_compositor_create_surface(dst, comp, surface);
                 write_req_wl_surface_damage(dst, surface, 0, 0, 64, 64);
                 if fast_start {
@@ -1657,21 +1646,21 @@ fn proto_commit_timing(info: TestInfo) -> TestResult {
             }));
 
             ctx.comp_write_passthrough(build_msgs(|dst| {
-                write_evt_wl_registry_global(dst, registry, 1, b"wp_presentation", 1);
-                write_evt_wl_registry_global(dst, registry, 2, b"wp_commit_timing_manager_v1", 1);
-                write_evt_wl_registry_global(dst, registry, 3, b"wl_compositor", 1);
+                write_evt_wl_registry_global(dst, registry, 1, WP_PRESENTATION, 1);
+                write_evt_wl_registry_global(dst, registry, 2, WP_COMMIT_TIMING_MANAGER_V1, 1);
+                write_evt_wl_registry_global(dst, registry, 3, WL_COMPOSITOR, 1);
             }));
 
             let start = Instant::now();
 
             ctx.prog_write_passthrough(build_msgs(|dst| {
-                write_req_wl_registry_bind(dst, registry, 1, b"wp_presentation", 1, pres);
-                write_req_wl_registry_bind(dst, registry, 3, b"wl_compositor", 1, comp);
+                write_req_wl_registry_bind(dst, registry, 1, WP_PRESENTATION, 1, pres);
+                write_req_wl_registry_bind(dst, registry, 3, WL_COMPOSITOR, 1, comp);
                 write_req_wl_registry_bind(
                     dst,
                     registry,
                     2,
-                    b"wp_commit_timing_manager_v1",
+                    WP_COMMIT_TIMING_MANAGER_V1,
                     1,
                     manager,
                 );
@@ -1764,13 +1753,13 @@ fn proto_shm_buffer(info: TestInfo) -> TestResult {
         }));
 
         ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_registry_global(dst, registry, 1, "wl_shm".as_bytes(), 2);
-            write_evt_wl_registry_global(dst, registry, 2, "wl_compositor".as_bytes(), 6);
+            write_evt_wl_registry_global(dst, registry, 1, WL_SHM, 2);
+            write_evt_wl_registry_global(dst, registry, 2, WL_COMPOSITOR, 6);
         }));
 
         ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_wl_registry_bind(dst, registry, 1, "wl_shm".as_bytes(), 2, shm);
-            write_req_wl_registry_bind(dst, registry, 2, "wl_compositor".as_bytes(), 6, comp);
+            write_req_wl_registry_bind(dst, registry, 1, WL_SHM, 2, shm);
+            write_req_wl_registry_bind(dst, registry, 2, WL_COMPOSITOR, 6, comp);
             write_req_wl_compositor_create_surface(dst, comp, surface);
         }));
 
@@ -1863,15 +1852,15 @@ fn proto_shm_extend(info: TestInfo) -> TestResult {
         }));
 
         ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_registry_global(dst, registry, 1, "wl_shm".as_bytes(), 2);
-            write_evt_wl_registry_global(dst, registry, 2, "wl_compositor".as_bytes(), 6);
+            write_evt_wl_registry_global(dst, registry, 1, WL_SHM, 2);
+            write_evt_wl_registry_global(dst, registry, 2, WL_COMPOSITOR, 6);
         }));
 
         let pool_fd = make_file_with_contents(&[]).unwrap();
 
         let msg = build_msgs(|dst| {
-            write_req_wl_registry_bind(dst, registry, 1, "wl_shm".as_bytes(), 2, shm);
-            write_req_wl_registry_bind(dst, registry, 2, "wl_compositor".as_bytes(), 6, comp);
+            write_req_wl_registry_bind(dst, registry, 1, WL_SHM, 2, shm);
+            write_req_wl_registry_bind(dst, registry, 2, WL_COMPOSITOR, 6, comp);
             write_req_wl_compositor_create_surface(dst, comp, surface);
             write_req_wl_shm_create_pool(dst, shm, false, pool, 0);
         });
@@ -2066,20 +2055,13 @@ fn setup_linux_dmabuf(
     }));
 
     ctx.comp_write_passthrough(build_msgs(|dst| {
-        write_evt_wl_registry_global(dst, registry, 1, "zwp_linux_dmabuf_v1".as_bytes(), 5);
-        write_evt_wl_registry_global(dst, registry, 2, "wl_compositor".as_bytes(), 6);
+        write_evt_wl_registry_global(dst, registry, 1, ZWP_LINUX_DMABUF_V1, 5);
+        write_evt_wl_registry_global(dst, registry, 2, WL_COMPOSITOR, 6);
     }));
 
     ctx.prog_write_passthrough(build_msgs(|dst| {
-        write_req_wl_registry_bind(
-            dst,
-            registry,
-            1,
-            "zwp_linux_dmabuf_v1".as_bytes(),
-            5,
-            dmabuf,
-        );
-        write_req_wl_registry_bind(dst, registry, 2, "wl_compositor".as_bytes(), 6, comp);
+        write_req_wl_registry_bind(dst, registry, 1, ZWP_LINUX_DMABUF_V1, 5, dmabuf);
+        write_req_wl_registry_bind(dst, registry, 2, WL_COMPOSITOR, 6, comp);
         write_req_wl_compositor_create_surface(dst, comp, surface);
         write_req_zwp_linux_dmabuf_v1_get_default_feedback(dst, dmabuf, feedback);
     }));
@@ -2636,13 +2618,13 @@ fn proto_shm_damage(info: TestInfo) -> TestResult {
         }));
 
         ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_registry_global(dst, registry, 1, "wl_shm".as_bytes(), 2);
-            write_evt_wl_registry_global(dst, registry, 2, "wl_compositor".as_bytes(), 6);
+            write_evt_wl_registry_global(dst, registry, 1, WL_SHM, 2);
+            write_evt_wl_registry_global(dst, registry, 2, WL_COMPOSITOR, 6);
         }));
 
         ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_wl_registry_bind(dst, registry, 1, "wl_shm".as_bytes(), 2, shm);
-            write_req_wl_registry_bind(dst, registry, 2, "wl_compositor".as_bytes(), 6, comp);
+            write_req_wl_registry_bind(dst, registry, 1, WL_SHM, 2, shm);
+            write_req_wl_registry_bind(dst, registry, 2, WL_COMPOSITOR, 6, comp);
             write_req_wl_compositor_create_surface(dst, comp, surface);
         }));
 
@@ -2893,20 +2875,14 @@ fn proto_explicit_sync(info: TestInfo, device: RenderDevice) -> TestResult {
             &mut ctx, &vulk, display, registry, dmabuf, comp, surface, feedback,
         );
         ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_registry_global(
-                dst,
-                registry,
-                3,
-                "wp_linux_drm_syncobj_manager_v1".as_bytes(),
-                1,
-            );
+            write_evt_wl_registry_global(dst, registry, 3, WP_LINUX_DRM_SYNCOBJ_MANAGER_V1, 1);
         }));
         let msg = build_msgs(|dst| {
             write_req_wl_registry_bind(
                 dst,
                 registry,
                 3,
-                "wp_linux_drm_syncobj_manager_v1".as_bytes(),
+                WP_LINUX_DRM_SYNCOBJ_MANAGER_V1,
                 1,
                 manager,
             );
@@ -3056,10 +3032,10 @@ fn proto_many_fds(info: TestInfo) -> TestResult {
             write_req_wl_display_get_registry(dst, display, registry);
         }));
         ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_registry_global(dst, registry, 1, "wl_seat".as_bytes(), 7);
+            write_evt_wl_registry_global(dst, registry, 1, WL_SEAT, 7);
         }));
         ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_wl_registry_bind(dst, registry, 1, "wl_seat".as_bytes(), 7, seat);
+            write_req_wl_registry_bind(dst, registry, 1, WL_SEAT, 7, seat);
         }));
         ctx.comp_write_passthrough(build_msgs(|dst| {
             write_evt_wl_seat_capabilities(dst, seat, 3);
@@ -3114,26 +3090,12 @@ fn proto_title_prefix(info: TestInfo) -> TestResult {
                     write_req_wl_display_get_registry(dst, display, reg);
                 }));
                 ctx.comp_write_passthrough(build_msgs(|dst| {
-                    write_evt_wl_registry_global(dst, reg, 1, "wl_compositor".as_bytes(), 6);
-                    write_evt_wl_registry_global(dst, reg, 2, "xdg_wm_base".as_bytes(), 6);
+                    write_evt_wl_registry_global(dst, reg, 1, WL_COMPOSITOR, 6);
+                    write_evt_wl_registry_global(dst, reg, 2, XDG_WM_BASE, 6);
                 }));
                 ctx.prog_write_passthrough(build_msgs(|dst| {
-                    write_req_wl_registry_bind(
-                        dst,
-                        reg,
-                        1,
-                        "wl_compositor".as_bytes(),
-                        6,
-                        compositor,
-                    );
-                    write_req_wl_registry_bind(
-                        dst,
-                        reg,
-                        2,
-                        "xdg_wm_base".as_bytes(),
-                        6,
-                        xdg_wm_base,
-                    );
+                    write_req_wl_registry_bind(dst, reg, 1, WL_COMPOSITOR, 6, compositor);
+                    write_req_wl_registry_bind(dst, reg, 2, XDG_WM_BASE, 6, xdg_wm_base);
                     write_req_wl_compositor_create_surface(dst, compositor, wl_surf);
                     write_req_xdg_wm_base_get_xdg_surface(dst, xdg_wm_base, xdg_surf, wl_surf);
                     write_req_xdg_surface_get_toplevel(dst, xdg_surf, toplevel);
@@ -3259,27 +3221,21 @@ fn proto_screencopy_shm(info: TestInfo, style: ScreencopyType) -> TestResult {
         ctx.prog_write_passthrough(build_msgs(|dst| {
             write_req_wl_display_get_registry(dst, display, reg);
         }));
-        let scrcopy_name = "zwlr_screencopy_manager_v1".as_bytes();
+        let scrcopy_name = ZWLR_SCREENCOPY_MANAGER_V1;
         ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_registry_global(dst, reg, 1, "wl_shm".as_bytes(), 2);
-            write_evt_wl_registry_global(dst, reg, 2, "wl_output".as_bytes(), 4);
+            write_evt_wl_registry_global(dst, reg, 1, WL_SHM, 2);
+            write_evt_wl_registry_global(dst, reg, 2, WL_OUTPUT, 4);
             match style {
                 ScreencopyType::WlrScreencopy => {
                     write_evt_wl_registry_global(dst, reg, 3, scrcopy_name, 3);
                 }
                 ScreencopyType::ExtImageCopyCapture => {
-                    write_evt_wl_registry_global(
-                        dst,
-                        reg,
-                        3,
-                        b"ext_image_copy_capture_manager_v1",
-                        1,
-                    );
+                    write_evt_wl_registry_global(dst, reg, 3, EXT_IMAGE_COPY_CAPTURE_MANAGER_V1, 1);
                     write_evt_wl_registry_global(
                         dst,
                         reg,
                         4,
-                        b"ext_output_image_capture_source_manager_v1",
+                        EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
                         1,
                     );
                 }
@@ -3296,8 +3252,8 @@ fn proto_screencopy_shm(info: TestInfo, style: ScreencopyType) -> TestResult {
         let shm_fd = make_file_with_contents(&seed_contents).unwrap();
 
         let setup = build_msgs(|dst| {
-            write_req_wl_registry_bind(dst, reg, 1, "wl_shm".as_bytes(), 2, shm);
-            write_req_wl_registry_bind(dst, reg, 2, "wl_output".as_bytes(), 4, output);
+            write_req_wl_registry_bind(dst, reg, 1, WL_SHM, 2, shm);
+            write_req_wl_registry_bind(dst, reg, 2, WL_OUTPUT, 4, output);
             match style {
                 ScreencopyType::WlrScreencopy => {
                     write_req_wl_registry_bind(dst, reg, 3, scrcopy_name, 3, screencopy)
@@ -3306,7 +3262,7 @@ fn proto_screencopy_shm(info: TestInfo, style: ScreencopyType) -> TestResult {
                     dst,
                     reg,
                     3,
-                    b"ext_image_copy_capture_manager_v1",
+                    EXT_IMAGE_COPY_CAPTURE_MANAGER_V1,
                     1,
                     screencopy,
                 ),
@@ -3352,7 +3308,7 @@ fn proto_screencopy_shm(info: TestInfo, style: ScreencopyType) -> TestResult {
                         dst,
                         reg,
                         4,
-                        b"ext_output_image_capture_source_manager_v1",
+                        EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
                         1,
                         capture_manager,
                     );
@@ -3550,36 +3506,30 @@ fn proto_screencopy_dmabuf(
         ctx.prog_write_passthrough(build_msgs(|dst| {
             write_req_wl_display_get_registry(dst, display, reg);
         }));
-        let scrcopy_name = "zwlr_screencopy_manager_v1".as_bytes();
+        let scrcopy_name = ZWLR_SCREENCOPY_MANAGER_V1;
         ctx.comp_write_passthrough(build_msgs(|dst| {
-            write_evt_wl_registry_global(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3);
-            write_evt_wl_registry_global(dst, reg, 2, "wl_output".as_bytes(), 4);
+            write_evt_wl_registry_global(dst, reg, 1, ZWP_LINUX_DMABUF_V1, 3);
+            write_evt_wl_registry_global(dst, reg, 2, WL_OUTPUT, 4);
             match style {
                 ScreencopyType::WlrScreencopy => {
                     write_evt_wl_registry_global(dst, reg, 3, scrcopy_name, 3)
                 }
                 ScreencopyType::ExtImageCopyCapture => {
-                    write_evt_wl_registry_global(
-                        dst,
-                        reg,
-                        3,
-                        b"ext_image_copy_capture_manager_v1",
-                        1,
-                    );
+                    write_evt_wl_registry_global(dst, reg, 3, EXT_IMAGE_COPY_CAPTURE_MANAGER_V1, 1);
                     write_evt_wl_registry_global(
                         dst,
                         reg,
                         4,
-                        b"ext_output_image_capture_source_manager_v1",
+                        EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
                         1,
                     );
                 }
             }
         }));
         ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_wl_registry_bind(dst, reg, 1, "zwp_linux_dmabuf_v1".as_bytes(), 3, dmabuf);
+            write_req_wl_registry_bind(dst, reg, 1, ZWP_LINUX_DMABUF_V1, 3, dmabuf);
             write_req_zwp_linux_dmabuf_v1_get_default_feedback(dst, dmabuf, feedback);
-            write_req_wl_registry_bind(dst, reg, 2, "wl_output".as_bytes(), 4, output);
+            write_req_wl_registry_bind(dst, reg, 2, WL_OUTPUT, 4, output);
             match style {
                 ScreencopyType::WlrScreencopy => {
                     write_req_wl_registry_bind(dst, reg, 3, scrcopy_name, 3, screencopy);
@@ -3592,7 +3542,7 @@ fn proto_screencopy_dmabuf(
                         dst,
                         reg,
                         3,
-                        b"ext_image_copy_capture_manager_v1",
+                        EXT_IMAGE_COPY_CAPTURE_MANAGER_V1,
                         1,
                         screencopy,
                     );
@@ -3600,7 +3550,7 @@ fn proto_screencopy_dmabuf(
                         dst,
                         reg,
                         4,
-                        b"ext_output_image_capture_source_manager_v1",
+                        EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
                         1,
                         capture_manager,
                     );

@@ -522,7 +522,7 @@ def process_interface(interface, uid, write):
                 write("#[derive(Debug,Clone,Copy,PartialEq,Eq)]")
                 write_enum(unsnake(enum_name), names, values, do_try, write)
 
-    write("const " + iface_name.upper() + ": WaylandData = WaylandData {")
+    write("const " + "DATA_" + iface_name.upper() + ": WaylandData = WaylandData {")
 
     write('    name: "' + iface_name + '",')
     if evts:
@@ -549,6 +549,13 @@ def process_interface(interface, uid, write):
         write("    reqs: &[],")
     write("    version: " + iface_version + ",")
     write("};")
+    write(
+        "pub const "
+        + iface_name.upper()
+        + ": &[u8] = DATA_"
+        + iface_name.upper()
+        + ".name.as_bytes();"
+    )
 
     if False:
         if evts:
@@ -605,7 +612,7 @@ if __name__ == "__main__":
 
         write("pub const  INTERFACE_TABLE : &[WaylandData] = &[")
         for i, intf in enumerate(sorted(interfaces)):
-            write("    {},".format(intf.upper()))
+            write("    {},".format("DATA_" + intf.upper()))
         write("];")
 
     if handled_enums or handled_funcs:

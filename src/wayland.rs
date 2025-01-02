@@ -38,6 +38,8 @@ pub struct WaylandMethod {
 // In particular: unify the event/req tables, by making them use an index
 // into a global table, placing events at coordinates x+0,x+1,x+2..., and placing
 // requests at coordinates x-1,x-2,x-3...
+
+/** Data for a Wayland interface. */
 pub struct WaylandData {
     pub name: &'static str,
     pub evts: &'static [WaylandMethod],

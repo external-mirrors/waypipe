@@ -30,7 +30,7 @@ pub fn parse_req_wp_commit_timing_manager_v1_get_timer<'a>(
     Ok((arg1, arg2))
 }
 pub const OPCODE_WP_COMMIT_TIMING_MANAGER_V1_GET_TIMER: MethodId = MethodId::Request(1);
-const WP_COMMIT_TIMING_MANAGER_V1: WaylandData = WaylandData {
+const DATA_WP_COMMIT_TIMING_MANAGER_V1: WaylandData = WaylandData {
     name: "wp_commit_timing_manager_v1",
     evts: &[],
     reqs: &[
@@ -47,6 +47,7 @@ const WP_COMMIT_TIMING_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const WP_COMMIT_TIMING_MANAGER_V1: &[u8] = DATA_WP_COMMIT_TIMING_MANAGER_V1.name.as_bytes();
 pub fn write_req_wp_commit_timer_v1_set_timestamp(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -76,7 +77,7 @@ pub fn parse_req_wp_commit_timer_v1_set_timestamp<'a>(
     Ok((arg1, arg2, arg3))
 }
 pub const OPCODE_WP_COMMIT_TIMER_V1_SET_TIMESTAMP: MethodId = MethodId::Request(0);
-const WP_COMMIT_TIMER_V1: WaylandData = WaylandData {
+const DATA_WP_COMMIT_TIMER_V1: WaylandData = WaylandData {
     name: "wp_commit_timer_v1",
     evts: &[],
     reqs: &[
@@ -93,6 +94,7 @@ const WP_COMMIT_TIMER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const WP_COMMIT_TIMER_V1: &[u8] = DATA_WP_COMMIT_TIMER_V1.name.as_bytes();
 pub fn write_req_ext_data_control_manager_v1_create_data_source(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -142,7 +144,7 @@ pub fn parse_req_ext_data_control_manager_v1_get_data_device<'a>(
     Ok((arg1, arg2))
 }
 pub const OPCODE_EXT_DATA_CONTROL_MANAGER_V1_GET_DATA_DEVICE: MethodId = MethodId::Request(1);
-const EXT_DATA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
+const DATA_EXT_DATA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
     name: "ext_data_control_manager_v1",
     evts: &[],
     reqs: &[
@@ -164,6 +166,7 @@ const EXT_DATA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const EXT_DATA_CONTROL_MANAGER_V1: &[u8] = DATA_EXT_DATA_CONTROL_MANAGER_V1.name.as_bytes();
 pub fn write_req_ext_data_control_device_v1_set_selection(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -233,7 +236,7 @@ pub fn parse_evt_ext_data_control_device_v1_selection<'a>(
     Ok(arg1)
 }
 pub const OPCODE_EXT_DATA_CONTROL_DEVICE_V1_SELECTION: MethodId = MethodId::Event(1);
-const EXT_DATA_CONTROL_DEVICE_V1: WaylandData = WaylandData {
+const DATA_EXT_DATA_CONTROL_DEVICE_V1: WaylandData = WaylandData {
     name: "ext_data_control_device_v1",
     evts: &[
         WaylandMethod {
@@ -276,6 +279,7 @@ const EXT_DATA_CONTROL_DEVICE_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const EXT_DATA_CONTROL_DEVICE_V1: &[u8] = DATA_EXT_DATA_CONTROL_DEVICE_V1.name.as_bytes();
 pub fn write_req_ext_data_control_source_v1_offer(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -327,7 +331,7 @@ pub fn parse_evt_ext_data_control_source_v1_send<'a>(
     Ok(arg1)
 }
 pub const OPCODE_EXT_DATA_CONTROL_SOURCE_V1_SEND: MethodId = MethodId::Event(0);
-const EXT_DATA_CONTROL_SOURCE_V1: WaylandData = WaylandData {
+const DATA_EXT_DATA_CONTROL_SOURCE_V1: WaylandData = WaylandData {
     name: "ext_data_control_source_v1",
     evts: &[
         WaylandMethod {
@@ -355,6 +359,7 @@ const EXT_DATA_CONTROL_SOURCE_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const EXT_DATA_CONTROL_SOURCE_V1: &[u8] = DATA_EXT_DATA_CONTROL_SOURCE_V1.name.as_bytes();
 pub fn write_req_ext_data_control_offer_v1_receive(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -406,7 +411,7 @@ pub fn parse_evt_ext_data_control_offer_v1_offer<'a>(
     Ok(arg1)
 }
 pub const OPCODE_EXT_DATA_CONTROL_OFFER_V1_OFFER: MethodId = MethodId::Event(0);
-const EXT_DATA_CONTROL_OFFER_V1: WaylandData = WaylandData {
+const DATA_EXT_DATA_CONTROL_OFFER_V1: WaylandData = WaylandData {
     name: "ext_data_control_offer_v1",
     evts: &[WaylandMethod {
         name: "offer",
@@ -427,7 +432,8 @@ const EXT_DATA_CONTROL_OFFER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const EXT_FOREIGN_TOPLEVEL_LIST_V1: WaylandData = WaylandData {
+pub const EXT_DATA_CONTROL_OFFER_V1: &[u8] = DATA_EXT_DATA_CONTROL_OFFER_V1.name.as_bytes();
+const DATA_EXT_FOREIGN_TOPLEVEL_LIST_V1: WaylandData = WaylandData {
     name: "ext_foreign_toplevel_list_v1",
     evts: &[
         WaylandMethod {
@@ -455,7 +461,8 @@ const EXT_FOREIGN_TOPLEVEL_LIST_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const EXT_FOREIGN_TOPLEVEL_HANDLE_V1: WaylandData = WaylandData {
+pub const EXT_FOREIGN_TOPLEVEL_LIST_V1: &[u8] = DATA_EXT_FOREIGN_TOPLEVEL_LIST_V1.name.as_bytes();
+const DATA_EXT_FOREIGN_TOPLEVEL_HANDLE_V1: WaylandData = WaylandData {
     name: "ext_foreign_toplevel_handle_v1",
     evts: &[
         WaylandMethod {
@@ -491,7 +498,9 @@ const EXT_FOREIGN_TOPLEVEL_HANDLE_V1: WaylandData = WaylandData {
     }],
     version: 1,
 };
-const EXT_IMAGE_CAPTURE_SOURCE_V1: WaylandData = WaylandData {
+pub const EXT_FOREIGN_TOPLEVEL_HANDLE_V1: &[u8] =
+    DATA_EXT_FOREIGN_TOPLEVEL_HANDLE_V1.name.as_bytes();
+const DATA_EXT_IMAGE_CAPTURE_SOURCE_V1: WaylandData = WaylandData {
     name: "ext_image_capture_source_v1",
     evts: &[],
     reqs: &[WaylandMethod {
@@ -501,6 +510,7 @@ const EXT_IMAGE_CAPTURE_SOURCE_V1: WaylandData = WaylandData {
     }],
     version: 1,
 };
+pub const EXT_IMAGE_CAPTURE_SOURCE_V1: &[u8] = DATA_EXT_IMAGE_CAPTURE_SOURCE_V1.name.as_bytes();
 pub fn write_req_ext_output_image_capture_source_manager_v1_create_source(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -528,7 +538,7 @@ pub fn parse_req_ext_output_image_capture_source_manager_v1_create_source<'a>(
 }
 pub const OPCODE_EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1_CREATE_SOURCE: MethodId =
     MethodId::Request(0);
-const EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1: WaylandData = WaylandData {
+const DATA_EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1: WaylandData = WaylandData {
     name: "ext_output_image_capture_source_manager_v1",
     evts: &[],
     reqs: &[
@@ -545,7 +555,11 @@ const EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const EXT_FOREIGN_TOPLEVEL_IMAGE_CAPTURE_SOURCE_MANAGER_V1: WaylandData = WaylandData {
+pub const EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1: &[u8] =
+    DATA_EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1
+        .name
+        .as_bytes();
+const DATA_EXT_FOREIGN_TOPLEVEL_IMAGE_CAPTURE_SOURCE_MANAGER_V1: WaylandData = WaylandData {
     name: "ext_foreign_toplevel_image_capture_source_manager_v1",
     evts: &[],
     reqs: &[
@@ -565,6 +579,10 @@ const EXT_FOREIGN_TOPLEVEL_IMAGE_CAPTURE_SOURCE_MANAGER_V1: WaylandData = Waylan
     ],
     version: 1,
 };
+pub const EXT_FOREIGN_TOPLEVEL_IMAGE_CAPTURE_SOURCE_MANAGER_V1: &[u8] =
+    DATA_EXT_FOREIGN_TOPLEVEL_IMAGE_CAPTURE_SOURCE_MANAGER_V1
+        .name
+        .as_bytes();
 pub fn write_req_ext_image_copy_capture_manager_v1_create_session(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -594,7 +612,7 @@ pub fn parse_req_ext_image_copy_capture_manager_v1_create_session<'a>(
     Ok((arg1, arg2, arg3))
 }
 pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_CREATE_SESSION: MethodId = MethodId::Request(0);
-const EXT_IMAGE_COPY_CAPTURE_MANAGER_V1: WaylandData = WaylandData {
+const DATA_EXT_IMAGE_COPY_CAPTURE_MANAGER_V1: WaylandData = WaylandData {
     name: "ext_image_copy_capture_manager_v1",
     evts: &[],
     reqs: &[
@@ -624,6 +642,8 @@ const EXT_IMAGE_COPY_CAPTURE_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const EXT_IMAGE_COPY_CAPTURE_MANAGER_V1: &[u8] =
+    DATA_EXT_IMAGE_COPY_CAPTURE_MANAGER_V1.name.as_bytes();
 pub fn write_evt_ext_image_copy_capture_session_v1_buffer_size(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -781,7 +801,7 @@ pub fn parse_req_ext_image_copy_capture_session_v1_destroy<'a>(
     Ok(())
 }
 pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DESTROY: MethodId = MethodId::Request(1);
-const EXT_IMAGE_COPY_CAPTURE_SESSION_V1: WaylandData = WaylandData {
+const DATA_EXT_IMAGE_COPY_CAPTURE_SESSION_V1: WaylandData = WaylandData {
     name: "ext_image_copy_capture_session_v1",
     evts: &[
         WaylandMethod {
@@ -829,6 +849,8 @@ const EXT_IMAGE_COPY_CAPTURE_SESSION_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const EXT_IMAGE_COPY_CAPTURE_SESSION_V1: &[u8] =
+    DATA_EXT_IMAGE_COPY_CAPTURE_SESSION_V1.name.as_bytes();
 pub fn write_req_ext_image_copy_capture_frame_v1_destroy(dst: &mut &mut [u8], for_id: ObjId) {
     let l = length_req_ext_image_copy_capture_frame_v1_destroy();
     write_header(dst, for_id, l, 0, 0);
@@ -984,7 +1006,7 @@ pub fn parse_evt_ext_image_copy_capture_frame_v1_failed<'a>(
     Ok(arg1)
 }
 pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILED: MethodId = MethodId::Event(4);
-const EXT_IMAGE_COPY_CAPTURE_FRAME_V1: WaylandData = WaylandData {
+const DATA_EXT_IMAGE_COPY_CAPTURE_FRAME_V1: WaylandData = WaylandData {
     name: "ext_image_copy_capture_frame_v1",
     evts: &[
         WaylandMethod {
@@ -1037,6 +1059,8 @@ const EXT_IMAGE_COPY_CAPTURE_FRAME_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const EXT_IMAGE_COPY_CAPTURE_FRAME_V1: &[u8] =
+    DATA_EXT_IMAGE_COPY_CAPTURE_FRAME_V1.name.as_bytes();
 pub fn write_req_ext_image_copy_capture_cursor_session_v1_get_capture_session(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -1061,7 +1085,7 @@ pub fn parse_req_ext_image_copy_capture_cursor_session_v1_get_capture_session<'a
 }
 pub const OPCODE_EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1_GET_CAPTURE_SESSION: MethodId =
     MethodId::Request(1);
-const EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1: WaylandData = WaylandData {
+const DATA_EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1: WaylandData = WaylandData {
     name: "ext_image_copy_capture_cursor_session_v1",
     evts: &[
         WaylandMethod {
@@ -1099,6 +1123,10 @@ const EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1: &[u8] =
+    DATA_EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1
+        .name
+        .as_bytes();
 pub fn write_req_gtk_primary_selection_device_manager_create_source(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -1149,7 +1177,7 @@ pub fn parse_req_gtk_primary_selection_device_manager_get_device<'a>(
     Ok((arg1, arg2))
 }
 pub const OPCODE_GTK_PRIMARY_SELECTION_DEVICE_MANAGER_GET_DEVICE: MethodId = MethodId::Request(1);
-const GTK_PRIMARY_SELECTION_DEVICE_MANAGER: WaylandData = WaylandData {
+const DATA_GTK_PRIMARY_SELECTION_DEVICE_MANAGER: WaylandData = WaylandData {
     name: "gtk_primary_selection_device_manager",
     evts: &[],
     reqs: &[
@@ -1171,6 +1199,8 @@ const GTK_PRIMARY_SELECTION_DEVICE_MANAGER: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const GTK_PRIMARY_SELECTION_DEVICE_MANAGER: &[u8] =
+    DATA_GTK_PRIMARY_SELECTION_DEVICE_MANAGER.name.as_bytes();
 pub fn write_req_gtk_primary_selection_device_set_selection(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -1243,7 +1273,7 @@ pub fn parse_evt_gtk_primary_selection_device_selection<'a>(
     Ok(arg1)
 }
 pub const OPCODE_GTK_PRIMARY_SELECTION_DEVICE_SELECTION: MethodId = MethodId::Event(1);
-const GTK_PRIMARY_SELECTION_DEVICE: WaylandData = WaylandData {
+const DATA_GTK_PRIMARY_SELECTION_DEVICE: WaylandData = WaylandData {
     name: "gtk_primary_selection_device",
     evts: &[
         WaylandMethod {
@@ -1271,6 +1301,7 @@ const GTK_PRIMARY_SELECTION_DEVICE: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const GTK_PRIMARY_SELECTION_DEVICE: &[u8] = DATA_GTK_PRIMARY_SELECTION_DEVICE.name.as_bytes();
 pub fn write_req_gtk_primary_selection_offer_receive(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -1322,7 +1353,7 @@ pub fn parse_evt_gtk_primary_selection_offer_offer<'a>(
     Ok(arg1)
 }
 pub const OPCODE_GTK_PRIMARY_SELECTION_OFFER_OFFER: MethodId = MethodId::Event(0);
-const GTK_PRIMARY_SELECTION_OFFER: WaylandData = WaylandData {
+const DATA_GTK_PRIMARY_SELECTION_OFFER: WaylandData = WaylandData {
     name: "gtk_primary_selection_offer",
     evts: &[WaylandMethod {
         name: "offer",
@@ -1343,6 +1374,7 @@ const GTK_PRIMARY_SELECTION_OFFER: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const GTK_PRIMARY_SELECTION_OFFER: &[u8] = DATA_GTK_PRIMARY_SELECTION_OFFER.name.as_bytes();
 pub fn write_req_gtk_primary_selection_source_offer(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -1394,7 +1426,7 @@ pub fn parse_evt_gtk_primary_selection_source_send<'a>(
     Ok(arg1)
 }
 pub const OPCODE_GTK_PRIMARY_SELECTION_SOURCE_SEND: MethodId = MethodId::Event(0);
-const GTK_PRIMARY_SELECTION_SOURCE: WaylandData = WaylandData {
+const DATA_GTK_PRIMARY_SELECTION_SOURCE: WaylandData = WaylandData {
     name: "gtk_primary_selection_source",
     evts: &[
         WaylandMethod {
@@ -1422,7 +1454,8 @@ const GTK_PRIMARY_SELECTION_SOURCE: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const ZWP_INPUT_METHOD_V2: WaylandData = WaylandData {
+pub const GTK_PRIMARY_SELECTION_SOURCE: &[u8] = DATA_GTK_PRIMARY_SELECTION_SOURCE.name.as_bytes();
+const DATA_ZWP_INPUT_METHOD_V2: WaylandData = WaylandData {
     name: "zwp_input_method_v2",
     evts: &[
         WaylandMethod {
@@ -1500,7 +1533,8 @@ const ZWP_INPUT_METHOD_V2: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const ZWP_INPUT_POPUP_SURFACE_V2: WaylandData = WaylandData {
+pub const ZWP_INPUT_METHOD_V2: &[u8] = DATA_ZWP_INPUT_METHOD_V2.name.as_bytes();
+const DATA_ZWP_INPUT_POPUP_SURFACE_V2: WaylandData = WaylandData {
     name: "zwp_input_popup_surface_v2",
     evts: &[WaylandMethod {
         name: "text_input_rectangle",
@@ -1514,7 +1548,8 @@ const ZWP_INPUT_POPUP_SURFACE_V2: WaylandData = WaylandData {
     }],
     version: 1,
 };
-const ZWP_INPUT_METHOD_KEYBOARD_GRAB_V2: WaylandData = WaylandData {
+pub const ZWP_INPUT_POPUP_SURFACE_V2: &[u8] = DATA_ZWP_INPUT_POPUP_SURFACE_V2.name.as_bytes();
+const DATA_ZWP_INPUT_METHOD_KEYBOARD_GRAB_V2: WaylandData = WaylandData {
     name: "zwp_input_method_keyboard_grab_v2",
     evts: &[
         WaylandMethod {
@@ -1545,7 +1580,9 @@ const ZWP_INPUT_METHOD_KEYBOARD_GRAB_V2: WaylandData = WaylandData {
     }],
     version: 1,
 };
-const ZWP_INPUT_METHOD_MANAGER_V2: WaylandData = WaylandData {
+pub const ZWP_INPUT_METHOD_KEYBOARD_GRAB_V2: &[u8] =
+    DATA_ZWP_INPUT_METHOD_KEYBOARD_GRAB_V2.name.as_bytes();
+const DATA_ZWP_INPUT_METHOD_MANAGER_V2: WaylandData = WaylandData {
     name: "zwp_input_method_manager_v2",
     evts: &[],
     reqs: &[
@@ -1562,6 +1599,7 @@ const ZWP_INPUT_METHOD_MANAGER_V2: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const ZWP_INPUT_METHOD_MANAGER_V2: &[u8] = DATA_ZWP_INPUT_METHOD_MANAGER_V2.name.as_bytes();
 pub fn write_req_zwp_linux_dmabuf_v1_create_params(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -1680,7 +1718,7 @@ pub fn parse_req_zwp_linux_dmabuf_v1_get_surface_feedback<'a>(
     Ok((arg1, arg2))
 }
 pub const OPCODE_ZWP_LINUX_DMABUF_V1_GET_SURFACE_FEEDBACK: MethodId = MethodId::Request(3);
-const ZWP_LINUX_DMABUF_V1: WaylandData = WaylandData {
+const DATA_ZWP_LINUX_DMABUF_V1: WaylandData = WaylandData {
     name: "zwp_linux_dmabuf_v1",
     evts: &[
         WaylandMethod {
@@ -1718,6 +1756,7 @@ const ZWP_LINUX_DMABUF_V1: WaylandData = WaylandData {
     ],
     version: 5,
 };
+pub const ZWP_LINUX_DMABUF_V1: &[u8] = DATA_ZWP_LINUX_DMABUF_V1.name.as_bytes();
 pub fn write_req_zwp_linux_buffer_params_v1_destroy(dst: &mut &mut [u8], for_id: ObjId) {
     let l = length_req_zwp_linux_buffer_params_v1_destroy();
     write_header(dst, for_id, l, 0, 0);
@@ -1872,7 +1911,7 @@ pub fn parse_req_zwp_linux_buffer_params_v1_create_immed<'a>(
     Ok((arg1, arg2, arg3, arg4, arg5))
 }
 pub const OPCODE_ZWP_LINUX_BUFFER_PARAMS_V1_CREATE_IMMED: MethodId = MethodId::Request(3);
-const ZWP_LINUX_BUFFER_PARAMS_V1: WaylandData = WaylandData {
+const DATA_ZWP_LINUX_BUFFER_PARAMS_V1: WaylandData = WaylandData {
     name: "zwp_linux_buffer_params_v1",
     evts: &[
         WaylandMethod {
@@ -1910,6 +1949,7 @@ const ZWP_LINUX_BUFFER_PARAMS_V1: WaylandData = WaylandData {
     ],
     version: 5,
 };
+pub const ZWP_LINUX_BUFFER_PARAMS_V1: &[u8] = DATA_ZWP_LINUX_BUFFER_PARAMS_V1.name.as_bytes();
 pub fn write_evt_zwp_linux_dmabuf_feedback_v1_done(dst: &mut &mut [u8], for_id: ObjId) {
     let l = length_evt_zwp_linux_dmabuf_feedback_v1_done();
     write_header(dst, for_id, l, 0, 0);
@@ -2062,7 +2102,7 @@ pub fn parse_evt_zwp_linux_dmabuf_feedback_v1_tranche_flags<'a>(
     Ok(arg1)
 }
 pub const OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_FLAGS: MethodId = MethodId::Event(6);
-const ZWP_LINUX_DMABUF_FEEDBACK_V1: WaylandData = WaylandData {
+const DATA_ZWP_LINUX_DMABUF_FEEDBACK_V1: WaylandData = WaylandData {
     name: "zwp_linux_dmabuf_feedback_v1",
     evts: &[
         WaylandMethod {
@@ -2108,6 +2148,7 @@ const ZWP_LINUX_DMABUF_FEEDBACK_V1: WaylandData = WaylandData {
     }],
     version: 5,
 };
+pub const ZWP_LINUX_DMABUF_FEEDBACK_V1: &[u8] = DATA_ZWP_LINUX_DMABUF_FEEDBACK_V1.name.as_bytes();
 pub fn write_req_wp_linux_drm_syncobj_manager_v1_get_surface(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -2158,7 +2199,7 @@ pub fn parse_req_wp_linux_drm_syncobj_manager_v1_import_timeline<'a>(
     Ok(arg1)
 }
 pub const OPCODE_WP_LINUX_DRM_SYNCOBJ_MANAGER_V1_IMPORT_TIMELINE: MethodId = MethodId::Request(2);
-const WP_LINUX_DRM_SYNCOBJ_MANAGER_V1: WaylandData = WaylandData {
+const DATA_WP_LINUX_DRM_SYNCOBJ_MANAGER_V1: WaylandData = WaylandData {
     name: "wp_linux_drm_syncobj_manager_v1",
     evts: &[],
     reqs: &[
@@ -2180,7 +2221,9 @@ const WP_LINUX_DRM_SYNCOBJ_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const WP_LINUX_DRM_SYNCOBJ_TIMELINE_V1: WaylandData = WaylandData {
+pub const WP_LINUX_DRM_SYNCOBJ_MANAGER_V1: &[u8] =
+    DATA_WP_LINUX_DRM_SYNCOBJ_MANAGER_V1.name.as_bytes();
+const DATA_WP_LINUX_DRM_SYNCOBJ_TIMELINE_V1: WaylandData = WaylandData {
     name: "wp_linux_drm_syncobj_timeline_v1",
     evts: &[],
     reqs: &[WaylandMethod {
@@ -2190,6 +2233,8 @@ const WP_LINUX_DRM_SYNCOBJ_TIMELINE_V1: WaylandData = WaylandData {
     }],
     version: 1,
 };
+pub const WP_LINUX_DRM_SYNCOBJ_TIMELINE_V1: &[u8] =
+    DATA_WP_LINUX_DRM_SYNCOBJ_TIMELINE_V1.name.as_bytes();
 pub fn write_req_wp_linux_drm_syncobj_surface_v1_set_acquire_point(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -2248,7 +2293,7 @@ pub fn parse_req_wp_linux_drm_syncobj_surface_v1_set_release_point<'a>(
     Ok((arg1, arg2, arg3))
 }
 pub const OPCODE_WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_SET_RELEASE_POINT: MethodId = MethodId::Request(2);
-const WP_LINUX_DRM_SYNCOBJ_SURFACE_V1: WaylandData = WaylandData {
+const DATA_WP_LINUX_DRM_SYNCOBJ_SURFACE_V1: WaylandData = WaylandData {
     name: "wp_linux_drm_syncobj_surface_v1",
     evts: &[],
     reqs: &[
@@ -2270,6 +2315,8 @@ const WP_LINUX_DRM_SYNCOBJ_SURFACE_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const WP_LINUX_DRM_SYNCOBJ_SURFACE_V1: &[u8] =
+    DATA_WP_LINUX_DRM_SYNCOBJ_SURFACE_V1.name.as_bytes();
 pub fn write_req_wp_presentation_destroy(dst: &mut &mut [u8], for_id: ObjId) {
     let l = length_req_wp_presentation_destroy();
     write_header(dst, for_id, l, 0, 0);
@@ -2327,7 +2374,7 @@ pub fn parse_evt_wp_presentation_clock_id<'a>(mut msg: &'a [u8]) -> Result<u32, 
     Ok(arg1)
 }
 pub const OPCODE_WP_PRESENTATION_CLOCK_ID: MethodId = MethodId::Event(0);
-const WP_PRESENTATION: WaylandData = WaylandData {
+const DATA_WP_PRESENTATION: WaylandData = WaylandData {
     name: "wp_presentation",
     evts: &[WaylandMethod {
         name: "clock_id",
@@ -2348,6 +2395,7 @@ const WP_PRESENTATION: WaylandData = WaylandData {
     ],
     version: 2,
 };
+pub const WP_PRESENTATION: &[u8] = DATA_WP_PRESENTATION.name.as_bytes();
 pub fn write_evt_wp_presentation_feedback_presented(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -2389,7 +2437,7 @@ pub fn parse_evt_wp_presentation_feedback_presented<'a>(
     Ok((arg1, arg2, arg3, arg4, arg5, arg6, arg7))
 }
 pub const OPCODE_WP_PRESENTATION_FEEDBACK_PRESENTED: MethodId = MethodId::Event(1);
-const WP_PRESENTATION_FEEDBACK: WaylandData = WaylandData {
+const DATA_WP_PRESENTATION_FEEDBACK: WaylandData = WaylandData {
     name: "wp_presentation_feedback",
     evts: &[
         WaylandMethod {
@@ -2411,6 +2459,7 @@ const WP_PRESENTATION_FEEDBACK: WaylandData = WaylandData {
     reqs: &[],
     version: 2,
 };
+pub const WP_PRESENTATION_FEEDBACK: &[u8] = DATA_WP_PRESENTATION_FEEDBACK.name.as_bytes();
 pub fn write_req_zwp_primary_selection_device_manager_v1_create_source(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -2462,7 +2511,7 @@ pub fn parse_req_zwp_primary_selection_device_manager_v1_get_device<'a>(
 }
 pub const OPCODE_ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1_GET_DEVICE: MethodId =
     MethodId::Request(1);
-const ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1: WaylandData = WaylandData {
+const DATA_ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1: WaylandData = WaylandData {
     name: "zwp_primary_selection_device_manager_v1",
     evts: &[],
     reqs: &[
@@ -2484,6 +2533,8 @@ const ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1: &[u8] =
+    DATA_ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1.name.as_bytes();
 pub fn write_req_zwp_primary_selection_device_v1_set_selection(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -2556,7 +2607,7 @@ pub fn parse_evt_zwp_primary_selection_device_v1_selection<'a>(
     Ok(arg1)
 }
 pub const OPCODE_ZWP_PRIMARY_SELECTION_DEVICE_V1_SELECTION: MethodId = MethodId::Event(1);
-const ZWP_PRIMARY_SELECTION_DEVICE_V1: WaylandData = WaylandData {
+const DATA_ZWP_PRIMARY_SELECTION_DEVICE_V1: WaylandData = WaylandData {
     name: "zwp_primary_selection_device_v1",
     evts: &[
         WaylandMethod {
@@ -2584,6 +2635,8 @@ const ZWP_PRIMARY_SELECTION_DEVICE_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const ZWP_PRIMARY_SELECTION_DEVICE_V1: &[u8] =
+    DATA_ZWP_PRIMARY_SELECTION_DEVICE_V1.name.as_bytes();
 pub fn write_req_zwp_primary_selection_offer_v1_receive(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -2635,7 +2688,7 @@ pub fn parse_evt_zwp_primary_selection_offer_v1_offer<'a>(
     Ok(arg1)
 }
 pub const OPCODE_ZWP_PRIMARY_SELECTION_OFFER_V1_OFFER: MethodId = MethodId::Event(0);
-const ZWP_PRIMARY_SELECTION_OFFER_V1: WaylandData = WaylandData {
+const DATA_ZWP_PRIMARY_SELECTION_OFFER_V1: WaylandData = WaylandData {
     name: "zwp_primary_selection_offer_v1",
     evts: &[WaylandMethod {
         name: "offer",
@@ -2656,6 +2709,8 @@ const ZWP_PRIMARY_SELECTION_OFFER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const ZWP_PRIMARY_SELECTION_OFFER_V1: &[u8] =
+    DATA_ZWP_PRIMARY_SELECTION_OFFER_V1.name.as_bytes();
 pub fn write_req_zwp_primary_selection_source_v1_offer(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -2707,7 +2762,7 @@ pub fn parse_evt_zwp_primary_selection_source_v1_send<'a>(
     Ok(arg1)
 }
 pub const OPCODE_ZWP_PRIMARY_SELECTION_SOURCE_V1_SEND: MethodId = MethodId::Event(0);
-const ZWP_PRIMARY_SELECTION_SOURCE_V1: WaylandData = WaylandData {
+const DATA_ZWP_PRIMARY_SELECTION_SOURCE_V1: WaylandData = WaylandData {
     name: "zwp_primary_selection_source_v1",
     evts: &[
         WaylandMethod {
@@ -2735,6 +2790,8 @@ const ZWP_PRIMARY_SELECTION_SOURCE_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const ZWP_PRIMARY_SELECTION_SOURCE_V1: &[u8] =
+    DATA_ZWP_PRIMARY_SELECTION_SOURCE_V1.name.as_bytes();
 pub fn write_req_wp_security_context_manager_v1_create_listener(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -2759,7 +2816,7 @@ pub fn parse_req_wp_security_context_manager_v1_create_listener<'a>(
     Ok(arg1)
 }
 pub const OPCODE_WP_SECURITY_CONTEXT_MANAGER_V1_CREATE_LISTENER: MethodId = MethodId::Request(1);
-const WP_SECURITY_CONTEXT_MANAGER_V1: WaylandData = WaylandData {
+const DATA_WP_SECURITY_CONTEXT_MANAGER_V1: WaylandData = WaylandData {
     name: "wp_security_context_manager_v1",
     evts: &[],
     reqs: &[
@@ -2776,6 +2833,8 @@ const WP_SECURITY_CONTEXT_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const WP_SECURITY_CONTEXT_MANAGER_V1: &[u8] =
+    DATA_WP_SECURITY_CONTEXT_MANAGER_V1.name.as_bytes();
 pub fn write_req_wp_security_context_v1_set_sandbox_engine(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -2865,7 +2924,7 @@ pub fn parse_req_wp_security_context_v1_commit<'a>(msg: &'a [u8]) -> Result<(), 
     Ok(())
 }
 pub const OPCODE_WP_SECURITY_CONTEXT_V1_COMMIT: MethodId = MethodId::Request(4);
-const WP_SECURITY_CONTEXT_V1: WaylandData = WaylandData {
+const DATA_WP_SECURITY_CONTEXT_V1: WaylandData = WaylandData {
     name: "wp_security_context_v1",
     evts: &[],
     reqs: &[
@@ -2897,7 +2956,8 @@ const WP_SECURITY_CONTEXT_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const ZWP_VIRTUAL_KEYBOARD_V1: WaylandData = WaylandData {
+pub const WP_SECURITY_CONTEXT_V1: &[u8] = DATA_WP_SECURITY_CONTEXT_V1.name.as_bytes();
+const DATA_ZWP_VIRTUAL_KEYBOARD_V1: WaylandData = WaylandData {
     name: "zwp_virtual_keyboard_v1",
     evts: &[],
     reqs: &[
@@ -2924,7 +2984,8 @@ const ZWP_VIRTUAL_KEYBOARD_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const ZWP_VIRTUAL_KEYBOARD_MANAGER_V1: WaylandData = WaylandData {
+pub const ZWP_VIRTUAL_KEYBOARD_V1: &[u8] = DATA_ZWP_VIRTUAL_KEYBOARD_V1.name.as_bytes();
+const DATA_ZWP_VIRTUAL_KEYBOARD_MANAGER_V1: WaylandData = WaylandData {
     name: "zwp_virtual_keyboard_manager_v1",
     evts: &[],
     reqs: &[WaylandMethod {
@@ -2934,7 +2995,9 @@ const ZWP_VIRTUAL_KEYBOARD_MANAGER_V1: WaylandData = WaylandData {
     }],
     version: 1,
 };
-const WL_DRM: WaylandData = WaylandData {
+pub const ZWP_VIRTUAL_KEYBOARD_MANAGER_V1: &[u8] =
+    DATA_ZWP_VIRTUAL_KEYBOARD_MANAGER_V1.name.as_bytes();
+const DATA_WL_DRM: WaylandData = WaylandData {
     name: "wl_drm",
     evts: &[
         WaylandMethod {
@@ -3006,6 +3069,7 @@ const WL_DRM: WaylandData = WaylandData {
     ],
     version: 2,
 };
+pub const WL_DRM: &[u8] = DATA_WL_DRM.name.as_bytes();
 pub fn write_req_wl_display_sync(dst: &mut &mut [u8], for_id: ObjId, callback: ObjId) {
     let l = length_req_wl_display_sync();
     write_header(dst, for_id, l, 0, 0);
@@ -3088,7 +3152,7 @@ pub fn parse_evt_wl_display_delete_id<'a>(mut msg: &'a [u8]) -> Result<u32, &'st
     Ok(arg1)
 }
 pub const OPCODE_WL_DISPLAY_DELETE_ID: MethodId = MethodId::Event(1);
-const WL_DISPLAY: WaylandData = WaylandData {
+const DATA_WL_DISPLAY: WaylandData = WaylandData {
     name: "wl_display",
     evts: &[
         WaylandMethod {
@@ -3116,6 +3180,7 @@ const WL_DISPLAY: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const WL_DISPLAY: &[u8] = DATA_WL_DISPLAY.name.as_bytes();
 pub fn write_req_wl_registry_bind(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -3198,7 +3263,7 @@ pub fn parse_evt_wl_registry_global_remove<'a>(mut msg: &'a [u8]) -> Result<u32,
     Ok(arg1)
 }
 pub const OPCODE_WL_REGISTRY_GLOBAL_REMOVE: MethodId = MethodId::Event(1);
-const WL_REGISTRY: WaylandData = WaylandData {
+const DATA_WL_REGISTRY: WaylandData = WaylandData {
     name: "wl_registry",
     evts: &[
         WaylandMethod {
@@ -3219,6 +3284,7 @@ const WL_REGISTRY: WaylandData = WaylandData {
     }],
     version: 1,
 };
+pub const WL_REGISTRY: &[u8] = DATA_WL_REGISTRY.name.as_bytes();
 pub fn write_evt_wl_callback_done(dst: &mut &mut [u8], for_id: ObjId, callback_data: u32) {
     let l = length_evt_wl_callback_done();
     write_header(dst, for_id, l, 0, 0);
@@ -3236,7 +3302,7 @@ pub fn parse_evt_wl_callback_done<'a>(mut msg: &'a [u8]) -> Result<u32, &'static
     Ok(arg1)
 }
 pub const OPCODE_WL_CALLBACK_DONE: MethodId = MethodId::Event(0);
-const WL_CALLBACK: WaylandData = WaylandData {
+const DATA_WL_CALLBACK: WaylandData = WaylandData {
     name: "wl_callback",
     evts: &[WaylandMethod {
         name: "done",
@@ -3246,6 +3312,7 @@ const WL_CALLBACK: WaylandData = WaylandData {
     reqs: &[],
     version: 1,
 };
+pub const WL_CALLBACK: &[u8] = DATA_WL_CALLBACK.name.as_bytes();
 pub fn write_req_wl_compositor_create_surface(dst: &mut &mut [u8], for_id: ObjId, id: ObjId) {
     let l = length_req_wl_compositor_create_surface();
     write_header(dst, for_id, l, 0, 0);
@@ -3265,7 +3332,7 @@ pub fn parse_req_wl_compositor_create_surface<'a>(
     Ok(arg1)
 }
 pub const OPCODE_WL_COMPOSITOR_CREATE_SURFACE: MethodId = MethodId::Request(0);
-const WL_COMPOSITOR: WaylandData = WaylandData {
+const DATA_WL_COMPOSITOR: WaylandData = WaylandData {
     name: "wl_compositor",
     evts: &[],
     reqs: &[
@@ -3282,6 +3349,7 @@ const WL_COMPOSITOR: WaylandData = WaylandData {
     ],
     version: 6,
 };
+pub const WL_COMPOSITOR: &[u8] = DATA_WL_COMPOSITOR.name.as_bytes();
 pub fn write_req_wl_shm_pool_create_buffer(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -3351,7 +3419,7 @@ pub fn parse_req_wl_shm_pool_resize<'a>(mut msg: &'a [u8]) -> Result<i32, &'stat
     Ok(arg1)
 }
 pub const OPCODE_WL_SHM_POOL_RESIZE: MethodId = MethodId::Request(2);
-const WL_SHM_POOL: WaylandData = WaylandData {
+const DATA_WL_SHM_POOL: WaylandData = WaylandData {
     name: "wl_shm_pool",
     evts: &[],
     reqs: &[
@@ -3373,6 +3441,7 @@ const WL_SHM_POOL: WaylandData = WaylandData {
     ],
     version: 2,
 };
+pub const WL_SHM_POOL: &[u8] = DATA_WL_SHM_POOL.name.as_bytes();
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WlShmFormat {
     Argb8888 = 0,
@@ -3655,7 +3724,7 @@ pub fn parse_req_wl_shm_create_pool<'a>(mut msg: &'a [u8]) -> Result<(ObjId, i32
     Ok((arg1, arg3))
 }
 pub const OPCODE_WL_SHM_CREATE_POOL: MethodId = MethodId::Request(0);
-const WL_SHM: WaylandData = WaylandData {
+const DATA_WL_SHM: WaylandData = WaylandData {
     name: "wl_shm",
     evts: &[WaylandMethod {
         name: "format",
@@ -3676,6 +3745,7 @@ const WL_SHM: WaylandData = WaylandData {
     ],
     version: 2,
 };
+pub const WL_SHM: &[u8] = DATA_WL_SHM.name.as_bytes();
 pub fn write_req_wl_buffer_destroy(dst: &mut &mut [u8], for_id: ObjId) {
     let l = length_req_wl_buffer_destroy();
     write_header(dst, for_id, l, 0, 0);
@@ -3704,7 +3774,7 @@ pub fn parse_evt_wl_buffer_release<'a>(msg: &'a [u8]) -> Result<(), &'static str
     Ok(())
 }
 pub const OPCODE_WL_BUFFER_RELEASE: MethodId = MethodId::Event(0);
-const WL_BUFFER: WaylandData = WaylandData {
+const DATA_WL_BUFFER: WaylandData = WaylandData {
     name: "wl_buffer",
     evts: &[WaylandMethod {
         name: "release",
@@ -3718,6 +3788,7 @@ const WL_BUFFER: WaylandData = WaylandData {
     }],
     version: 1,
 };
+pub const WL_BUFFER: &[u8] = DATA_WL_BUFFER.name.as_bytes();
 pub fn write_req_wl_data_offer_receive(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -3761,7 +3832,7 @@ pub fn parse_evt_wl_data_offer_offer<'a>(mut msg: &'a [u8]) -> Result<&'a [u8], 
     Ok(arg1)
 }
 pub const OPCODE_WL_DATA_OFFER_OFFER: MethodId = MethodId::Event(0);
-const WL_DATA_OFFER: WaylandData = WaylandData {
+const DATA_WL_DATA_OFFER: WaylandData = WaylandData {
     name: "wl_data_offer",
     evts: &[
         WaylandMethod {
@@ -3809,6 +3880,7 @@ const WL_DATA_OFFER: WaylandData = WaylandData {
     ],
     version: 3,
 };
+pub const WL_DATA_OFFER: &[u8] = DATA_WL_DATA_OFFER.name.as_bytes();
 pub fn write_req_wl_data_source_offer(dst: &mut &mut [u8], for_id: ObjId, mime_type: &[u8]) {
     let l = length_req_wl_data_source_offer(mime_type.len());
     write_header(dst, for_id, l, 0, 0);
@@ -3852,7 +3924,7 @@ pub fn parse_evt_wl_data_source_send<'a>(mut msg: &'a [u8]) -> Result<&'a [u8], 
     Ok(arg1)
 }
 pub const OPCODE_WL_DATA_SOURCE_SEND: MethodId = MethodId::Event(1);
-const WL_DATA_SOURCE: WaylandData = WaylandData {
+const DATA_WL_DATA_SOURCE: WaylandData = WaylandData {
     name: "wl_data_source",
     evts: &[
         WaylandMethod {
@@ -3905,6 +3977,7 @@ const WL_DATA_SOURCE: WaylandData = WaylandData {
     ],
     version: 3,
 };
+pub const WL_DATA_SOURCE: &[u8] = DATA_WL_DATA_SOURCE.name.as_bytes();
 pub fn write_req_wl_data_device_set_selection(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -3965,7 +4038,7 @@ pub fn parse_evt_wl_data_device_selection<'a>(mut msg: &'a [u8]) -> Result<ObjId
     Ok(arg1)
 }
 pub const OPCODE_WL_DATA_DEVICE_SELECTION: MethodId = MethodId::Event(5);
-const WL_DATA_DEVICE: WaylandData = WaylandData {
+const DATA_WL_DATA_DEVICE: WaylandData = WaylandData {
     name: "wl_data_device",
     evts: &[
         WaylandMethod {
@@ -4023,6 +4096,7 @@ const WL_DATA_DEVICE: WaylandData = WaylandData {
     ],
     version: 3,
 };
+pub const WL_DATA_DEVICE: &[u8] = DATA_WL_DATA_DEVICE.name.as_bytes();
 pub fn write_req_wl_data_device_manager_create_data_source(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -4072,7 +4146,7 @@ pub fn parse_req_wl_data_device_manager_get_data_device<'a>(
     Ok((arg1, arg2))
 }
 pub const OPCODE_WL_DATA_DEVICE_MANAGER_GET_DATA_DEVICE: MethodId = MethodId::Request(1);
-const WL_DATA_DEVICE_MANAGER: WaylandData = WaylandData {
+const DATA_WL_DATA_DEVICE_MANAGER: WaylandData = WaylandData {
     name: "wl_data_device_manager",
     evts: &[],
     reqs: &[
@@ -4089,7 +4163,8 @@ const WL_DATA_DEVICE_MANAGER: WaylandData = WaylandData {
     ],
     version: 3,
 };
-const WL_SHELL: WaylandData = WaylandData {
+pub const WL_DATA_DEVICE_MANAGER: &[u8] = DATA_WL_DATA_DEVICE_MANAGER.name.as_bytes();
+const DATA_WL_SHELL: WaylandData = WaylandData {
     name: "wl_shell",
     evts: &[],
     reqs: &[WaylandMethod {
@@ -4099,7 +4174,8 @@ const WL_SHELL: WaylandData = WaylandData {
     }],
     version: 1,
 };
-const WL_SHELL_SURFACE: WaylandData = WaylandData {
+pub const WL_SHELL: &[u8] = DATA_WL_SHELL.name.as_bytes();
+const DATA_WL_SHELL_SURFACE: WaylandData = WaylandData {
     name: "wl_shell_surface",
     evts: &[
         WaylandMethod {
@@ -4172,6 +4248,7 @@ const WL_SHELL_SURFACE: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const WL_SHELL_SURFACE: &[u8] = DATA_WL_SHELL_SURFACE.name.as_bytes();
 pub fn write_req_wl_surface_attach(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -4319,7 +4396,7 @@ pub fn parse_req_wl_surface_damage_buffer<'a>(
     Ok((arg1, arg2, arg3, arg4))
 }
 pub const OPCODE_WL_SURFACE_DAMAGE_BUFFER: MethodId = MethodId::Request(9);
-const WL_SURFACE: WaylandData = WaylandData {
+const DATA_WL_SURFACE: WaylandData = WaylandData {
     name: "wl_surface",
     evts: &[
         WaylandMethod {
@@ -4402,6 +4479,7 @@ const WL_SURFACE: WaylandData = WaylandData {
     ],
     version: 6,
 };
+pub const WL_SURFACE: &[u8] = DATA_WL_SURFACE.name.as_bytes();
 pub fn write_evt_wl_seat_capabilities(dst: &mut &mut [u8], for_id: ObjId, capabilities: u32) {
     let l = length_evt_wl_seat_capabilities();
     write_header(dst, for_id, l, 0, 0);
@@ -4436,7 +4514,7 @@ pub fn parse_req_wl_seat_get_keyboard<'a>(mut msg: &'a [u8]) -> Result<ObjId, &'
     Ok(arg1)
 }
 pub const OPCODE_WL_SEAT_GET_KEYBOARD: MethodId = MethodId::Request(1);
-const WL_SEAT: WaylandData = WaylandData {
+const DATA_WL_SEAT: WaylandData = WaylandData {
     name: "wl_seat",
     evts: &[
         WaylandMethod {
@@ -4474,7 +4552,8 @@ const WL_SEAT: WaylandData = WaylandData {
     ],
     version: 10,
 };
-const WL_POINTER: WaylandData = WaylandData {
+pub const WL_SEAT: &[u8] = DATA_WL_SEAT.name.as_bytes();
+const DATA_WL_POINTER: WaylandData = WaylandData {
     name: "wl_pointer",
     evts: &[
         WaylandMethod {
@@ -4547,6 +4626,7 @@ const WL_POINTER: WaylandData = WaylandData {
     ],
     version: 10,
 };
+pub const WL_POINTER: &[u8] = DATA_WL_POINTER.name.as_bytes();
 pub fn write_evt_wl_keyboard_keymap(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -4572,7 +4652,7 @@ pub fn parse_evt_wl_keyboard_keymap<'a>(mut msg: &'a [u8]) -> Result<(u32, u32),
     Ok((arg1, arg3))
 }
 pub const OPCODE_WL_KEYBOARD_KEYMAP: MethodId = MethodId::Event(0);
-const WL_KEYBOARD: WaylandData = WaylandData {
+const DATA_WL_KEYBOARD: WaylandData = WaylandData {
     name: "wl_keyboard",
     evts: &[
         WaylandMethod {
@@ -4613,7 +4693,8 @@ const WL_KEYBOARD: WaylandData = WaylandData {
     }],
     version: 10,
 };
-const WL_TOUCH: WaylandData = WaylandData {
+pub const WL_KEYBOARD: &[u8] = DATA_WL_KEYBOARD.name.as_bytes();
+const DATA_WL_TOUCH: WaylandData = WaylandData {
     name: "wl_touch",
     evts: &[
         WaylandMethod {
@@ -4659,6 +4740,7 @@ const WL_TOUCH: WaylandData = WaylandData {
     }],
     version: 10,
 };
+pub const WL_TOUCH: &[u8] = DATA_WL_TOUCH.name.as_bytes();
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WlOutputTransform {
     Normal = 0,
@@ -4686,7 +4768,7 @@ impl TryFrom<u32> for WlOutputTransform {
         })
     }
 }
-const WL_OUTPUT: WaylandData = WaylandData {
+const DATA_WL_OUTPUT: WaylandData = WaylandData {
     name: "wl_output",
     evts: &[
         WaylandMethod {
@@ -4727,7 +4809,8 @@ const WL_OUTPUT: WaylandData = WaylandData {
     }],
     version: 4,
 };
-const WL_REGION: WaylandData = WaylandData {
+pub const WL_OUTPUT: &[u8] = DATA_WL_OUTPUT.name.as_bytes();
+const DATA_WL_REGION: WaylandData = WaylandData {
     name: "wl_region",
     evts: &[],
     reqs: &[
@@ -4749,7 +4832,8 @@ const WL_REGION: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const WL_SUBCOMPOSITOR: WaylandData = WaylandData {
+pub const WL_REGION: &[u8] = DATA_WL_REGION.name.as_bytes();
+const DATA_WL_SUBCOMPOSITOR: WaylandData = WaylandData {
     name: "wl_subcompositor",
     evts: &[],
     reqs: &[
@@ -4766,7 +4850,8 @@ const WL_SUBCOMPOSITOR: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const WL_SUBSURFACE: WaylandData = WaylandData {
+pub const WL_SUBCOMPOSITOR: &[u8] = DATA_WL_SUBCOMPOSITOR.name.as_bytes();
+const DATA_WL_SUBSURFACE: WaylandData = WaylandData {
     name: "wl_subsurface",
     evts: &[],
     reqs: &[
@@ -4803,6 +4888,7 @@ const WL_SUBSURFACE: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const WL_SUBSURFACE: &[u8] = DATA_WL_SUBSURFACE.name.as_bytes();
 pub fn write_req_zwlr_data_control_manager_v1_create_data_source(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -4852,7 +4938,7 @@ pub fn parse_req_zwlr_data_control_manager_v1_get_data_device<'a>(
     Ok((arg1, arg2))
 }
 pub const OPCODE_ZWLR_DATA_CONTROL_MANAGER_V1_GET_DATA_DEVICE: MethodId = MethodId::Request(1);
-const ZWLR_DATA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
+const DATA_ZWLR_DATA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
     name: "zwlr_data_control_manager_v1",
     evts: &[],
     reqs: &[
@@ -4874,6 +4960,7 @@ const ZWLR_DATA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 2,
 };
+pub const ZWLR_DATA_CONTROL_MANAGER_V1: &[u8] = DATA_ZWLR_DATA_CONTROL_MANAGER_V1.name.as_bytes();
 pub fn write_req_zwlr_data_control_device_v1_set_selection(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -4943,7 +5030,7 @@ pub fn parse_evt_zwlr_data_control_device_v1_selection<'a>(
     Ok(arg1)
 }
 pub const OPCODE_ZWLR_DATA_CONTROL_DEVICE_V1_SELECTION: MethodId = MethodId::Event(1);
-const ZWLR_DATA_CONTROL_DEVICE_V1: WaylandData = WaylandData {
+const DATA_ZWLR_DATA_CONTROL_DEVICE_V1: WaylandData = WaylandData {
     name: "zwlr_data_control_device_v1",
     evts: &[
         WaylandMethod {
@@ -4986,6 +5073,7 @@ const ZWLR_DATA_CONTROL_DEVICE_V1: WaylandData = WaylandData {
     ],
     version: 2,
 };
+pub const ZWLR_DATA_CONTROL_DEVICE_V1: &[u8] = DATA_ZWLR_DATA_CONTROL_DEVICE_V1.name.as_bytes();
 pub fn write_req_zwlr_data_control_source_v1_offer(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -5037,7 +5125,7 @@ pub fn parse_evt_zwlr_data_control_source_v1_send<'a>(
     Ok(arg1)
 }
 pub const OPCODE_ZWLR_DATA_CONTROL_SOURCE_V1_SEND: MethodId = MethodId::Event(0);
-const ZWLR_DATA_CONTROL_SOURCE_V1: WaylandData = WaylandData {
+const DATA_ZWLR_DATA_CONTROL_SOURCE_V1: WaylandData = WaylandData {
     name: "zwlr_data_control_source_v1",
     evts: &[
         WaylandMethod {
@@ -5065,6 +5153,7 @@ const ZWLR_DATA_CONTROL_SOURCE_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const ZWLR_DATA_CONTROL_SOURCE_V1: &[u8] = DATA_ZWLR_DATA_CONTROL_SOURCE_V1.name.as_bytes();
 pub fn write_req_zwlr_data_control_offer_v1_receive(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -5116,7 +5205,7 @@ pub fn parse_evt_zwlr_data_control_offer_v1_offer<'a>(
     Ok(arg1)
 }
 pub const OPCODE_ZWLR_DATA_CONTROL_OFFER_V1_OFFER: MethodId = MethodId::Event(0);
-const ZWLR_DATA_CONTROL_OFFER_V1: WaylandData = WaylandData {
+const DATA_ZWLR_DATA_CONTROL_OFFER_V1: WaylandData = WaylandData {
     name: "zwlr_data_control_offer_v1",
     evts: &[WaylandMethod {
         name: "offer",
@@ -5137,7 +5226,8 @@ const ZWLR_DATA_CONTROL_OFFER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const ZWLR_EXPORT_DMABUF_MANAGER_V1: WaylandData = WaylandData {
+pub const ZWLR_DATA_CONTROL_OFFER_V1: &[u8] = DATA_ZWLR_DATA_CONTROL_OFFER_V1.name.as_bytes();
+const DATA_ZWLR_EXPORT_DMABUF_MANAGER_V1: WaylandData = WaylandData {
     name: "zwlr_export_dmabuf_manager_v1",
     evts: &[],
     reqs: &[
@@ -5154,7 +5244,8 @@ const ZWLR_EXPORT_DMABUF_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
-const ZWLR_EXPORT_DMABUF_FRAME_V1: WaylandData = WaylandData {
+pub const ZWLR_EXPORT_DMABUF_MANAGER_V1: &[u8] = DATA_ZWLR_EXPORT_DMABUF_MANAGER_V1.name.as_bytes();
+const DATA_ZWLR_EXPORT_DMABUF_FRAME_V1: WaylandData = WaylandData {
     name: "zwlr_export_dmabuf_frame_v1",
     evts: &[
         WaylandMethod {
@@ -5185,6 +5276,7 @@ const ZWLR_EXPORT_DMABUF_FRAME_V1: WaylandData = WaylandData {
     }],
     version: 1,
 };
+pub const ZWLR_EXPORT_DMABUF_FRAME_V1: &[u8] = DATA_ZWLR_EXPORT_DMABUF_FRAME_V1.name.as_bytes();
 pub fn write_req_zwlr_gamma_control_manager_v1_get_gamma_control(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -5211,7 +5303,7 @@ pub fn parse_req_zwlr_gamma_control_manager_v1_get_gamma_control<'a>(
     Ok((arg1, arg2))
 }
 pub const OPCODE_ZWLR_GAMMA_CONTROL_MANAGER_V1_GET_GAMMA_CONTROL: MethodId = MethodId::Request(0);
-const ZWLR_GAMMA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
+const DATA_ZWLR_GAMMA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
     name: "zwlr_gamma_control_manager_v1",
     evts: &[],
     reqs: &[
@@ -5228,6 +5320,7 @@ const ZWLR_GAMMA_CONTROL_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const ZWLR_GAMMA_CONTROL_MANAGER_V1: &[u8] = DATA_ZWLR_GAMMA_CONTROL_MANAGER_V1.name.as_bytes();
 pub fn write_evt_zwlr_gamma_control_v1_gamma_size(dst: &mut &mut [u8], for_id: ObjId, size: u32) {
     let l = length_evt_zwlr_gamma_control_v1_gamma_size();
     write_header(dst, for_id, l, 0, 0);
@@ -5265,7 +5358,7 @@ pub fn parse_req_zwlr_gamma_control_v1_set_gamma<'a>(msg: &'a [u8]) -> Result<()
     Ok(())
 }
 pub const OPCODE_ZWLR_GAMMA_CONTROL_V1_SET_GAMMA: MethodId = MethodId::Request(0);
-const ZWLR_GAMMA_CONTROL_V1: WaylandData = WaylandData {
+const DATA_ZWLR_GAMMA_CONTROL_V1: WaylandData = WaylandData {
     name: "zwlr_gamma_control_v1",
     evts: &[
         WaylandMethod {
@@ -5293,6 +5386,7 @@ const ZWLR_GAMMA_CONTROL_V1: WaylandData = WaylandData {
     ],
     version: 1,
 };
+pub const ZWLR_GAMMA_CONTROL_V1: &[u8] = DATA_ZWLR_GAMMA_CONTROL_V1.name.as_bytes();
 pub fn write_req_zwlr_screencopy_manager_v1_capture_output(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -5363,7 +5457,7 @@ pub fn parse_req_zwlr_screencopy_manager_v1_capture_output_region<'a>(
     Ok((arg1, arg2, arg3, arg4, arg5, arg6, arg7))
 }
 pub const OPCODE_ZWLR_SCREENCOPY_MANAGER_V1_CAPTURE_OUTPUT_REGION: MethodId = MethodId::Request(1);
-const ZWLR_SCREENCOPY_MANAGER_V1: WaylandData = WaylandData {
+const DATA_ZWLR_SCREENCOPY_MANAGER_V1: WaylandData = WaylandData {
     name: "zwlr_screencopy_manager_v1",
     evts: &[],
     reqs: &[
@@ -5393,6 +5487,7 @@ const ZWLR_SCREENCOPY_MANAGER_V1: WaylandData = WaylandData {
     ],
     version: 3,
 };
+pub const ZWLR_SCREENCOPY_MANAGER_V1: &[u8] = DATA_ZWLR_SCREENCOPY_MANAGER_V1.name.as_bytes();
 pub fn write_evt_zwlr_screencopy_frame_v1_buffer(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -5546,7 +5641,7 @@ pub fn parse_evt_zwlr_screencopy_frame_v1_buffer_done<'a>(
     Ok(())
 }
 pub const OPCODE_ZWLR_SCREENCOPY_FRAME_V1_BUFFER_DONE: MethodId = MethodId::Event(6);
-const ZWLR_SCREENCOPY_FRAME_V1: WaylandData = WaylandData {
+const DATA_ZWLR_SCREENCOPY_FRAME_V1: WaylandData = WaylandData {
     name: "zwlr_screencopy_frame_v1",
     evts: &[
         WaylandMethod {
@@ -5604,6 +5699,7 @@ const ZWLR_SCREENCOPY_FRAME_V1: WaylandData = WaylandData {
     ],
     version: 3,
 };
+pub const ZWLR_SCREENCOPY_FRAME_V1: &[u8] = DATA_ZWLR_SCREENCOPY_FRAME_V1.name.as_bytes();
 pub fn write_req_xdg_wm_base_get_xdg_surface(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -5630,7 +5726,7 @@ pub fn parse_req_xdg_wm_base_get_xdg_surface<'a>(
     Ok((arg1, arg2))
 }
 pub const OPCODE_XDG_WM_BASE_GET_XDG_SURFACE: MethodId = MethodId::Request(2);
-const XDG_WM_BASE: WaylandData = WaylandData {
+const DATA_XDG_WM_BASE: WaylandData = WaylandData {
     name: "xdg_wm_base",
     evts: &[WaylandMethod {
         name: "ping",
@@ -5661,7 +5757,8 @@ const XDG_WM_BASE: WaylandData = WaylandData {
     ],
     version: 6,
 };
-const XDG_POSITIONER: WaylandData = WaylandData {
+pub const XDG_WM_BASE: &[u8] = DATA_XDG_WM_BASE.name.as_bytes();
+const DATA_XDG_POSITIONER: WaylandData = WaylandData {
     name: "xdg_positioner",
     evts: &[],
     reqs: &[
@@ -5718,6 +5815,7 @@ const XDG_POSITIONER: WaylandData = WaylandData {
     ],
     version: 6,
 };
+pub const XDG_POSITIONER: &[u8] = DATA_XDG_POSITIONER.name.as_bytes();
 pub fn write_req_xdg_surface_get_toplevel(dst: &mut &mut [u8], for_id: ObjId, id: ObjId) {
     let l = length_req_xdg_surface_get_toplevel();
     write_header(dst, for_id, l, 1, 0);
@@ -5735,7 +5833,7 @@ pub fn parse_req_xdg_surface_get_toplevel<'a>(mut msg: &'a [u8]) -> Result<ObjId
     Ok(arg1)
 }
 pub const OPCODE_XDG_SURFACE_GET_TOPLEVEL: MethodId = MethodId::Request(1);
-const XDG_SURFACE: WaylandData = WaylandData {
+const DATA_XDG_SURFACE: WaylandData = WaylandData {
     name: "xdg_surface",
     evts: &[WaylandMethod {
         name: "configure",
@@ -5771,6 +5869,7 @@ const XDG_SURFACE: WaylandData = WaylandData {
     ],
     version: 6,
 };
+pub const XDG_SURFACE: &[u8] = DATA_XDG_SURFACE.name.as_bytes();
 pub fn write_req_xdg_toplevel_set_title(dst: &mut &mut [u8], for_id: ObjId, title: &[u8]) {
     let l = length_req_xdg_toplevel_set_title(title.len());
     write_header(dst, for_id, l, 2, 0);
@@ -5790,7 +5889,7 @@ pub fn parse_req_xdg_toplevel_set_title<'a>(mut msg: &'a [u8]) -> Result<&'a [u8
     Ok(arg1)
 }
 pub const OPCODE_XDG_TOPLEVEL_SET_TITLE: MethodId = MethodId::Request(2);
-const XDG_TOPLEVEL: WaylandData = WaylandData {
+const DATA_XDG_TOPLEVEL: WaylandData = WaylandData {
     name: "xdg_toplevel",
     evts: &[
         WaylandMethod {
@@ -5888,7 +5987,8 @@ const XDG_TOPLEVEL: WaylandData = WaylandData {
     ],
     version: 6,
 };
-const XDG_POPUP: WaylandData = WaylandData {
+pub const XDG_TOPLEVEL: &[u8] = DATA_XDG_TOPLEVEL.name.as_bytes();
+const DATA_XDG_POPUP: WaylandData = WaylandData {
     name: "xdg_popup",
     evts: &[
         WaylandMethod {
@@ -5926,6 +6026,7 @@ const XDG_POPUP: WaylandData = WaylandData {
     ],
     version: 6,
 };
+pub const XDG_POPUP: &[u8] = DATA_XDG_POPUP.name.as_bytes();
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum WaylandInterface {
@@ -6093,81 +6194,81 @@ impl TryFrom<u32> for WaylandInterface {
     }
 }
 pub const INTERFACE_TABLE: &[WaylandData] = &[
-    EXT_DATA_CONTROL_DEVICE_V1,
-    EXT_DATA_CONTROL_MANAGER_V1,
-    EXT_DATA_CONTROL_OFFER_V1,
-    EXT_DATA_CONTROL_SOURCE_V1,
-    EXT_FOREIGN_TOPLEVEL_HANDLE_V1,
-    EXT_FOREIGN_TOPLEVEL_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
-    EXT_FOREIGN_TOPLEVEL_LIST_V1,
-    EXT_IMAGE_CAPTURE_SOURCE_V1,
-    EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1,
-    EXT_IMAGE_COPY_CAPTURE_FRAME_V1,
-    EXT_IMAGE_COPY_CAPTURE_MANAGER_V1,
-    EXT_IMAGE_COPY_CAPTURE_SESSION_V1,
-    EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
-    GTK_PRIMARY_SELECTION_DEVICE,
-    GTK_PRIMARY_SELECTION_DEVICE_MANAGER,
-    GTK_PRIMARY_SELECTION_OFFER,
-    GTK_PRIMARY_SELECTION_SOURCE,
-    WL_BUFFER,
-    WL_CALLBACK,
-    WL_COMPOSITOR,
-    WL_DATA_DEVICE,
-    WL_DATA_DEVICE_MANAGER,
-    WL_DATA_OFFER,
-    WL_DATA_SOURCE,
-    WL_DISPLAY,
-    WL_DRM,
-    WL_KEYBOARD,
-    WL_OUTPUT,
-    WL_POINTER,
-    WL_REGION,
-    WL_REGISTRY,
-    WL_SEAT,
-    WL_SHELL,
-    WL_SHELL_SURFACE,
-    WL_SHM,
-    WL_SHM_POOL,
-    WL_SUBCOMPOSITOR,
-    WL_SUBSURFACE,
-    WL_SURFACE,
-    WL_TOUCH,
-    WP_COMMIT_TIMER_V1,
-    WP_COMMIT_TIMING_MANAGER_V1,
-    WP_LINUX_DRM_SYNCOBJ_MANAGER_V1,
-    WP_LINUX_DRM_SYNCOBJ_SURFACE_V1,
-    WP_LINUX_DRM_SYNCOBJ_TIMELINE_V1,
-    WP_PRESENTATION,
-    WP_PRESENTATION_FEEDBACK,
-    WP_SECURITY_CONTEXT_MANAGER_V1,
-    WP_SECURITY_CONTEXT_V1,
-    XDG_POPUP,
-    XDG_POSITIONER,
-    XDG_SURFACE,
-    XDG_TOPLEVEL,
-    XDG_WM_BASE,
-    ZWLR_DATA_CONTROL_DEVICE_V1,
-    ZWLR_DATA_CONTROL_MANAGER_V1,
-    ZWLR_DATA_CONTROL_OFFER_V1,
-    ZWLR_DATA_CONTROL_SOURCE_V1,
-    ZWLR_EXPORT_DMABUF_FRAME_V1,
-    ZWLR_EXPORT_DMABUF_MANAGER_V1,
-    ZWLR_GAMMA_CONTROL_MANAGER_V1,
-    ZWLR_GAMMA_CONTROL_V1,
-    ZWLR_SCREENCOPY_FRAME_V1,
-    ZWLR_SCREENCOPY_MANAGER_V1,
-    ZWP_INPUT_METHOD_KEYBOARD_GRAB_V2,
-    ZWP_INPUT_METHOD_MANAGER_V2,
-    ZWP_INPUT_METHOD_V2,
-    ZWP_INPUT_POPUP_SURFACE_V2,
-    ZWP_LINUX_BUFFER_PARAMS_V1,
-    ZWP_LINUX_DMABUF_FEEDBACK_V1,
-    ZWP_LINUX_DMABUF_V1,
-    ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1,
-    ZWP_PRIMARY_SELECTION_DEVICE_V1,
-    ZWP_PRIMARY_SELECTION_OFFER_V1,
-    ZWP_PRIMARY_SELECTION_SOURCE_V1,
-    ZWP_VIRTUAL_KEYBOARD_MANAGER_V1,
-    ZWP_VIRTUAL_KEYBOARD_V1,
+    DATA_EXT_DATA_CONTROL_DEVICE_V1,
+    DATA_EXT_DATA_CONTROL_MANAGER_V1,
+    DATA_EXT_DATA_CONTROL_OFFER_V1,
+    DATA_EXT_DATA_CONTROL_SOURCE_V1,
+    DATA_EXT_FOREIGN_TOPLEVEL_HANDLE_V1,
+    DATA_EXT_FOREIGN_TOPLEVEL_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
+    DATA_EXT_FOREIGN_TOPLEVEL_LIST_V1,
+    DATA_EXT_IMAGE_CAPTURE_SOURCE_V1,
+    DATA_EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1,
+    DATA_EXT_IMAGE_COPY_CAPTURE_FRAME_V1,
+    DATA_EXT_IMAGE_COPY_CAPTURE_MANAGER_V1,
+    DATA_EXT_IMAGE_COPY_CAPTURE_SESSION_V1,
+    DATA_EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
+    DATA_GTK_PRIMARY_SELECTION_DEVICE,
+    DATA_GTK_PRIMARY_SELECTION_DEVICE_MANAGER,
+    DATA_GTK_PRIMARY_SELECTION_OFFER,
+    DATA_GTK_PRIMARY_SELECTION_SOURCE,
+    DATA_WL_BUFFER,
+    DATA_WL_CALLBACK,
+    DATA_WL_COMPOSITOR,
+    DATA_WL_DATA_DEVICE,
+    DATA_WL_DATA_DEVICE_MANAGER,
+    DATA_WL_DATA_OFFER,
+    DATA_WL_DATA_SOURCE,
+    DATA_WL_DISPLAY,
+    DATA_WL_DRM,
+    DATA_WL_KEYBOARD,
+    DATA_WL_OUTPUT,
+    DATA_WL_POINTER,
+    DATA_WL_REGION,
+    DATA_WL_REGISTRY,
+    DATA_WL_SEAT,
+    DATA_WL_SHELL,
+    DATA_WL_SHELL_SURFACE,
+    DATA_WL_SHM,
+    DATA_WL_SHM_POOL,
+    DATA_WL_SUBCOMPOSITOR,
+    DATA_WL_SUBSURFACE,
+    DATA_WL_SURFACE,
+    DATA_WL_TOUCH,
+    DATA_WP_COMMIT_TIMER_V1,
+    DATA_WP_COMMIT_TIMING_MANAGER_V1,
+    DATA_WP_LINUX_DRM_SYNCOBJ_MANAGER_V1,
+    DATA_WP_LINUX_DRM_SYNCOBJ_SURFACE_V1,
+    DATA_WP_LINUX_DRM_SYNCOBJ_TIMELINE_V1,
+    DATA_WP_PRESENTATION,
+    DATA_WP_PRESENTATION_FEEDBACK,
+    DATA_WP_SECURITY_CONTEXT_MANAGER_V1,
+    DATA_WP_SECURITY_CONTEXT_V1,
+    DATA_XDG_POPUP,
+    DATA_XDG_POSITIONER,
+    DATA_XDG_SURFACE,
+    DATA_XDG_TOPLEVEL,
+    DATA_XDG_WM_BASE,
+    DATA_ZWLR_DATA_CONTROL_DEVICE_V1,
+    DATA_ZWLR_DATA_CONTROL_MANAGER_V1,
+    DATA_ZWLR_DATA_CONTROL_OFFER_V1,
+    DATA_ZWLR_DATA_CONTROL_SOURCE_V1,
+    DATA_ZWLR_EXPORT_DMABUF_FRAME_V1,
+    DATA_ZWLR_EXPORT_DMABUF_MANAGER_V1,
+    DATA_ZWLR_GAMMA_CONTROL_MANAGER_V1,
+    DATA_ZWLR_GAMMA_CONTROL_V1,
+    DATA_ZWLR_SCREENCOPY_FRAME_V1,
+    DATA_ZWLR_SCREENCOPY_MANAGER_V1,
+    DATA_ZWP_INPUT_METHOD_KEYBOARD_GRAB_V2,
+    DATA_ZWP_INPUT_METHOD_MANAGER_V2,
+    DATA_ZWP_INPUT_METHOD_V2,
+    DATA_ZWP_INPUT_POPUP_SURFACE_V2,
+    DATA_ZWP_LINUX_BUFFER_PARAMS_V1,
+    DATA_ZWP_LINUX_DMABUF_FEEDBACK_V1,
+    DATA_ZWP_LINUX_DMABUF_V1,
+    DATA_ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1,
+    DATA_ZWP_PRIMARY_SELECTION_DEVICE_V1,
+    DATA_ZWP_PRIMARY_SELECTION_OFFER_V1,
+    DATA_ZWP_PRIMARY_SELECTION_SOURCE_V1,
+    DATA_ZWP_VIRTUAL_KEYBOARD_MANAGER_V1,
+    DATA_ZWP_VIRTUAL_KEYBOARD_V1,
 ];

@@ -15,6 +15,7 @@ use crate::util::*;
 use crate::wayland::*;
 use crate::wayland_gen::*;
 
+use core::str;
 use log::{debug, error};
 use nix::libc;
 use nix::sys::memfd;
@@ -1108,7 +1109,7 @@ pub fn process_way_msg(
     if opt_meth.is_none() {
         debug!(
             "Method out of range: {}@{}, opcode {}",
-            &INTERFACE_TABLE[obj.obj_type as usize].name, object_id, opcode
+            INTERFACE_TABLE[obj.obj_type as usize].name, object_id, opcode
         );
         return proc_unknown_way_msg(msg, dst, transl);
     }
@@ -1118,7 +1119,7 @@ pub fn process_way_msg(
     if log::log_enabled!(log::Level::Debug) {
         debug!(
             "Processing method: {}@{}.{}({})",
-            &INTERFACE_TABLE[obj.obj_type as usize].name,
+            INTERFACE_TABLE[obj.obj_type as usize].name,
             object_id,
             meth.name,
             MethodArguments { meth, msg }
@@ -3257,7 +3258,7 @@ pub fn process_way_msg(
             ];
 
             /* Version downgrading */
-            if intf == b"wl_shm" {
+            if intf == WL_SHM {
                 let max_v = INTERFACE_TABLE[WaylandInterface::WlShm as usize].version;
                 if version > max_v {
                     version = max_v;
@@ -3270,7 +3271,7 @@ pub fn process_way_msg(
                 return Ok(ProcMsg::Done);
             }
 
-            if intf == b"zwp_linux_dmabuf_v1" {
+            if intf == ZWP_LINUX_DMABUF_V1 {
                 /* waypipe-server side: Filter out dmabuf support if the target device (or _any_ device)
                  * is not available; this must be done now to prevent advertising this global when
                  * DMABUF support is not actually available. */
@@ -3311,7 +3312,7 @@ pub fn process_way_msg(
                     );
                 }
             }
-            if intf == b"wp_linux_drm_syncobj_manager_v1" {
+            if intf == WP_LINUX_DRM_SYNCOBJ_MANAGER_V1 {
                 match glob.dmabuf_device {
                     DmabufDevice::Unknown => {
                         /* store globals for replay later */
@@ -3333,22 +3334,21 @@ pub fn process_way_msg(
             }
 
             let mut space = msg.len();
-            if intf == b"zwp_linux_dmabuf_v1" {
+            if intf == ZWP_LINUX_DMABUF_V1 {
                 let WpExtra::WlRegistry(ref mut reg) = obj.extra else {
                     return Err(tag!("Unexpected extra type for wl_registry"));
                 };
                 if !reg.syncobj_manager_replay.is_empty() {
-                    space +=
-                        length_evt_wl_registry_global(b"wp_linux_drm_syncobj_manager_v1".len())
-                            * reg.syncobj_manager_replay.len();
+                    space += length_evt_wl_registry_global(WP_LINUX_DRM_SYNCOBJ_MANAGER_V1.len())
+                        * reg.syncobj_manager_replay.len();
                 }
             }
 
             check_space!(space, 0, remaining_space);
             write_evt_wl_registry_global(dst, object_id, name, intf, version);
 
-            if intf == b"zwp_linux_dmabuf_v1" {
-                /* Replay syncobj manager events once it is certain zwp_linux_dmabuf_v1 has been resolved. */
+            if intf == ZWP_LINUX_DMABUF_V1 {
+                /* Replay syncobj manager events once it is certain Vulkan is available. */
                 let WpExtra::WlRegistry(ref mut reg) = obj.extra else {
                     return Err(tag!("Unexpected extra type for wl_registry"));
                 };
@@ -3357,7 +3357,7 @@ pub fn process_way_msg(
                         dst,
                         object_id,
                         sync_name,
-                        b"wp_linux_drm_syncobj_manager_v1",
+                        WP_LINUX_DRM_SYNCOBJ_MANAGER_V1,
                         sync_version,
                     );
                 }
@@ -3368,7 +3368,7 @@ pub fn process_way_msg(
         (WaylandInterface::WlRegistry, OPCODE_WL_REGISTRY_BIND) => {
             // filter out events
             let (_id, name, version, oid) = parse_req_wl_registry_bind(msg)?;
-            if name == b"zwp_linux_dmabuf_v1" {
+            if name == ZWP_LINUX_DMABUF_V1 {
                 let light_setup = version >= 4 && glob.on_display_side;
                 if matches!(glob.dmabuf_device, DmabufDevice::Unknown) {
                     let dev = if let Some(node) = &glob.opts.drm_node {

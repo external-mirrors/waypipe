@@ -72,10 +72,6 @@ pub fn provide_secctx(
         }
     }
 
-    let sec_man_name: &[u8] = INTERFACE_TABLE
-        [WaylandInterface::WpSecurityContextManagerV1 as usize]
-        .name
-        .as_bytes();
     let secctx_name: u32 = loop {
         let msg = read_event(&connection)?;
         let (object_id, _length, opcode) = parse_wl_header(&msg);
@@ -92,7 +88,7 @@ pub fn provide_secctx(
                 continue;
             }
             let (name, interface, version) = parse_evt_wl_registry_global(&msg[..])?;
-            if interface != sec_man_name {
+            if interface != WP_SECURITY_CONTEXT_MANAGER_V1 {
                 continue;
             }
             assert!(version >= 1);
@@ -105,7 +101,14 @@ pub fn provide_secctx(
     let mut tmp = [0_u8; 512];
     let tmp_len = tmp.len();
     let mut dst = &mut tmp[..];
-    write_req_wl_registry_bind(&mut dst, registry, secctx_name, sec_man_name, 1, manager);
+    write_req_wl_registry_bind(
+        &mut dst,
+        registry,
+        secctx_name,
+        WP_SECURITY_CONTEXT_MANAGER_V1,
+        1,
+        manager,
+    );
     write_req_wp_security_context_manager_v1_create_listener(&mut dst, manager, false, context);
     write_req_wp_security_context_v1_set_app_id(&mut dst, context, app_id.as_bytes());
     /* Set the instance id to indicate the root process */
