@@ -108,8 +108,8 @@ pub struct VulkanDmabuf {
     pub image: vk::Image,
     // todo: store memory, to be able to free it properly when the VulkanDmabuf is dropped?
     // also: the file descriptors probably have a separate lifespan; check this
-    pub width: usize, // TODO: make u32, for better source and Vulkan compatiblity?
-    pub height: usize,
+    pub width: u32,
+    pub height: u32,
     // note: the drm_format should never be needed after casting to nearest Vulkan approximation
     pub vk_format: vk::Format,
 
@@ -286,7 +286,7 @@ fn exts_has_prop(exts: &[vk::ExtensionProperties], name: &CStr, version: u32) ->
 
 // Additional information for vulkan formats
 pub struct FormatLayoutInfo {
-    pub bpp: usize,
+    pub bpp: u32,
     pub planes: usize,
     // TODO: while the number of _memory_ planes can be looked up by modifier
     // (e.g., to account for CCS planes), need to track number of logical planes
@@ -1815,8 +1815,8 @@ pub fn vulkan_import_dmabuf(
             memory_planes: mem_planes,
             vk_format,
             can_store_and_sample,
-            width: width as usize,
-            height: height as usize,
+            width,
+            height,
         }))
     }
 }
@@ -2051,8 +2051,8 @@ pub fn vulkan_create_dmabuf(
                 memory_planes: mem_planes,
                 vk_format,
                 can_store_and_sample,
-                width: width as usize,
-                height: height as usize,
+                width,
+                height,
             }),
             planes,
         ))
@@ -2380,12 +2380,12 @@ fn make_copy_regions(
     view_row_length: Option<u32>,
     img: &VulkanDmabuf,
 ) -> Vec<vk::BufferImageCopy> {
-    let row_length = view_row_length.unwrap_or((img.width * format_info.bpp) as u32);
-    assert!(row_length >= (img.width * format_info.bpp) as u32);
-    assert!(row_length % (format_info.bpp as u32) == 0);
+    let row_length = view_row_length.unwrap_or(img.width * format_info.bpp);
+    assert!(row_length >= img.width * format_info.bpp);
+    assert!(row_length % format_info.bpp == 0);
 
     let prototype = vk::BufferImageCopy::default()
-        .buffer_row_length(row_length / (format_info.bpp as u32))
+        .buffer_row_length(row_length / format_info.bpp)
         .buffer_image_height(0) /* not needed, single layer */
         .image_subresource(
             vk::ImageSubresourceLayers::default()
@@ -2403,7 +2403,7 @@ fn make_copy_regions(
         // TODO: this assumes disjoint segments; validate time?
 
         // (Can avoid this by super-aligning diffs?)
-        let ubpp = format_info.bpp as u32;
+        let ubpp = format_info.bpp;
 
         let mut start_row = start / row_length;
         let end_row = (end - 1) / row_length;
@@ -2425,7 +2425,7 @@ fn make_copy_regions(
         );
         let mut start_pos = (start % row_length) / ubpp;
         let mut end_pos = 1 + ((end - 1) % row_length) / ubpp;
-        let w = img.width as u32;
+        let w = img.width;
         if start_pos >= w {
             /* Advance to next row */
             source_offset += row_length - start_pos * ubpp;
@@ -2774,13 +2774,13 @@ impl VulkanDmabuf {
         let format_info = get_vulkan_info(self.vk_format);
         // TODO: handle multiplanar formats
         if let Some(r) = view_row_length {
-            self.height * (r as usize)
+            (self.height as usize) * (r as usize)
         } else {
-            self.width * self.height * format_info.bpp
+            (self.width as usize) * (self.height as usize) * (format_info.bpp as usize)
         }
     }
     // todo: will need modification for multi-planar support
-    pub fn get_bpp(&self) -> usize {
+    pub fn get_bpp(&self) -> u32 {
         let format_info = get_vulkan_info(self.vk_format);
         format_info.bpp
     }
@@ -3115,7 +3115,7 @@ fn test_dmabuf() {
 
             println!("DMABUF imported");
 
-            let mut pattern: Vec<u8> = vec![0; (width * height) as usize * bpp];
+            let mut pattern: Vec<u8> = vec![0; (width * height * bpp) as usize];
             for x in pattern.iter_mut().enumerate() {
                 *x.1 = (x.0 * (j + 1)) as u8;
             }

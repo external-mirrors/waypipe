@@ -431,8 +431,8 @@ fn get_damage_for_dmabuf(
         ),
         DmabufImpl::Gbm(ref buf) => (
             buf.nominal_size(sfdd.view_row_stride),
-            buf.width as usize,
-            buf.height as usize,
+            buf.width,
+            buf.height,
         ),
     };
 
@@ -445,7 +445,7 @@ fn get_damage_for_dmabuf(
     let mut rects = get_damage_rects(surface, buffer.unique_id, width as i32, height as i32);
     /* Stride: tightly packed. */
     // except: possibly gcd(4,bpp) aligned ?
-    let stride = sfdd.view_row_stride.unwrap_or((width * bpp) as u32);
+    let stride = sfdd.view_row_stride.unwrap_or(width * (bpp as u32));
     compute_damaged_segments(&mut rects[..], 6, 128, 0, stride as usize, bpp)
 }
 

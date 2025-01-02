@@ -452,13 +452,13 @@ fn pack_glsl_mat3x4(mtx: &[[f32; 4]; 3]) -> [u8; 48] {
 /* For compatibility with original Waypipe; align to 16-pixel blocks. This will
  * suffice for most alignment requirements. This is not a big deal since we should
  * copy to an intermediate buffer anyway. */
-fn align_size(width: usize, height: usize, format: VideoFormat) -> (i32, i32) {
-    let mut w = align(width, 16) as i32;
+fn align_size(width: u32, height: u32, format: VideoFormat) -> (i32, i32) {
+    let mut w = width.next_multiple_of(16) as i32;
     if format == VideoFormat::H264 {
         /* libavcodec requires width >= 32 for software encoding H264 */
         w = w.max(32);
     }
-    let h = align(height, 16) as i32;
+    let h = height.next_multiple_of(16) as i32;
     (w, h)
 }
 
@@ -1308,10 +1308,7 @@ pub fn start_dmavid_decode_hw(
             (*frame).width.try_into().unwrap(),
             (*frame).height.try_into().unwrap(),
         );
-        assert!(
-            frame_width as usize >= state.target.width
-                && frame_height as usize >= state.target.height
-        );
+        assert!(frame_width >= state.target.width && frame_height >= state.target.height);
 
         let hw_fr_ref = (*frame).hw_frames_ctx.as_ref().unwrap();
         let hwfc_ref = hw_fr_ref.data.cast::<AVHWFramesContext>().as_mut().unwrap();
@@ -1579,8 +1576,8 @@ pub fn start_dmavid_decode_hw(
             bind_descs,
             &[],
         );
-        let xgroups = ((state.target.width + 7) / 8) as u32;
-        let ygroups = ((state.target.height + 7) / 8) as u32;
+        let xgroups = (state.target.width + 7) / 8;
+        let ygroups = (state.target.height + 7) / 8;
         vulk.dev.cmd_dispatch(cb, xgroups, ygroups, 1);
 
         // Only for main image; other barriers are
@@ -1925,8 +1922,8 @@ pub fn start_dmavid_decode_sw(
             bind_descs,
             &[],
         );
-        let xgroups = ((state.target.width + 7) / 8) as u32;
-        let ygroups = ((state.target.height + 7) / 8) as u32;
+        let xgroups = (state.target.width + 7) / 8;
+        let ygroups = (state.target.height + 7) / 8;
         vulk.dev.cmd_dispatch(cb, xgroups, ygroups, 1);
 
         // Only for main image; other barriers are

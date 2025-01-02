@@ -2131,9 +2131,9 @@ fn collect_updates(
                 if sfd.only_here {
                     let slice_data = dmabuf_slice_make_ideal(
                         data.drm_format,
-                        buf.width as u32,
-                        buf.height as u32,
-                        buf.get_bpp() as u32,
+                        buf.width,
+                        buf.height,
+                        buf.get_bpp(),
                     );
                     let vid_flags: u32 = 0xff & (opts.video.format.unwrap() as u32);
                     let msg = cat4x4(
@@ -2188,11 +2188,9 @@ fn collect_updates(
             if sfd.only_here {
                 // Send creation message
                 let (width, height, bpp) = match data.buf {
-                    DmabufImpl::Vulkan(ref vulk_buf) => (
-                        vulk_buf.width as u32,
-                        vulk_buf.height as u32,
-                        vulk_buf.get_bpp() as u32,
-                    ),
+                    DmabufImpl::Vulkan(ref vulk_buf) => {
+                        (vulk_buf.width, vulk_buf.height, vulk_buf.get_bpp())
+                    }
                     DmabufImpl::Gbm(ref gbm_buf) => {
                         (gbm_buf.width, gbm_buf.height, gbm_buf.get_bpp())
                     }
@@ -3036,7 +3034,7 @@ fn run_decomp_task(task: &DecompTask, cache: &mut ThreadCache) -> Result<DecompR
                     compute_diff_span(reread_view.data, ntrailing as usize, task.file_size)?;
 
                 let mut misaligned: bool = false;
-                let bpp = target.dst.get_bpp() as u32;
+                let bpp = target.dst.get_bpp();
 
                 let mut segments: Vec<(u32, u32, u32)> = Vec::new();
                 let mut pos: usize = 0;
@@ -3111,7 +3109,7 @@ fn run_decomp_task(task: &DecompTask, cache: &mut ThreadCache) -> Result<DecompR
                         &msg[16..len],
                         decomp_len,
                     )?;
-                    let b = target.dst.get_bpp();
+                    let b = target.dst.get_bpp() as usize;
                     let (ext_start, ext_end) = (b * (region_start / b), align(region_end, b));
 
                     /* The new interval might overlap */
@@ -3194,7 +3192,8 @@ fn run_decomp_task(task: &DecompTask, cache: &mut ThreadCache) -> Result<DecompR
                 // TODO: create a 'pending_writes' state region of the VulkanDmabuf to
                 // verify that there are no overlapping segments with other tasks
 
-                if is_segment_texel_aligned(region_start, region_end, target.dst.get_bpp()) {
+                if is_segment_texel_aligned(region_start, region_end, target.dst.get_bpp() as usize)
+                {
                     /* Fast path: decompress into write-buf, copy immediately to image, and copy to mirror afterwards */
                     let write_buf = Arc::new(vulkan_get_buffer(&target.dst.vulk, reg_len, true)?);
                     let write_view = write_buf.get_write_view();
@@ -3260,7 +3259,7 @@ fn run_decomp_task(task: &DecompTask, cache: &mut ThreadCache) -> Result<DecompR
                     );
                     let fill =
                         decomp_into_vec(task.compression, &mut cache.comp, &msg[16..len], reg_len)?;
-                    let b = target.dst.get_bpp();
+                    let b = target.dst.get_bpp() as usize;
                     let (ext_start, ext_end) = (b * (region_start / b), align(region_end, b));
 
                     /* The new interval might overlap */

@@ -18,8 +18,8 @@ mod dmabuf_stub {
     pub struct VulkanCopyHandle(());
     pub struct VulkanDmabuf {
         pub vulk: Arc<VulkanDevice>,
-        pub width: usize,
-        pub height: usize,
+        pub width: u32,
+        pub height: u32,
     }
     pub struct VulkanBuffer(());
     pub struct VulkanBufferReadView<'a> {
@@ -180,7 +180,7 @@ mod dmabuf_stub {
         pub fn nominal_size(self: &VulkanDmabuf, view_row_length: Option<u32>) -> usize {
             unreachable!();
         }
-        pub fn get_bpp(&self) -> usize {
+        pub fn get_bpp(&self) -> u32 {
             unreachable!();
         }
     }
