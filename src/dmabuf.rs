@@ -18,15 +18,19 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub struct ModifierData {
-    pub modifier: u64,
     pub plane_count: u32,
     pub max_size_transfer: (usize, usize),
     pub max_size_store_and_sample: Option<(usize, usize)>,
 }
 
+/** A list of modifiers and associated metadata. */
 #[derive(Debug)]
 pub struct FormatData {
-    pub modifiers: Vec<ModifierData>,
+    /** The message handling logic generally only needs the list which modifiers
+     * are available, so store these separately to provide &[u64] access. */
+    pub modifiers: Vec<u64>,
+    /** A list matching 'modifiers'. */
+    modifier_data: Vec<ModifierData>,
 }
 
 pub struct VulkanQueue {
@@ -78,7 +82,7 @@ pub struct VulkanDevice {
     pub timeline_semaphore: khr::timeline_semaphore::Device,
     ext_semaphore_fd: khr::external_semaphore_fd::Device,
 
-    pub formats: BTreeMap<vk::Format, FormatData>,
+    pub formats: BTreeMap<vk::Format, FormatData>, // todo: the set of possible formats is small and known at compile time; use a table and perfect hashing instead?
     device_id: u64,
     pub queue_family: u32,
     memory_properties: vk::PhysicalDeviceMemoryProperties,
@@ -1170,7 +1174,8 @@ pub fn setup_vulkan_device_base(
 
             let info = get_vulkan_info(*f);
 
-            let mut mod_list = Vec::<ModifierData>::new();
+            let mut mod_list: Vec<u64> = Vec::new();
+            let mut mod_data_list: Vec<ModifierData> = Vec::new();
 
             for m in dst.iter() {
                 /* YUV formats are only fully supported if one can create and import disjoint planes */
@@ -1224,8 +1229,8 @@ pub fn setup_vulkan_device_base(
                     None
                 };
 
-                mod_list.push(ModifierData {
-                    modifier: m.drm_format_modifier,
+                mod_list.push(m.drm_format_modifier);
+                mod_data_list.push(ModifierData {
                     plane_count: m.drm_format_modifier_plane_count,
                     max_size_transfer,
                     max_size_store_and_sample,
@@ -1238,11 +1243,12 @@ pub fn setup_vulkan_device_base(
                 // Alternatively, a preference for video-encodable formats could be made part of dmabuf-feedback,
                 // and/or an intermediate storage image could be added to allow video encoding for modifiers
                 // which do no support storage or only support small sizes
-                if mod_list
-                    .iter()
-                    .any(|m| m.max_size_store_and_sample.is_some())
-                {
-                    mod_list.retain(|m| m.max_size_store_and_sample.is_some());
+                for i in (0..mod_list.len()).rev() {
+                    /* Iterating in reverse order ensures each entry is considered exactly once */
+                    if mod_data_list[i].max_size_store_and_sample.is_none() {
+                        mod_list.remove(i);
+                        mod_data_list.remove(i);
+                    }
                 }
             }
 
@@ -1254,6 +1260,7 @@ pub fn setup_vulkan_device_base(
                 *f,
                 FormatData {
                     modifiers: mod_list,
+                    modifier_data: mod_data_list,
                 },
             );
         }
@@ -1623,11 +1630,12 @@ pub fn vulkan_import_dmabuf(
         .enumerate()
         .all(|(i, x)| planes[*x].plane_idx == i as u32));
 
-    let mod_data = vulk.formats[&vk_format]
+    let mod_index = vulk.formats[&vk_format]
         .modifiers
         .iter()
-        .find(|x| x.modifier == modifier)
+        .position(|x| *x == modifier)
         .unwrap();
+    let mod_data = &vulk.formats[&vk_format].modifier_data[mod_index];
     let max_size = if can_store_and_sample {
         mod_data.max_size_store_and_sample.unwrap()
     } else {
@@ -1838,23 +1846,27 @@ pub fn vulkan_create_dmabuf(
 
     /*<- the list of modifiers that may be chosen */
     let mut mod_options = Vec::new();
-    for v in format_data.modifiers.iter() {
-        if !modifier_options.contains(&v.modifier) {
+    for (v, data) in format_data
+        .modifiers
+        .iter()
+        .zip(format_data.modifier_data.iter())
+    {
+        if !modifier_options.contains(v) {
             continue;
         }
 
         let max_size = if can_store_and_sample {
-            let Some(s) = v.max_size_store_and_sample else {
+            let Some(s) = data.max_size_store_and_sample else {
                 continue;
             };
             s
         } else {
-            v.max_size_transfer
+            data.max_size_transfer
         };
         if width as usize > max_size.0 || height as usize > max_size.1 {
             continue;
         }
-        mod_options.push(v.modifier);
+        mod_options.push(*v);
     }
     if mod_options.is_empty() {
         return Err(tag!(
@@ -1924,11 +1936,11 @@ pub fn vulkan_create_dmabuf(
             return Err(tag!("Failed to get image format modifiers: {}", x));
         }
 
-        let mod_info = format_data
+        let mod_info = &format_data.modifier_data[format_data
             .modifiers
             .iter()
-            .find(|x| x.modifier == props.drm_format_modifier)
-            .unwrap();
+            .position(|x| *x == props.drm_format_modifier)
+            .unwrap()];
         let nmemoryplanes = mod_info.plane_count as usize;
 
         let mut bind_infos: Vec<vk::BindImageMemoryInfoKHR<'_>> = Vec::new(); // todo: fixed size array
@@ -2734,9 +2746,10 @@ impl VulkanDevice {
         let Some(data) = self.formats.get(&vk_format) else {
             return false;
         };
-        let Some(mod_data) = data.modifiers.iter().find(|x| x.modifier == modifier) else {
+        let Some(idx) = data.modifiers.iter().position(|x| *x == modifier) else {
             return false;
         };
+        let mod_data = &data.modifier_data[idx];
         let max_size = if can_store_and_sample {
             mod_data.max_size_store_and_sample.unwrap()
         } else {
@@ -2752,18 +2765,18 @@ impl VulkanDevice {
         let Some(data) = self.formats.get(&vk_fmt) else {
             return false;
         };
-        data.modifiers.iter().any(|m| m.modifier == drm_modifier)
+        data.modifiers.contains(&drm_modifier)
     }
 
     /* Returns empty vector if format is not supported; otherwise a list of permissible modifiers */
-    pub fn get_supported_modifiers(&self, drm_format: u32) -> Vec<u64> {
+    pub fn get_supported_modifiers(&self, drm_format: u32) -> &[u64] {
         let Some(vk_fmt) = drm_to_vulkan(drm_format) else {
-            return Vec::new();
+            return &[];
         };
         let Some(data) = self.formats.get(&vk_fmt) else {
-            return Vec::new();
+            return &[];
         };
-        data.modifiers.iter().map(|m| m.modifier).collect()
+        &data.modifiers
     }
 }
 
@@ -3086,7 +3099,7 @@ fn test_dmabuf() {
                 continue;
             };
             for m in &data.modifiers {
-                format_modifiers.push((*f, m.modifier));
+                format_modifiers.push((*f, *m));
             }
         }
 

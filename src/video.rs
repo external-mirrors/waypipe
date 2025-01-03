@@ -3115,27 +3115,23 @@ fn test_video(try_hardware: bool) {
         for video_format in [VideoFormat::H264, VideoFormat::VP9, VideoFormat::AV1] {
             let mut format_modifiers = Vec::<(u32, u64, bool)>::new();
             'scan: for f in DRM_FORMATS {
-                let Some(vkf) = drm_to_vulkan(*f) else {
-                    continue;
-                };
-                let Some(data) = vulk.formats.get(&vkf) else {
-                    continue;
-                };
                 for s in sizes {
                     if !supports_video_format(&vulk, video_format, *f, s.0 as u32, s.1 as u32) {
                         continue 'scan;
                     }
                 }
-                let mut first = true;
-                for m in &data.modifiers {
-                    if m.modifier != 0 && (video_format != VideoFormat::H264 || try_hardware) {
-                        /* no point in testing all modifiers for all video formats: the intermediate
-                         * copy step should make them orthogonal */
-                        /* if trying hardware enc/dec, skip the non-linear modifiers just to save time */
-                        continue;
+                /* no point in testing all modifiers for all video formats, since the intermediate
+                 * copy step does not depend on the format. So only do this in one case. */
+                if video_format == VideoFormat::H264 && !try_hardware {
+                    let mut first = false;
+                    for m in vulk.get_supported_modifiers(*f) {
+                        format_modifiers.push((*f, *m, first));
+                        first = false;
                     }
-                    format_modifiers.push((*f, m.modifier, first));
-                    first = false;
+                } else {
+                    if let [m, ..] = vulk.get_supported_modifiers(*f) {
+                        format_modifiers.push((*f, *m, true));
+                    }
                 }
             }
 

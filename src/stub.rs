@@ -161,7 +161,7 @@ mod dmabuf_stub {
         pub fn supports_format(&self, drm_format: u32, drm_modifier: u64) -> bool {
             unreachable!();
         }
-        pub fn get_supported_modifiers(&self, drm_format: u32) -> Vec<u64> {
+        pub fn get_supported_modifiers(&self, drm_format: u32) -> &[u64] {
             unreachable!();
         }
         pub fn can_import_image(
@@ -210,7 +210,6 @@ pub use dmabuf_stub::*;
 #[cfg(not(feature = "gbmfallback"))]
 mod gbm_stub {
     use crate::util::AddDmabufPlane;
-    use std::cell::RefCell;
     use std::rc::Rc;
 
     pub struct GBMDevice {}
@@ -218,11 +217,11 @@ mod gbm_stub {
         pub width: u32,
         pub height: u32,
     }
-    pub fn setup_gbm_device(device: Option<u64>) -> Result<Option<Rc<RefCell<GBMDevice>>>, String> {
+    pub fn setup_gbm_device(device: Option<u64>) -> Result<Option<Rc<GBMDevice>>, String> {
         Ok(None)
     }
     pub fn gbm_create_dmabuf(
-        device: &Rc<RefCell<GBMDevice>>,
+        device: &Rc<GBMDevice>,
         width: u32,
         height: u32,
         format: u32,
@@ -231,7 +230,7 @@ mod gbm_stub {
         unreachable!();
     }
     pub fn gbm_import_dmabuf(
-        device: &Rc<RefCell<GBMDevice>>,
+        device: &Rc<GBMDevice>,
         planes: Vec<AddDmabufPlane>,
         width: u32,
         height: u32,
@@ -239,10 +238,10 @@ mod gbm_stub {
     ) -> Result<GBMDmabuf, String> {
         unreachable!();
     }
-    pub fn gbm_supported_modifiers(device: &Rc<RefCell<GBMDevice>>, format: u32) -> Vec<u64> {
+    pub fn gbm_supported_modifiers(device: &Rc<GBMDevice>, format: u32) -> &[u64] {
         unreachable!();
     }
-    pub fn gbm_get_device_id(device: &Rc<RefCell<GBMDevice>>) -> u64 {
+    pub fn gbm_get_device_id(device: &Rc<GBMDevice>) -> u64 {
         unreachable!();
     }
 

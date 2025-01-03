@@ -92,7 +92,7 @@ pub enum DmabufDevice {
     /** Vulkan instance and device set up */
     Vulkan((Arc<VulkanInstance>, Arc<VulkanDevice>)),
     /** libgbm device */
-    Gbm(Rc<RefCell<GBMDevice>>),
+    Gbm(Rc<GBMDevice>),
 }
 
 /** Most of the state used by the main loop (excluding in progress tasks and read/write buffers) */
@@ -985,7 +985,7 @@ pub fn dmabuf_dev_supports_format(dmabuf_dev: &DmabufDevice, format: u32, modifi
         DmabufDevice::Gbm(gbm) => gbm_supported_modifiers(gbm, format).contains(&modifier),
     }
 }
-pub fn dmabuf_dev_modifier_list(dmabuf_dev: &DmabufDevice, format: u32) -> Vec<u64> {
+pub fn dmabuf_dev_modifier_list(dmabuf_dev: &DmabufDevice, format: u32) -> &[u64] {
     match dmabuf_dev {
         DmabufDevice::Unknown | DmabufDevice::Unavailable | DmabufDevice::VulkanSetup(_) => {
             unreachable!()
@@ -1508,7 +1508,7 @@ fn process_sfd_msg(
             /* Restrict to compositor preferred modifiers, if any are available; otherwise,
              * try arbitrary format, since e.g. a Wayland client could be blindly guessing
              * the compositor's format support matches its own. */
-            let modifier_list = glob.advertised_modifiers.get(&drm_format).cloned().unwrap_or_else(|| {
+            let modifier_list = glob.advertised_modifiers.get(&drm_format).map(|x| &x[..]).unwrap_or_else(|| {
                 debug!("No advertised modifiers for {}, falling back to arbitrary supported modifier", drm_format);
                 dmabuf_dev_modifier_list(&glob.dmabuf_device, drm_format)
             }
@@ -1526,7 +1526,7 @@ fn process_sfd_msg(
                         width,
                         height,
                         drm_format,
-                        &modifier_list[..],
+                        modifier_list,
                         /* force linear; these might be the fastest to create/update on compositor side,
                          * although they might make compositor rendering a bit less efficient. */
                         // &[0],
@@ -1539,7 +1539,7 @@ fn process_sfd_msg(
                 DmabufDevice::Gbm(ref gbm) => {
                     let mods = gbm_supported_modifiers(gbm, drm_format);
                     let (buf, add_planes) =
-                        gbm_create_dmabuf(gbm, width, height, drm_format, &mods)?;
+                        gbm_create_dmabuf(gbm, width, height, drm_format, mods)?;
                     let nom_size = buf.nominal_size(view_row_stride);
                     (DmabufImpl::Gbm(buf), nom_size, add_planes)
                 }
@@ -1619,7 +1619,7 @@ fn process_sfd_msg(
                 ));
             }
 
-            let modifier_list = glob.advertised_modifiers.get(&drm_format).cloned().unwrap_or_else(|| {
+            let modifier_list = glob.advertised_modifiers.get(&drm_format).map(|x| &x[..]).unwrap_or_else(|| {
                 debug!("No advertised modifiers for {}, falling back to arbitrary supported modifier", drm_format);
                 dmabuf_dev_modifier_list(&glob.dmabuf_device, drm_format)
             }
@@ -1630,7 +1630,7 @@ fn process_sfd_msg(
                 width,
                 height,
                 drm_format,
-                &modifier_list[..],
+                modifier_list,
                 /* force linear; these might be the fastest to create/update on compositor side,
                  *       although they might make compositor rendering a bit less efficient. */
                 // &[0],

@@ -482,7 +482,7 @@ fn build_new_format_table(
     }
 
     /* Identify supported format/modifier pairs */
-    let mut modifier_table = BTreeMap::<u32, (Vec<u64>, usize)>::new();
+    let mut modifier_table = BTreeMap::<u32, (&[u64], usize)>::new();
     for f in remote_formats.iter() {
         let mods = dmabuf_dev_modifier_list(dmabuf_dev, *f);
         if !mods.is_empty() {
@@ -1880,10 +1880,10 @@ pub fn process_way_msg(
                     0,
                     remaining_space
                 );
-                add_advertised_modifiers(&mut glob.advertised_modifiers, format, &mods[..]);
+                add_advertised_modifiers(&mut glob.advertised_modifiers, format, mods);
 
                 for new_mod in mods {
-                    let (nmod_hi, nmod_lo) = split_u64(new_mod);
+                    let (nmod_hi, nmod_lo) = split_u64(*new_mod);
                     write_evt_zwp_linux_dmabuf_v1_modifier(
                         dst, object_id, format, nmod_hi, nmod_lo,
                     );
@@ -2917,9 +2917,9 @@ pub fn process_way_msg(
                     } else {
                         /* Replace modifier list with what is available locally */
                         let local_mods = dmabuf_dev_modifier_list(&glob.dmabuf_device, *fmt);
-                        add_advertised_modifiers(&mut glob.advertised_modifiers, *fmt, &local_mods);
+                        add_advertised_modifiers(&mut glob.advertised_modifiers, *fmt, local_mods);
                         for m in local_mods {
-                            output.extend_from_slice(&u64::to_le_bytes(m));
+                            output.extend_from_slice(&u64::to_le_bytes(*m));
                         }
                     }
                     if output.is_empty() {
