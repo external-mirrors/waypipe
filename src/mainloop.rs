@@ -123,6 +123,10 @@ pub struct Globals {
      * compositor makes multiple of them). wp_commit_timer_v1 uses timestamps
      * relative to this clock. */
     pub presentation_clock: Option<u32>,
+    /** Table of DRM format modifiers that both a) have been provided by linux-dmabuf-feedback-v1
+     * b) are supported by Waypipe. Use this to restrict which modifiers to try when
+     * replicating DMABUFs. */
+    pub advertised_modifiers: BTreeMap<u32, Vec<u64>>,
 
     pub opts: Options,
 
@@ -1501,6 +1505,15 @@ fn process_sfd_msg(
                 msg[12..76].try_into().unwrap(),
             ));
 
+            /* Restrict to compositor preferred modifiers, if any are available; otherwise,
+             * try arbitrary format, since e.g. a Wayland client could be blindly guessing
+             * the compositor's format support matches its own. */
+            let modifier_list = glob.advertised_modifiers.get(&drm_format).cloned().unwrap_or_else(|| {
+                debug!("No advertised modifiers for {}, falling back to arbitrary supported modifier", drm_format);
+                dmabuf_dev_modifier_list(&glob.dmabuf_device, drm_format)
+            }
+            );
+
             let (buf, nom_size, add_planes) = match glob.dmabuf_device {
                 DmabufDevice::Unknown
                 | DmabufDevice::Unavailable
@@ -1508,10 +1521,6 @@ fn process_sfd_msg(
                     return Err(tag!("Received OpenDMABUF too early"));
                 }
                 DmabufDevice::Vulkan((_, ref vulk)) => {
-                    // TODO: filter this by compositor preference exposed through dmabuf-feedback (if it exists?)
-                    // if client never requested dmabuf-feedback before creating buffers, warn and try linear?
-                    let modifier_list = vulk.get_supported_modifiers(drm_format);
-
                     let (buf, add_planes) = vulkan_create_dmabuf(
                         vulk,
                         width,
@@ -1610,9 +1619,11 @@ fn process_sfd_msg(
                 ));
             }
 
-            // TODO: filter this by compositor preference exposed through dmabuf-feedback (if it exists?)
-            // if client never requested dmabuf-feedback before creating buffers, warn and try linear?
-            let modifier_list = vulk.get_supported_modifiers(drm_format);
+            let modifier_list = glob.advertised_modifiers.get(&drm_format).cloned().unwrap_or_else(|| {
+                debug!("No advertised modifiers for {}, falling back to arbitrary supported modifier", drm_format);
+                dmabuf_dev_modifier_list(&glob.dmabuf_device, drm_format)
+            }
+            );
 
             let (buf, add_planes) = vulkan_create_dmabuf(
                 vulk,
@@ -5227,6 +5238,7 @@ pub fn main_interface_loop(
         objects: setup_object_map(),
         max_buffer_uid: 1, /* Start at 1 to ensure 0 is never valid */
         presentation_clock: None,
+        advertised_modifiers: BTreeMap::new(),
         opts: (*opts).clone(), // todo: reference opts instead?
         wire_version: init_wire_version,
         has_first_message: false,

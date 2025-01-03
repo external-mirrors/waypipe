@@ -586,6 +586,22 @@ fn build_new_format_table(
     Ok(sz)
 }
 
+/** Add new modifiers to the modifier table.
+ *
+ * This can theoretically lead to quadratic runtime, but should only be used with
+ * modifiers that are a subset of what Waypipe supports, so list lengths will
+ * never be long.
+ */
+fn add_advertised_modifiers(map: &mut BTreeMap<u32, Vec<u64>>, format: u32, modifiers: &[u64]) {
+    assert!(!modifiers.is_empty());
+    let entries: &mut Vec<u64> = map.entry(format).or_default();
+    for m in modifiers {
+        if !entries.contains(m) {
+            entries.push(*m);
+        }
+    }
+}
+
 /** Record a new Wayland object, checking that its ID was not already used */
 fn insert_new_object(
     objects: &mut BTreeMap<ObjId, WpObject>,
@@ -1845,6 +1861,7 @@ pub fn process_way_msg(
                     return Ok(ProcMsg::Done);
                 }
                 check_space!(msg.len(), 0, remaining_space);
+                add_advertised_modifiers(&mut glob.advertised_modifiers, format, &[modifier]);
                 copy_msg(msg, dst);
                 Ok(ProcMsg::Done)
             } else {
@@ -1863,6 +1880,7 @@ pub fn process_way_msg(
                     0,
                     remaining_space
                 );
+                add_advertised_modifiers(&mut glob.advertised_modifiers, format, &mods[..]);
 
                 for new_mod in mods {
                     let (nmod_hi, nmod_lo) = split_u64(new_mod);
@@ -2486,6 +2504,11 @@ pub fn process_way_msg(
                         let a = i.to_le_bytes();
                         evec.push(a[0]);
                         evec.push(a[1]);
+                        add_advertised_modifiers(
+                            &mut glob.advertised_modifiers,
+                            format.0,
+                            &[format.1],
+                        );
                     }
                 }
                 if !evec.is_empty() {
@@ -2884,11 +2907,18 @@ pub fn process_way_msg(
                         for m in mod_list.iter() {
                             if dmabuf_dev_supports_format(&glob.dmabuf_device, *fmt, *m) {
                                 output.extend_from_slice(&u64::to_le_bytes(*m));
+                                add_advertised_modifiers(
+                                    &mut glob.advertised_modifiers,
+                                    *fmt,
+                                    &[*m],
+                                );
                             }
                         }
                     } else {
                         /* Replace modifier list with what is available locally */
-                        for m in dmabuf_dev_modifier_list(&glob.dmabuf_device, *fmt) {
+                        let local_mods = dmabuf_dev_modifier_list(&glob.dmabuf_device, *fmt);
+                        add_advertised_modifiers(&mut glob.advertised_modifiers, *fmt, &local_mods);
+                        for m in local_mods {
                             output.extend_from_slice(&u64::to_le_bytes(m));
                         }
                     }
