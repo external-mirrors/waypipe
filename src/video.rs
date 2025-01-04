@@ -593,9 +593,14 @@ pub unsafe fn setup_video(
     qfis: [u32; 4],
     device_exts: &[*const c_char],
     instance_exts: &[*const c_char],
-) -> Result<VulkanVideo, String> {
-    let lib = ffmpeg::new("libavcodec.so")
-        .map_err(|x| tag!("Failed to load libavcodec (+ libavutil, etc.): {:?}", x))?;
+) -> Result<Option<VulkanVideo>, String> {
+    let lib = match ffmpeg::new("libavcodec.so") {
+        Ok(x) => x,
+        Err(x) => {
+            error!("Failed to load libavcodec (+ libavutil, etc.): {}. Video encoding/decoding is disabled.", x);
+            return Ok(None);
+        }
+    };
 
     lib.av_log_set_level(if debug {
         AV_LOG_VERBOSE
@@ -843,7 +848,7 @@ pub unsafe fn setup_video(
         .create_sampler(&sampler_rgb_info, None)
         .map_err(|_| "Failed to allocate sampler RGB")?;
 
-    Ok(VulkanVideo {
+    Ok(Some(VulkanVideo {
         bindings: lib,
         av_hwdevice: device_ref,
         codecs_h264,
@@ -859,7 +864,7 @@ pub unsafe fn setup_video(
         yuv_to_rgb_sampler_y,
         yuv_to_rgb_sampler_rb,
         rgb_to_yuv_sampler_rgb,
-    })
+    }))
 }
 
 /** Lock the first queue in the given family, if a hardware context was set up */

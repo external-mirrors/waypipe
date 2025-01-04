@@ -1318,7 +1318,7 @@ pub fn setup_vulkan_device(
         let enabled_exts = get_enabled_exts(&dev.dev_info);
 
         dev.video = if video.format.is_some() {
-            Some(unsafe {
+            unsafe {
                 setup_video(
                     &instance.entry,
                     &instance.instance,
@@ -1330,7 +1330,7 @@ pub fn setup_vulkan_device(
                     &enabled_exts,
                     INSTANCE_EXTS,
                 )?
-            })
+            }
         } else {
             None
         };

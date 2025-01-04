@@ -1612,7 +1612,7 @@ fn process_sfd_msg(
             };
             if !supports_video_format(vulk, vid_type, drm_format, width, height) {
                 return Err(tag!(
-                    "Video format {:?} is not supported at {}x{}",
+                    "Video format {:?} at {}x{} is not supported",
                     vid_type,
                     width,
                     height
