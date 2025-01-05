@@ -14,7 +14,7 @@ if git.found()
     dir_arg = '--git-dir=@0@/.git'.format(meson.project_source_root())
     commit = run_command(
         [git, dir_arg, 'rev-parse', '--verify', '-q', 'HEAD'],
-        check: true,
+        check: false,
     )
     if commit.returncode() == 0
         raw_version = '@0@ (commit @1@)'.format(
