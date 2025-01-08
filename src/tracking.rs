@@ -586,14 +586,18 @@ fn build_new_format_table(
     Ok(sz)
 }
 
-/** Add new modifiers to the modifier table.
+/** Add new modifiers to the format-to-modifier-list table.
+ *
+ * Modifiers added are not deduplicated; if `modifiers` is empty nothing will be done.
  *
  * This can theoretically lead to quadratic runtime, but should only be used with
  * modifiers that are a subset of what Waypipe supports, so list lengths will
  * never be long.
  */
 fn add_advertised_modifiers(map: &mut BTreeMap<u32, Vec<u64>>, format: u32, modifiers: &[u64]) {
-    assert!(!modifiers.is_empty());
+    if modifiers.is_empty() {
+        return;
+    }
     let entries: &mut Vec<u64> = map.entry(format).or_default();
     for m in modifiers {
         if !entries.contains(m) {
