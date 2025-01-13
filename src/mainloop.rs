@@ -3733,7 +3733,8 @@ fn process_channel(
                 return Err("Unsupported Restart message".into());
             }
             WmsgType::Close => {
-                error!("Received Close message"); // TODO: handle this cleanly
+                // TODO: consider sending this on every clean shutdown and warning if it is not received
+                debug!("Received Close message");
             }
             _ => {
                 let mut tmp = None;
@@ -4582,14 +4583,14 @@ fn loop_inner(
                 // Read from program
                 prog_read_eof |= read_from_socket(progfd, &mut from_way.input)?;
                 if prog_read_eof {
-                    error!("EOF reading from program");
+                    debug!("EOF reading from program");
                 }
             }
             if evts.contains(PollFlags::POLLOUT) {
                 // Write to program
                 prog_write_eof |= write_to_socket(progfd, &mut from_chan.output)?;
                 if prog_write_eof {
-                    error!("EOF writing to program");
+                    debug!("EOF writing to program");
                 }
             }
             if evts.contains(PollFlags::POLLHUP) {
@@ -4609,14 +4610,14 @@ fn loop_inner(
                 // Read from channel
                 chan_read_eof |= read_from_channel(chanfd, from_chan)?;
                 if chan_read_eof {
-                    error!("EOF reading from channel");
+                    debug!("EOF reading from channel");
                 }
             }
             if evts.contains(PollFlags::POLLOUT) {
                 // Write to channel
                 chan_write_eof |= write_to_channel(chanfd, &mut from_way.output)?;
                 if chan_write_eof {
-                    error!("EOF writing to channel");
+                    debug!("EOF writing to channel");
                 }
             }
             if evts.contains(PollFlags::POLLHUP) {
