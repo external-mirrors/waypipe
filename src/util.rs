@@ -683,3 +683,26 @@ pub fn set_nonblock(fd: &OwnedFd) -> Result<(), String> {
     .map_err(|x| tag!("Failed to set nonblocking: {:?}", x))?;
     Ok(())
 }
+
+/** A very simple and fast pseudorandom generator; output is only hard to
+ * predict for very restricted; this should be enough to fool a branch
+ * predictor or general-purpose compression algorithm, but should not be
+ * used outside test or benchmarking code. */
+pub struct BadRng {
+    pub state: u64,
+}
+
+impl BadRng {
+    /** Get a new u64 value */
+    pub fn next(&mut self) -> u64 {
+        // Xorshift RNG, see Marsaglia 2003
+        self.state ^= self.state << 13;
+        self.state ^= self.state >> 7;
+        self.state ^= self.state << 17;
+        self.state
+    }
+    /** Get a new value, in the range 0..maxval; this is only approximately uniform */
+    pub fn next_usize(&mut self, maxval: usize) -> usize {
+        (self.next() % maxval as u64) as usize
+    }
+}

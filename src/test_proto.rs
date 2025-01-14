@@ -1178,19 +1178,30 @@ fn proto_gamma_control(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
-/* Send `data` into `src` and check that it comes out of `dst` */
-fn check_pipe_transfer(pipe_w: OwnedFd, pipe_r: OwnedFd, data: &[u8]) {
+/** Generate a stream of data using seed `seed`, and send the first `max_write` bytes of it (or as much as possible),
+ * while receiving the first `max_read` bytes of it (or as much as possible), and check that the data read matches
+ * what was sent. */
+fn check_pipe_transfer(
+    pipe_w: OwnedFd,
+    pipe_r: OwnedFd,
+    seed: u64,
+    max_write: Option<usize>,
+    max_read: Option<usize>,
+) {
+    assert!(max_write.is_some() || max_read.is_some());
     let mut nwritten = 0;
     let start = Instant::now();
     let timeout = Duration::from_secs(1);
 
     let mut ord = Some(pipe_r);
     let mut owr = Some(pipe_w);
-    if data.is_empty() {
+    if max_write == Some(0) {
         owr = None;
     }
 
     let mut recv = Vec::new();
+    let mut to_send = Vec::new();
+    let mut gen = BadRng { state: seed };
 
     let mut tmp = vec![0; 4096];
     while ord.is_some() || owr.is_some() {
@@ -1217,10 +1228,14 @@ fn check_pipe_transfer(pipe_w: OwnedFd, pipe_r: OwnedFd, data: &[u8]) {
         let rev_rd = rd_idx.map(|i| pfds[i].revents().unwrap());
 
         if let Some(evts) = rev_rd {
-            assert!(!evts.contains(poll::PollFlags::POLLERR));
-
             if evts.contains(poll::PollFlags::POLLIN) {
-                match unistd::read(ord.as_ref().unwrap().as_raw_fd(), &mut tmp) {
+                let read_len = if let Some(limit) = max_read {
+                    limit.checked_sub(recv.len()).unwrap().min(tmp.len())
+                } else {
+                    tmp.len()
+                };
+
+                match unistd::read(ord.as_ref().unwrap().as_raw_fd(), &mut tmp[..read_len]) {
                     Err(Errno::EINTR) | Err(Errno::EAGAIN) => { /* do nothing */ }
                     Err(Errno::ECONNRESET) | Err(Errno::ENOTCONN) => {
                         ord = None;
@@ -1233,19 +1248,36 @@ fn check_pipe_transfer(pipe_w: OwnedFd, pipe_r: OwnedFd, data: &[u8]) {
                             /* nothing more to read */
                             ord = None;
                         }
+                        if let Some(limit) = max_read {
+                            if recv.len() >= limit {
+                                /* Stop reading, have read enough */
+                                ord = None;
+                            }
+                        }
                     }
                 }
-            } else if evts.contains(poll::PollFlags::POLLHUP) {
+            } else if evts.contains(poll::PollFlags::POLLHUP)
+                || evts.contains(poll::PollFlags::POLLERR)
+            {
                 /* case: hangup, no pending data */
                 ord = None;
             }
         }
         if let Some(evts) = rev_wr {
-            assert!(!evts.contains(poll::PollFlags::POLLERR));
-            if evts.contains(poll::PollFlags::POLLHUP) {
+            if evts.contains(poll::PollFlags::POLLHUP) || evts.contains(poll::PollFlags::POLLERR) {
                 owr = None;
             } else if evts.contains(poll::PollFlags::POLLOUT) {
-                match unistd::write(owr.as_ref().unwrap(), &data[nwritten..]) {
+                let extension = if let Some(len) = max_write {
+                    len - to_send.len()
+                } else {
+                    std::cmp::max(nwritten + (1 << 20), to_send.len()) - to_send.len()
+                };
+                for _ in 0..extension {
+                    to_send.push(gen.next() as u8);
+                }
+                assert!(to_send.len() > nwritten);
+
+                match unistd::write(owr.as_ref().unwrap(), &to_send[nwritten..]) {
                     Err(Errno::EINTR) | Err(Errno::EAGAIN) => { /* do nothing */ }
                     Err(Errno::EPIPE) | Err(Errno::ECONNRESET) => {
                         owr = None;
@@ -1253,7 +1285,7 @@ fn check_pipe_transfer(pipe_w: OwnedFd, pipe_r: OwnedFd, data: &[u8]) {
                     Err(x) => panic!("{:?}", x),
                     Ok(len) => {
                         nwritten += len;
-                        if nwritten == data.len() {
+                        if max_write == Some(nwritten) {
                             owr = None;
                         }
                     }
@@ -1262,7 +1294,15 @@ fn check_pipe_transfer(pipe_w: OwnedFd, pipe_r: OwnedFd, data: &[u8]) {
         }
     }
 
-    assert!(recv == data);
+    /* Data received must be a prefix of data sent */
+    assert!(recv == to_send[..recv.len()]);
+    if let Some(len) = max_read {
+        /* Should have read exactly the requested amount */
+        assert!(recv.len() == len);
+    } else {
+        /* Should read all of input */
+        assert!(recv.len() == to_send.len());
+    }
 }
 
 fn proto_pipe_write(info: TestInfo) -> TestResult {
@@ -1496,11 +1536,11 @@ fn proto_pipe_write(info: TestInfo) -> TestResult {
         ex_wl, ex_prim, ex_data, ex_gtk, ex_wlr, ex2_wl, ex2_prim, ex2_data, ex2_gtk, ex2_wlr,
     ];
 
-    let lengths = [100_usize, 0_usize, 131073_usize]
+    let lengths = [usize::MAX, 100_usize, 0_usize, 131073_usize]
         .iter()
         .chain(std::iter::repeat(&256_usize));
     for (test_no, (test, length)) in test_cases.iter().zip(lengths).enumerate() {
-        print!("Test {}.", test_no);
+        println!("Test {}.", test_no);
         run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
             let (pipe_r, pipe_w) =
                 unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK).unwrap();
@@ -1524,10 +1564,22 @@ fn proto_pipe_write(info: TestInfo) -> TestResult {
             drop(pipe_w);
             let pipe_w = ofds.remove(0);
 
-            let mut data = "test".as_bytes().repeat(align(*length, 4) / 4);
-            data.truncate(*length);
+            if *length < usize::MAX {
+                /* Send and receive a given length of message. */
+                check_pipe_transfer(
+                    pipe_w,
+                    pipe_r,
+                    test_no as u64,
+                    Some(*length),
+                    if test_no == 5 { Some(*length) } else { None },
+                );
+            } else {
+                /* Send infinite message, and receive only the first part */
+                check_pipe_transfer(pipe_w, pipe_r, test_no as u64, None, Some(50000));
+            }
 
-            check_pipe_transfer(pipe_w, pipe_r, &data);
+            /* Pass through empty message to determine if there was an error */
+            ctx.comp_write_passthrough(Vec::new());
         })?;
     }
     Ok(StatusOk::Pass)

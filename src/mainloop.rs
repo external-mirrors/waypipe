@@ -1791,7 +1791,11 @@ fn process_sfd_msg(
         }
 
         WmsgType::PipeTransfer => {
-            let sfd_handle = get_sfd(&glob.map, remote_id).ok_or("RID not in map")?;
+            let Some(sfd_handle) = get_sfd(&glob.map, remote_id) else {
+                debug!("PipeTransfer message directed to RID={}, which does not exist or was already closed and deleted. Ignoring message, because it may have been sent before the remote was notified.",
+                       remote_id);
+                return Ok(());
+            };
             let mut sfd = sfd_handle.borrow_mut();
             let ShadowFdVariant::Pipe(data) = &mut sfd.data else {
                 return Err(tag!("Applying PipeTransfer to non-Pipe ShadowFd"));
@@ -1814,12 +1818,11 @@ fn process_sfd_msg(
         WmsgType::PipeShutdownR | WmsgType::PipeShutdownW => {
             let map = &mut glob.map;
             let mut delete = false;
-            let sfd_handle = get_sfd(map, remote_id).ok_or_else(|| {
-                tag!(
-                    "Tried to shutdown remote id {} that no longer exists",
-                    remote_id
-                )
-            })?;
+            let Some(sfd_handle) = get_sfd(map, remote_id) else {
+                debug!("Shutdown message directed to RID={}, which does not exist or was already closed and deleted. Ignoring message, because it may have been sent before the remote was notified.",
+                       remote_id);
+                return Ok(());
+            };
             let mut sfd = sfd_handle.borrow_mut();
             let ShadowFdVariant::Pipe(data) = &mut sfd.data else {
                 return Err(tag!("Applying PipeTransfer to non-Pipe ShadowFd"));
@@ -4730,9 +4733,23 @@ fn loop_inner(
                                 return Err(tag!("Failed to read from pipe: {:?}", code));
                             }
                         };
-                    } else if evts.contains(PollFlags::POLLHUP) {
+                    } else if evts.contains(PollFlags::POLLHUP) || evts.contains(PollFlags::POLLERR)
+                    {
                         /* pipe has closed */
-                        debug!("Pipe at RID={} received POLLHUP", rid);
+                        debug!(
+                            "Pipe at RID={} received{}{}",
+                            rid,
+                            if evts.contains(PollFlags::POLLHUP) {
+                                " POLLHUP"
+                            } else {
+                                ""
+                            },
+                            if evts.contains(PollFlags::POLLERR) {
+                                " POLLERR"
+                            } else {
+                                ""
+                            },
+                        );
                         data.program_closed = true;
                     }
                 }
@@ -4762,11 +4779,25 @@ fn loop_inner(
                                 return Err(tag!("Failed to write to pipe: {:?}", code));
                             }
                         }
-                    } else if evts.contains(PollFlags::POLLHUP) {
+                    } else if evts.contains(PollFlags::POLLHUP) || evts.contains(PollFlags::POLLERR)
+                    {
                         /* pipe has closed */
-                        debug!("Pipe at RID={} received POLLHUP", rid);
+                        debug!(
+                            "Pipe at RID={} received{}{}",
+                            rid,
+                            if evts.contains(PollFlags::POLLHUP) {
+                                " POLLHUP"
+                            } else {
+                                ""
+                            },
+                            if evts.contains(PollFlags::POLLERR) {
+                                " POLLERR"
+                            } else {
+                                ""
+                            },
+                        );
                         data.program_closed = true;
-                    };
+                    }
                 }
             }
             Ok(keep)

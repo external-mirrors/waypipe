@@ -19,26 +19,6 @@ enum DiffPattern {
     Alternating2K,  // 4kb cycle ~ 1024 pixels,
 }
 
-struct BadRng {
-    state: u64,
-}
-
-impl BadRng {
-    /* A very simple and fast pseudorandom generator; output is only
-     * approximately uniform, and should be enough to fool a branch predictor
-     * for benchmarking purposes */
-    fn next(&mut self, maxval: u64) -> u64 {
-        // Xorshift RNG, see Marsaglia 2003
-        self.state ^= self.state << 13;
-        self.state ^= self.state >> 7;
-        self.state ^= self.state << 17;
-        self.state % maxval
-    }
-    fn next_usize(&mut self, maxval: usize) -> usize {
-        self.next(maxval as u64) as usize
-    }
-}
-
 fn fill_alternating(rng: &mut BadRng, data: &mut [u8], span_min: usize, span_max: usize) {
     let mut i = 0;
     let mut change = false;
@@ -323,7 +303,7 @@ fn estimate_diff_compress_speed(
             let j = std::cmp::min(length, i + jump);
             if change {
                 for s in &mut src[i..j] {
-                    *s = (0x7f * rng.next(3)) as u8;
+                    *s = (0x7f * rng.next_usize(3)) as u8;
                 }
             }
             i = j;
