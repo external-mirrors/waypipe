@@ -134,7 +134,10 @@ pub struct Globals {
      * for waypipe-server, this may increase from the baseline 16 to the actual
      * version on receipt of the first message */
     wire_version: u32,
+    /** Has the first message arrived and has had some processing done on it? */
     has_first_message: bool,
+    /** Has a Close message arrived (implying a clean and deliberate connection shutdown). */
+    has_received_close: bool,
 }
 
 /** Data received from a Wayland connection */
@@ -3736,8 +3739,7 @@ fn process_channel(
                 return Err("Unsupported Restart message".into());
             }
             WmsgType::Close => {
-                // TODO: consider sending this on every clean shutdown and warning if it is not received
-                debug!("Received Close message");
+                glob.has_received_close = true;
             }
             _ => {
                 let mut tmp = None;
@@ -4613,19 +4615,28 @@ fn loop_inner(
                 // Read from channel
                 chan_read_eof |= read_from_channel(chanfd, from_chan)?;
                 if chan_read_eof {
-                    debug!("EOF reading from channel");
+                    debug!(
+                        "EOF reading from channel: has close message? {}",
+                        fmt_bool(glob.has_received_close)
+                    );
                 }
             }
             if evts.contains(PollFlags::POLLOUT) {
                 // Write to channel
                 chan_write_eof |= write_to_channel(chanfd, &mut from_way.output)?;
                 if chan_write_eof {
-                    debug!("EOF writing to channel");
+                    debug!(
+                        "EOF writing to channel: has close message? {}",
+                        fmt_bool(glob.has_received_close)
+                    );
                 }
             }
             if evts.contains(PollFlags::POLLHUP) {
                 /* channel fd is no longer writable */
-                debug!("POLLHUP from channel side");
+                debug!(
+                    "POLLHUP from channel side: has close message? {}",
+                    fmt_bool(glob.has_received_close)
+                );
                 chan_write_eof = true;
             }
         }
@@ -5013,33 +5024,38 @@ fn write_bytes(sockfd: &OwnedFd, data: &[u8]) -> Result<(bool, usize), String> {
     }
 }
 
-/** Finish writing any queued data and then send an error message over the channel */
-fn loop_error_to_channel(
-    error: &str,
+/** Finish writing any queued data and then send a close message (and maybe
+ * also error message) over the channel */
+fn loop_end_to_channel(
+    error: Option<&str>,
     from_way: &mut FromWayland,
     chanfd: &OwnedFd,
     pollmask: &signal::SigSet,
     sigint_received: &AtomicBool,
+    send_close_msg: bool,
 ) -> Result<(), String> {
-    if from_way.state == DirectionState::Off {
-        debug!("Cannot send error message to channel, already closed");
-        return Ok(());
+    let mut endmsg = Vec::new();
+    if let Some(msg) = error {
+        let err = format!("waypipe-client internal error: {}", msg);
+        let errmsg_len = 4 + length_evt_wl_display_error(err.len());
+        endmsg.extend_from_slice(&build_wmsg_header(WmsgType::Protocol, errmsg_len).to_le_bytes());
+        assert!(errmsg_len % 4 == 0);
+        endmsg.resize(errmsg_len, 0);
+        let mut tmp = &mut endmsg[4..];
+        write_evt_wl_display_error(&mut tmp, ObjId(1), ObjId(1), 0, err.as_bytes());
     }
-
-    let err = format!("waypipe-client internal error: {}", error);
-    let mut errmsg = Vec::new();
-    let errmsg_len = 4 + length_evt_wl_display_error(err.len());
-    errmsg.extend_from_slice(&build_wmsg_header(WmsgType::Protocol, errmsg_len).to_le_bytes());
-    assert!(errmsg_len % 4 == 0);
-    errmsg.resize(errmsg_len, 0);
-    let mut tmp = &mut errmsg[4..];
-    write_evt_wl_display_error(&mut tmp, ObjId(1), ObjId(1), 0, err.as_bytes());
+    if send_close_msg {
+        /* Send 'Close' message to channel to make it clear the shutdown/disconnection
+         * is deliberate and that this instance of Waypipe has not crashed */
+        endmsg.extend_from_slice(&build_wmsg_header(WmsgType::Close, 8).to_le_bytes());
+        endmsg.extend_from_slice(&0_u32.to_le_bytes());
+    }
 
     let mut nwritten_err = 0;
     /* Attach protocol header, RIDs to in progress messages if needed */
     process_wayland_2(from_way);
 
-    while has_from_way_output(&from_way.output) || nwritten_err < errmsg_len {
+    while has_from_way_output(&from_way.output) || nwritten_err < endmsg.len() {
         let mut pfds = [PollFd::new(chanfd.as_fd(), PollFlags::POLLOUT)];
 
         let res = nix::poll::ppoll(&mut pfds, None, Some(*pollmask));
@@ -5058,19 +5074,19 @@ fn loop_error_to_channel(
             let eof = if has_from_way_output(&from_way.output) {
                 write_to_channel(chanfd, &mut from_way.output)?
             } else {
-                let (eof, nwritten) = write_bytes(chanfd, &errmsg[nwritten_err..])?;
+                let (eof, nwritten) = write_bytes(chanfd, &endmsg[nwritten_err..])?;
                 debug!(
-                    "Wrote bytes {}..{} of length {} error message; eof: {}",
+                    "Wrote bytes {}..{} of length {} final message; eof: {}",
                     nwritten_err,
                     nwritten_err + nwritten,
-                    errmsg.len(),
+                    endmsg.len(),
                     eof
                 );
                 nwritten_err += nwritten;
                 eof
             };
             if eof {
-                debug!("Channel closed while writing error");
+                debug!("Channel closed while writing final message");
                 break;
             }
         }
@@ -5091,11 +5107,6 @@ fn loop_error_to_wayland(
     pollmask: &signal::SigSet,
     sigint_received: &AtomicBool,
 ) -> Result<(), String> {
-    if from_chan.state == DirectionState::Off {
-        debug!("Cannot send error message to channel, already closed");
-        return Ok(());
-    }
-
     let err = format!("waypipe-server internal error: {}", error);
     let mut errmsg = Vec::new();
     let errmsg_len = length_evt_wl_display_error(err.len());
@@ -5274,6 +5285,7 @@ pub fn main_interface_loop(
         opts: (*opts).clone(), // todo: reference opts instead?
         wire_version: init_wire_version,
         has_first_message: false,
+        has_received_close: false,
     };
     let (wake_r, wake_w) = unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK)
         .map_err(|x| tag!("Failed to create pipe: {}", x))?;
@@ -5338,16 +5350,47 @@ pub fn main_interface_loop(
          * will still stop if the main thread panics before this.) */
         drop(shutdown);
 
-        if let Err(err) = ret {
+        let end_res = if let Err(err) = ret {
             error!("Sending error: {}", err);
-            let res = if on_display_side {
-                loop_error_to_channel(&err, &mut from_way, &chanfd, &pollmask, sigint_received)
+            if on_display_side {
+                loop_end_to_channel(
+                    Some(&err),
+                    &mut from_way,
+                    &chanfd,
+                    &pollmask,
+                    sigint_received,
+                    !glob.has_received_close,
+                )
             } else {
-                loop_error_to_wayland(&err, &mut from_chan, &progfd, &pollmask, sigint_received)
-            };
-            if let Err(errerr) = res {
-                error!("Error while trying to send error: {}", errerr);
+                let x = loop_error_to_wayland(
+                    &err,
+                    &mut from_chan,
+                    &progfd,
+                    &pollmask,
+                    sigint_received,
+                );
+                let y = loop_end_to_channel(
+                    None,
+                    &mut from_way,
+                    &chanfd,
+                    &pollmask,
+                    sigint_received,
+                    !glob.has_received_close,
+                );
+                x.and(y)
             }
+        } else {
+            loop_end_to_channel(
+                None,
+                &mut from_way,
+                &chanfd,
+                &pollmask,
+                sigint_received,
+                !glob.has_received_close,
+            )
+        };
+        if let Err(errerr) = end_res {
+            error!("Error while trying to send final messages: {}", errerr);
         }
 
         /* Errors from the main loop have been handled */
