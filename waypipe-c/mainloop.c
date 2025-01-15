@@ -428,8 +428,8 @@ static int advance_chanmsg_chanread(struct chan_msg_state *cmsg,
 		} else {
 			/* Continuing an old packet; space made available last
 			 * time */
-			uint32_t *header = (uint32_t *)&cmsg->recv_buffer
-							   [cmsg->recv_start];
+			uint32_t *header = (uint32_t *)&cmsg->recv_buffer[cmsg
+							->recv_start];
 			size_t sz = alignz(transfer_size(*header), 4);
 
 			size_t read_end = cmsg->recv_start + sz;

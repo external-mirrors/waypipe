@@ -258,9 +258,8 @@ static struct bench_result run_sub_bench(bool first,
 			if (compare_timespec(&next_write_time, &cur_time) < 0) {
 				transfer_load_async(&transfer_data);
 				if (transfer_data.start < transfer_data.end) {
-					struct iovec v =
-							transfer_data.vecs
-									[transfer_data.start++];
+					struct iovec v = transfer_data.vecs[transfer_data
+									.start++];
 					float delay_s = (float)v.iov_len /
 							(bandwidth_mBps * 1e6f);
 					total_wire_size += v.iov_len;

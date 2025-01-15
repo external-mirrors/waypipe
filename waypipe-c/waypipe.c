@@ -482,7 +482,7 @@ struct arg_permissions {
 	int val;
 	uint32_t mode_mask;
 };
-#define ALL_MODES (uint32_t) - 1
+#define ALL_MODES (uint32_t)-1
 static const struct arg_permissions arg_permissions[] = {
 		{'c', MODE_SSH | MODE_CLIENT | MODE_SERVER}, {'d', ALL_MODES},
 		{'h', MODE_FAIL}, {'n', MODE_SSH | MODE_CLIENT | MODE_SERVER},
