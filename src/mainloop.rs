@@ -4750,16 +4750,8 @@ fn loop_inner(
                         debug!(
                             "Pipe at RID={} received{}{}",
                             rid,
-                            if evts.contains(PollFlags::POLLHUP) {
-                                " POLLHUP"
-                            } else {
-                                ""
-                            },
-                            if evts.contains(PollFlags::POLLERR) {
-                                " POLLERR"
-                            } else {
-                                ""
-                            },
+                            string_if_bool(evts.contains(PollFlags::POLLHUP), " POLLHUP"),
+                            string_if_bool(evts.contains(PollFlags::POLLERR), " POLLERR"),
                         );
                         data.program_closed = true;
                     }
@@ -4796,16 +4788,8 @@ fn loop_inner(
                         debug!(
                             "Pipe at RID={} received{}{}",
                             rid,
-                            if evts.contains(PollFlags::POLLHUP) {
-                                " POLLHUP"
-                            } else {
-                                ""
-                            },
-                            if evts.contains(PollFlags::POLLERR) {
-                                " POLLERR"
-                            } else {
-                                ""
-                            },
+                            string_if_bool(evts.contains(PollFlags::POLLHUP), " POLLHUP"),
+                            string_if_bool(evts.contains(PollFlags::POLLERR), " POLLERR"),
                         );
                         data.program_closed = true;
                     }
