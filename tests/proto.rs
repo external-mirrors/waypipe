@@ -104,6 +104,7 @@ mod proto {
     define_test! {shm_damage}
     define_test! {shm_extend}
     define_test! {title_prefix}
+    define_test! {viewporter_damage}
     #[cfg(feature = "dmabuf")]
     define_test! {dmabuf}
     #[cfg(feature = "dmabuf")]

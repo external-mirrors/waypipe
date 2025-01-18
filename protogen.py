@@ -77,6 +77,7 @@ handled_funcs = [
     ("wl_surface", "commit"),
     ("wl_surface", "damage"),
     ("wl_surface", "damage_buffer"),
+    ("wl_surface", "destroy"),
     ("wl_surface", "set_buffer_scale"),
     ("wl_surface", "set_buffer_transform"),
     ("wp_commit_timer_v1", "set_timestamp"),
@@ -94,6 +95,10 @@ handled_funcs = [
     ("wp_security_context_v1", "set_app_id"),
     ("wp_security_context_v1", "set_instance_id"),
     ("wp_security_context_v1", "set_sandbox_engine"),
+    ("wp_viewport", "destroy"),
+    ("wp_viewport", "set_destination"),
+    ("wp_viewport", "set_source"),
+    ("wp_viewporter", "get_viewport"),
     ("xdg_surface", "get_toplevel"),
     ("xdg_toplevel", "set_title"),
     ("xdg_wm_base", "get_xdg_surface"),
@@ -324,8 +329,8 @@ def write_method_write(meth_name, meth_num, method, write):
             args.append(arg.attrib["name"] + ": u32")
             lines.append("    write_u32(dst, {});".format(arg.attrib["name"]))
         elif arg.attrib["type"] == "fixed":
-            args.append(arg.attrib["name"] + ": u32")
-            lines.append("    write_u32(dst, {});".format(arg.attrib["name"]))
+            args.append(arg.attrib["name"] + ": i32")
+            lines.append("    write_i32(dst, {});".format(arg.attrib["name"]))
         elif arg.attrib["type"] == "string":
             if allow_null:
                 args.append(arg.attrib["name"] + ": Option<&[u8]>")
@@ -401,11 +406,11 @@ def write_method_parse(meth_name, method, write):
                 ret.append("arg{}_iface_name".format(i))
                 ret.append("arg{}_version".format(i))
                 ret.append("arg{}".format(i))
-        elif arg.attrib["type"] == "int":
+        elif arg.attrib["type"] in ("int", "fixed"):
             lines.append("    let arg{} = parse_i32(&mut msg)?;".format(i))
             sig.append("i32")
             ret.append("arg{}".format(i))
-        elif arg.attrib["type"] in ("uint", "fixed"):
+        elif arg.attrib["type"] == "uint":
             lines.append("    let arg{} = parse_u32(&mut msg)?;".format(i))
             sig.append("u32")
             ret.append("arg{}".format(i))

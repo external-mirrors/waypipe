@@ -2957,6 +2957,145 @@ const DATA_WP_SECURITY_CONTEXT_V1: WaylandData = WaylandData {
     version: 1,
 };
 pub const WP_SECURITY_CONTEXT_V1: &[u8] = DATA_WP_SECURITY_CONTEXT_V1.name.as_bytes();
+pub fn write_req_wp_viewporter_get_viewport(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    id: ObjId,
+    surface: ObjId,
+) {
+    let l = length_req_wp_viewporter_get_viewport();
+    write_header(dst, for_id, l, 1, 0);
+    write_obj(dst, id);
+    write_obj(dst, surface);
+}
+pub fn length_req_wp_viewporter_get_viewport() -> usize {
+    16
+}
+pub fn parse_req_wp_viewporter_get_viewport<'a>(
+    mut msg: &'a [u8],
+) -> Result<(ObjId, ObjId), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    let arg2 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2))
+}
+pub const OPCODE_WP_VIEWPORTER_GET_VIEWPORT: MethodId = MethodId::Request(1);
+const DATA_WP_VIEWPORTER: WaylandData = WaylandData {
+    name: "wp_viewporter",
+    evts: &[],
+    reqs: &[
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "get_viewport",
+            sig: &[NewId(WpViewport), Object(WlSurface)],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const WP_VIEWPORTER: &[u8] = DATA_WP_VIEWPORTER.name.as_bytes();
+pub fn write_req_wp_viewport_destroy(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_req_wp_viewport_destroy();
+    write_header(dst, for_id, l, 0, 0);
+}
+pub fn length_req_wp_viewport_destroy() -> usize {
+    8
+}
+pub fn parse_req_wp_viewport_destroy<'a>(msg: &'a [u8]) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_WP_VIEWPORT_DESTROY: MethodId = MethodId::Request(0);
+pub fn write_req_wp_viewport_set_source(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) {
+    let l = length_req_wp_viewport_set_source();
+    write_header(dst, for_id, l, 1, 0);
+    write_i32(dst, x);
+    write_i32(dst, y);
+    write_i32(dst, width);
+    write_i32(dst, height);
+}
+pub fn length_req_wp_viewport_set_source() -> usize {
+    24
+}
+pub fn parse_req_wp_viewport_set_source<'a>(
+    mut msg: &'a [u8],
+) -> Result<(i32, i32, i32, i32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_i32(&mut msg)?;
+    let arg2 = parse_i32(&mut msg)?;
+    let arg3 = parse_i32(&mut msg)?;
+    let arg4 = parse_i32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2, arg3, arg4))
+}
+pub const OPCODE_WP_VIEWPORT_SET_SOURCE: MethodId = MethodId::Request(1);
+pub fn write_req_wp_viewport_set_destination(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    width: i32,
+    height: i32,
+) {
+    let l = length_req_wp_viewport_set_destination();
+    write_header(dst, for_id, l, 2, 0);
+    write_i32(dst, width);
+    write_i32(dst, height);
+}
+pub fn length_req_wp_viewport_set_destination() -> usize {
+    16
+}
+pub fn parse_req_wp_viewport_set_destination<'a>(
+    mut msg: &'a [u8],
+) -> Result<(i32, i32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_i32(&mut msg)?;
+    let arg2 = parse_i32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2))
+}
+pub const OPCODE_WP_VIEWPORT_SET_DESTINATION: MethodId = MethodId::Request(2);
+const DATA_WP_VIEWPORT: WaylandData = WaylandData {
+    name: "wp_viewport",
+    evts: &[],
+    reqs: &[
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "set_source",
+            sig: &[Fixed, Fixed, Fixed, Fixed],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "set_destination",
+            sig: &[Int, Int],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const WP_VIEWPORT: &[u8] = DATA_WP_VIEWPORT.name.as_bytes();
 const DATA_ZWP_VIRTUAL_KEYBOARD_V1: WaylandData = WaylandData {
     name: "zwp_virtual_keyboard_v1",
     evts: &[],
@@ -4249,6 +4388,20 @@ const DATA_WL_SHELL_SURFACE: WaylandData = WaylandData {
     version: 1,
 };
 pub const WL_SHELL_SURFACE: &[u8] = DATA_WL_SHELL_SURFACE.name.as_bytes();
+pub fn write_req_wl_surface_destroy(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_req_wl_surface_destroy();
+    write_header(dst, for_id, l, 0, 0);
+}
+pub fn length_req_wl_surface_destroy() -> usize {
+    8
+}
+pub fn parse_req_wl_surface_destroy<'a>(msg: &'a [u8]) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_WL_SURFACE_DESTROY: MethodId = MethodId::Request(0);
 pub fn write_req_wl_surface_attach(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -6079,34 +6232,36 @@ pub enum WaylandInterface {
     WpPresentationFeedback = 46,
     WpSecurityContextManagerV1 = 47,
     WpSecurityContextV1 = 48,
-    XdgPopup = 49,
-    XdgPositioner = 50,
-    XdgSurface = 51,
-    XdgToplevel = 52,
-    XdgWmBase = 53,
-    ZwlrDataControlDeviceV1 = 54,
-    ZwlrDataControlManagerV1 = 55,
-    ZwlrDataControlOfferV1 = 56,
-    ZwlrDataControlSourceV1 = 57,
-    ZwlrExportDmabufFrameV1 = 58,
-    ZwlrExportDmabufManagerV1 = 59,
-    ZwlrGammaControlManagerV1 = 60,
-    ZwlrGammaControlV1 = 61,
-    ZwlrScreencopyFrameV1 = 62,
-    ZwlrScreencopyManagerV1 = 63,
-    ZwpInputMethodKeyboardGrabV2 = 64,
-    ZwpInputMethodManagerV2 = 65,
-    ZwpInputMethodV2 = 66,
-    ZwpInputPopupSurfaceV2 = 67,
-    ZwpLinuxBufferParamsV1 = 68,
-    ZwpLinuxDmabufFeedbackV1 = 69,
-    ZwpLinuxDmabufV1 = 70,
-    ZwpPrimarySelectionDeviceManagerV1 = 71,
-    ZwpPrimarySelectionDeviceV1 = 72,
-    ZwpPrimarySelectionOfferV1 = 73,
-    ZwpPrimarySelectionSourceV1 = 74,
-    ZwpVirtualKeyboardManagerV1 = 75,
-    ZwpVirtualKeyboardV1 = 76,
+    WpViewport = 49,
+    WpViewporter = 50,
+    XdgPopup = 51,
+    XdgPositioner = 52,
+    XdgSurface = 53,
+    XdgToplevel = 54,
+    XdgWmBase = 55,
+    ZwlrDataControlDeviceV1 = 56,
+    ZwlrDataControlManagerV1 = 57,
+    ZwlrDataControlOfferV1 = 58,
+    ZwlrDataControlSourceV1 = 59,
+    ZwlrExportDmabufFrameV1 = 60,
+    ZwlrExportDmabufManagerV1 = 61,
+    ZwlrGammaControlManagerV1 = 62,
+    ZwlrGammaControlV1 = 63,
+    ZwlrScreencopyFrameV1 = 64,
+    ZwlrScreencopyManagerV1 = 65,
+    ZwpInputMethodKeyboardGrabV2 = 66,
+    ZwpInputMethodManagerV2 = 67,
+    ZwpInputMethodV2 = 68,
+    ZwpInputPopupSurfaceV2 = 69,
+    ZwpLinuxBufferParamsV1 = 70,
+    ZwpLinuxDmabufFeedbackV1 = 71,
+    ZwpLinuxDmabufV1 = 72,
+    ZwpPrimarySelectionDeviceManagerV1 = 73,
+    ZwpPrimarySelectionDeviceV1 = 74,
+    ZwpPrimarySelectionOfferV1 = 75,
+    ZwpPrimarySelectionSourceV1 = 76,
+    ZwpVirtualKeyboardManagerV1 = 77,
+    ZwpVirtualKeyboardV1 = 78,
 }
 impl TryFrom<u32> for WaylandInterface {
     type Error = ();
@@ -6161,34 +6316,36 @@ impl TryFrom<u32> for WaylandInterface {
             46 => WaylandInterface::WpPresentationFeedback,
             47 => WaylandInterface::WpSecurityContextManagerV1,
             48 => WaylandInterface::WpSecurityContextV1,
-            49 => WaylandInterface::XdgPopup,
-            50 => WaylandInterface::XdgPositioner,
-            51 => WaylandInterface::XdgSurface,
-            52 => WaylandInterface::XdgToplevel,
-            53 => WaylandInterface::XdgWmBase,
-            54 => WaylandInterface::ZwlrDataControlDeviceV1,
-            55 => WaylandInterface::ZwlrDataControlManagerV1,
-            56 => WaylandInterface::ZwlrDataControlOfferV1,
-            57 => WaylandInterface::ZwlrDataControlSourceV1,
-            58 => WaylandInterface::ZwlrExportDmabufFrameV1,
-            59 => WaylandInterface::ZwlrExportDmabufManagerV1,
-            60 => WaylandInterface::ZwlrGammaControlManagerV1,
-            61 => WaylandInterface::ZwlrGammaControlV1,
-            62 => WaylandInterface::ZwlrScreencopyFrameV1,
-            63 => WaylandInterface::ZwlrScreencopyManagerV1,
-            64 => WaylandInterface::ZwpInputMethodKeyboardGrabV2,
-            65 => WaylandInterface::ZwpInputMethodManagerV2,
-            66 => WaylandInterface::ZwpInputMethodV2,
-            67 => WaylandInterface::ZwpInputPopupSurfaceV2,
-            68 => WaylandInterface::ZwpLinuxBufferParamsV1,
-            69 => WaylandInterface::ZwpLinuxDmabufFeedbackV1,
-            70 => WaylandInterface::ZwpLinuxDmabufV1,
-            71 => WaylandInterface::ZwpPrimarySelectionDeviceManagerV1,
-            72 => WaylandInterface::ZwpPrimarySelectionDeviceV1,
-            73 => WaylandInterface::ZwpPrimarySelectionOfferV1,
-            74 => WaylandInterface::ZwpPrimarySelectionSourceV1,
-            75 => WaylandInterface::ZwpVirtualKeyboardManagerV1,
-            76 => WaylandInterface::ZwpVirtualKeyboardV1,
+            49 => WaylandInterface::WpViewport,
+            50 => WaylandInterface::WpViewporter,
+            51 => WaylandInterface::XdgPopup,
+            52 => WaylandInterface::XdgPositioner,
+            53 => WaylandInterface::XdgSurface,
+            54 => WaylandInterface::XdgToplevel,
+            55 => WaylandInterface::XdgWmBase,
+            56 => WaylandInterface::ZwlrDataControlDeviceV1,
+            57 => WaylandInterface::ZwlrDataControlManagerV1,
+            58 => WaylandInterface::ZwlrDataControlOfferV1,
+            59 => WaylandInterface::ZwlrDataControlSourceV1,
+            60 => WaylandInterface::ZwlrExportDmabufFrameV1,
+            61 => WaylandInterface::ZwlrExportDmabufManagerV1,
+            62 => WaylandInterface::ZwlrGammaControlManagerV1,
+            63 => WaylandInterface::ZwlrGammaControlV1,
+            64 => WaylandInterface::ZwlrScreencopyFrameV1,
+            65 => WaylandInterface::ZwlrScreencopyManagerV1,
+            66 => WaylandInterface::ZwpInputMethodKeyboardGrabV2,
+            67 => WaylandInterface::ZwpInputMethodManagerV2,
+            68 => WaylandInterface::ZwpInputMethodV2,
+            69 => WaylandInterface::ZwpInputPopupSurfaceV2,
+            70 => WaylandInterface::ZwpLinuxBufferParamsV1,
+            71 => WaylandInterface::ZwpLinuxDmabufFeedbackV1,
+            72 => WaylandInterface::ZwpLinuxDmabufV1,
+            73 => WaylandInterface::ZwpPrimarySelectionDeviceManagerV1,
+            74 => WaylandInterface::ZwpPrimarySelectionDeviceV1,
+            75 => WaylandInterface::ZwpPrimarySelectionOfferV1,
+            76 => WaylandInterface::ZwpPrimarySelectionSourceV1,
+            77 => WaylandInterface::ZwpVirtualKeyboardManagerV1,
+            78 => WaylandInterface::ZwpVirtualKeyboardV1,
             _ => return Err(()),
         })
     }
@@ -6243,6 +6400,8 @@ pub const INTERFACE_TABLE: &[WaylandData] = &[
     DATA_WP_PRESENTATION_FEEDBACK,
     DATA_WP_SECURITY_CONTEXT_MANAGER_V1,
     DATA_WP_SECURITY_CONTEXT_V1,
+    DATA_WP_VIEWPORT,
+    DATA_WP_VIEWPORTER,
     DATA_XDG_POPUP,
     DATA_XDG_POSITIONER,
     DATA_XDG_SURFACE,

@@ -51,17 +51,20 @@ struct WlRect {
  */
 #[derive(Clone)]
 struct DamageBatch {
-    /** wl_surface.damage is interpreted to have the scale/transform at the time the damage was committed,
-     * so these must be recorded per commit. (It is unclear how this interacts with fractional scale and
-     * wp_viewporter.) (The buffer dimensions must be known in order to apply the scale and transform,
-     * so we delay this to better handle scenarios where the surface alternates between differently
-     * sized buffers.)
+    /** wl_surface.damage is interpreted to have the scale/transform/viewport at the time
+     * the damage was committed, so these must be recorded per commit. (The buffer dimensions must
+     * be known in order to apply the scale and transform, so we delay this to better handle
+     * scenarios where the surface alternates between differently sized buffers.)
      *
      * Most clients use the better wl_buffer.damage_buffer, so perfection here is not critical. */
     scale: u32,
     transform: WlOutputTransform,
     damage: Vec<WlRect>,
     damage_buffer: Vec<WlRect>,
+    /** Viewport source x-offset,y-offset,width,height, all 24.8 fixed point and >=,>=,>,> 0 */
+    viewport_src: Option<(i32, i32, i32, i32)>,
+    /** Viewport destination width/height, should both be > 0 */
+    viewport_dst: Option<(i32, i32)>,
 
     /** The buffer attached at the time the damage was committed (or an arbitrary value if
      * the batch was not yet committed.) */
@@ -78,6 +81,15 @@ struct ObjWlSurface {
     /* acquire/release timline points for explicit sync */
     acquire_pt: Option<(u64, Rc<RefCell<ShadowFd>>)>,
     release_pt: Option<(u64, Rc<RefCell<ShadowFd>>)>,
+
+    /* unique wp_viewport object associated with this surface */
+    viewport_id: Option<ObjId>,
+}
+
+/** Additional information for wp_viewport */
+struct ObjWpViewport {
+    /** Surface to which this wp_viewport is attached. Is None when wl_surface has been destroyed. */
+    wl_surface: Option<ObjId>,
 }
 
 /** Additional information for wl_shm_pool */
@@ -204,6 +216,7 @@ enum WpExtra {
     WlBuffer(Box<ObjWlBuffer>),
     WlRegistry(Box<ObjWlRegistry>),
     WlShmPool(Box<ObjWlShmPool>),
+    WpViewport(Box<ObjWpViewport>),
     ZwpDmabuf(Box<ObjZwpLinuxDmabuf>),
     ZwpDmabufFeedback(Box<ObjZwpLinuxDmabufFeedback>),
     ZwpDmabufParams(Box<ObjZwpLinuxDmabufParams>),
@@ -258,25 +271,110 @@ fn clip_wlrect_to_buffer(a: &WlRect, w: i32, h: i32) -> Option<Rect> {
     }
 }
 
+/** Apply the viewport crop and scale to a rectangle in surface-local coordinates. After this,
+ * apply buffer scale/transforms.
+ *
+ * `buffer_size` is the size of the buffer _after_ scale/transform operations.
+ *
+ * This rounds boundaries outward by up to a pixel, under the assumption that "linear" scaling
+ * is used, not nearest-neighbor, cubic, fft, etc.
+ *
+ * view_src/view_dst should be valid for wp_viewporter
+ *
+ * This function saturates on overflow.
+ */
+fn apply_viewport_transform(
+    a: &WlRect,
+    buffer_size: (i32, i32),
+    view_src: Option<(i32, i32, i32, i32)>,
+    view_dst: Option<(i32, i32)>,
+) -> Option<Rect> {
+    assert!(a.width >= 0 && a.height >= 0);
+
+    let dst: (i32, i32) = if let Some(x) = view_dst {
+        (x.0, x.1)
+    } else if let Some(x) = view_src {
+        /* in crop-only case, the crop rectangle size should be an integer */
+        (x.2 / 256, x.3 / 256)
+    } else {
+        (buffer_size.0, buffer_size.1)
+    };
+
+    /* 1: clip rectangle to 'dst' */
+    let x1 = a.x.clamp(0, dst.0);
+    let x2 = a.x.saturating_add(a.width).clamp(0, dst.0);
+    let y1 = a.y.clamp(0, dst.1);
+    let y2 = a.y.saturating_add(a.height).clamp(0, dst.1);
+    if x2 <= x1 || y2 <= y1 {
+        /* Rectangle intersection with 'dst' region is empty. */
+        return None;
+    }
+
+    /* Fixed point. Expand to i64 to avoid early clipping. */
+    if let Some(v) = view_src {
+        assert!(v.0 >= 0 && v.1 >= 0 && v.2 > 0 && v.3 > 0);
+
+        fn source_floor(v: i32, dst: i32, src_sz_fixed: i32, src_offset_fixed: i32) -> u32 {
+            /* Fixed point calculation: floor(x1 * src.width / dst.width + src.x1), where src.width, src.x1 are in 24.8 fixed point.
+             * Worst case: may use 62 bits for multiplication result and 32 for addition. */
+            (((v as u64) * (src_sz_fixed as u64) / (dst as u64) + (src_offset_fixed as u64)) / 256)
+                as u32
+        }
+        fn source_ceil(v: i32, dst: i32, src_sz_fixed: i32, src_offset_fixed: i32) -> u32 {
+            ((((v as u64) * (src_sz_fixed as u64)).div_ceil(dst as u64)
+                + (src_offset_fixed as u64))
+                .div_ceil(256)) as u32
+        }
+
+        /* The rectangle should either map into the rectangle given by buffer_transformed_size,
+         * or else there should be a protocol error because the viewport src is out of bounds;
+         * however, it is safe for Waypipe to just clip the region and not raise an error. */
+        let sx1 = source_floor(x1, dst.0, v.2, v.0).min(buffer_size.0 as u32);
+        let sx2 = source_ceil(x2, dst.0, v.2, v.0).min(buffer_size.0 as u32);
+        let sy1 = source_floor(y1, dst.1, v.3, v.1).min(buffer_size.1 as u32);
+        let sy2 = source_ceil(y2, dst.1, v.3, v.1).min(buffer_size.1 as u32);
+        if sx1 >= sx2 || sy1 >= sy2 {
+            return None;
+        }
+        Some(Rect {
+            x1: sx1,
+            x2: sx2,
+            y1: sy1,
+            y2: sy2,
+        })
+    } else {
+        /* When view_dst=None, buffer_size = dst and this scaling has no effect. */
+        let sx1 = (((x1 as u64) * (buffer_size.0 as u64)) / (dst.0 as u64)) as u32;
+        let sx2 = (((x2 as u64) * (buffer_size.0 as u64)).div_ceil(dst.0 as u64)) as u32;
+        let sy1 = (((y1 as u64) * (buffer_size.1 as u64)) / (dst.1 as u64)) as u32;
+        let sy2 = (((y2 as u64) * (buffer_size.1 as u64)).div_ceil(dst.1 as u64)) as u32;
+        /* Only clip by transformed size */
+        Some(Rect {
+            x1: sx1,
+            x2: sx2,
+            y1: sy1,
+            y2: sy2,
+        })
+    }
+}
+
 /** Transform a rectangle indicating damage on a surface to a rectangle indicating
  * damage on a buffer.
  *
  * `scale` and `transform` are those of the surface; `width` and `height` those of the buffer.
  *
- * This handles out-of-bounds behavior by saturating, instead of erroring, since damage gets
- * clipped later anyway; and damage(0,0,INT_MAX,INT_MAX) is an occasional idiom */
+ * `view_src`/`view_dst` are validated viewport source and destination parameters.
+ *
+ * This clips the damage to the surface and returns None if the result is nonempty. */
 fn apply_damage_rect_transform(
     a: &WlRect,
     scale: u32,
     transform: WlOutputTransform,
+    view_src: Option<(i32, i32, i32, i32)>,
+    view_dst: Option<(i32, i32)>,
     width: i32,
     height: i32,
-) -> WlRect {
-    let mut xl = a.x.saturating_mul(scale as i32); // will not overflow: scale was originally i32
-    let mut yl = a.y.saturating_mul(scale as i32);
-    let mut xh = (a.x.saturating_add(a.width)).saturating_mul(scale as i32);
-    let mut yh = (a.y.saturating_add(a.height)).saturating_mul(scale as i32);
-
+) -> Option<Rect> {
     /* Each of the eight transformations corresponds to a
      * unique set of reflections: X<->Y | Xflip | Yflip */
     let seq = [0b000, 0b011, 0b110, 0b101, 0b010, 0b001, 0b100, 0b111];
@@ -285,8 +383,22 @@ fn apply_damage_rect_transform(
     let flip_x = code & 0x2 != 0;
     let flip_y = code & 0x4 != 0;
 
-    let end_w = if swap_xy { height } else { width };
-    let end_h = if swap_xy { width } else { height };
+    let pre_vp_size = if swap_xy {
+        (height / scale as i32, width / scale as i32)
+    } else {
+        (width / scale as i32, height / scale as i32)
+    };
+
+    let b = apply_viewport_transform(a, pre_vp_size, view_src, view_dst)?;
+
+    // These should not overflow, since b should be clipped to `pre_vp_size`.
+    let mut xl = b.x1.checked_mul(scale).unwrap();
+    let mut yl = b.y1.checked_mul(scale).unwrap();
+    let mut xh = b.x2.checked_mul(scale).unwrap();
+    let mut yh = b.y2.checked_mul(scale).unwrap();
+
+    let end_w = if swap_xy { height } else { width } as u32;
+    let end_h = if swap_xy { width } else { height } as u32;
 
     if flip_x {
         (xh, xl) = (end_w - xl, end_w - xh);
@@ -297,12 +409,12 @@ fn apply_damage_rect_transform(
     if swap_xy {
         (xl, xh, yl, yh) = (yl, yh, xl, xh);
     }
-    WlRect {
-        x: xl,
-        width: xh.saturating_sub(xl),
-        y: yl,
-        height: yh.saturating_sub(yl),
-    }
+    Some(Rect {
+        x1: xl,
+        x2: xh,
+        y1: yl,
+        y2: yh,
+    })
 }
 
 /** Get an interval containing the entire memory region corresponding to the buffer */
@@ -393,8 +505,15 @@ fn get_damage_rects(surface: &ObjWlSurface, buffer_uid: u64, width: i32, height:
         }
 
         for w in &batch.damage {
-            let q = apply_damage_rect_transform(w, batch.scale, batch.transform, width, height);
-            if let Some(r) = clip_wlrect_to_buffer(&q, width, height) {
+            if let Some(r) = apply_damage_rect_transform(
+                w,
+                batch.scale,
+                batch.transform,
+                batch.viewport_src,
+                batch.viewport_dst,
+                width,
+                height,
+            ) {
                 rects.push(r);
             }
         }
@@ -1330,6 +1449,8 @@ pub fn process_way_msg(
                 transform: WlOutputTransform::Normal,
                 damage: Vec::new(),
                 damage_buffer: Vec::new(),
+                viewport_src: None,
+                viewport_dst: None,
                 buffer_uid: 0,
             };
 
@@ -1352,12 +1473,32 @@ pub fn process_way_msg(
                         ],
                         acquire_pt: None,
                         release_pt: None,
+                        viewport_id: None,
                     })),
                 },
             )?;
 
             copy_msg(msg, dst);
 
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::WlSurface, OPCODE_WL_SURFACE_DESTROY) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+
+            let WpExtra::WlSurface(ref mut surf) = obj.extra else {
+                return Err(tag!("Surface object has invalid extra type"));
+            };
+            let mut tmp = None;
+            std::mem::swap(&mut tmp, &mut surf.viewport_id);
+            if let Some(vp_id) = tmp {
+                if let Some(ref mut object) = glob.objects.get_mut(&vp_id) {
+                    let WpExtra::WpViewport(ref mut viewport) = object.extra else {
+                        return Err(tag!("Viewport object has invalid extra type"));
+                    };
+                    viewport.wl_surface = None;
+                }
+            }
             Ok(ProcMsg::Done)
         }
         (WaylandInterface::WlSurface, OPCODE_WL_SURFACE_ATTACH) => {
@@ -1678,6 +1819,8 @@ pub fn process_way_msg(
                 let mut fresh = DamageBatch {
                     scale: x.damage_history[0].scale,
                     transform: x.damage_history[0].transform,
+                    viewport_src: x.damage_history[0].viewport_src,
+                    viewport_dst: x.damage_history[0].viewport_dst,
                     buffer_uid: b,
                     damage: Vec::new(),
                     damage_buffer: Vec::new(),
@@ -1693,10 +1836,14 @@ pub fn process_way_msg(
                 /* Null attachment, wipe history */
                 let scale = x.damage_history[0].scale;
                 let transform = x.damage_history[0].transform;
+                let viewport_src = x.damage_history[0].viewport_src;
+                let viewport_dst = x.damage_history[0].viewport_dst;
                 for i in 0..7 {
                     x.damage_history[i] = DamageBatch {
                         scale,
                         transform,
+                        viewport_src,
+                        viewport_dst,
                         buffer_uid: 0,
                         damage: Vec::new(),
                         damage_buffer: Vec::new(),
@@ -1704,6 +1851,101 @@ pub fn process_way_msg(
                 }
             }
 
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::WpViewporter, OPCODE_WP_VIEWPORTER_GET_VIEWPORT) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+
+            let (new_id, surface) = parse_req_wp_viewporter_get_viewport(msg)?;
+            insert_new_object(
+                &mut glob.objects,
+                new_id,
+                WpObject {
+                    obj_type: WaylandInterface::WpViewport,
+                    is_zombie: false,
+                    extra: WpExtra::WpViewport(Box::new(ObjWpViewport {
+                        wl_surface: Some(surface),
+                    })),
+                },
+            )?;
+
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::WpViewport, OPCODE_WP_VIEWPORT_DESTROY) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+
+            let WpExtra::WpViewport(ref mut viewport) = obj.extra else {
+                return Err(tag!("Viewport object has invalid extra type"));
+            };
+            let mut tmp = None;
+            std::mem::swap(&mut tmp, &mut viewport.wl_surface);
+            if let Some(surf_id) = tmp {
+                if let Some(ref mut object) = glob.objects.get_mut(&surf_id) {
+                    let WpExtra::WlSurface(ref mut surface) = object.extra else {
+                        return Err(tag!("Surface object has invalid extra type"));
+                    };
+                    surface.damage_history[0].viewport_src = None;
+                    surface.damage_history[0].viewport_dst = None;
+                    surface.viewport_id = None;
+                }
+            }
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::WpViewport, OPCODE_WP_VIEWPORT_SET_DESTINATION) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+
+            let (w, h) = parse_req_wp_viewport_set_destination(msg)?;
+            let destination: Option<(i32, i32)> = if w == -1 && h == -1 {
+                None
+            } else if w <= 0 || h <= 0 {
+                return Err(tag!("invalid wp_viewport destination ({},{})", w, h));
+            } else {
+                Some((w, h))
+            };
+
+            let WpExtra::WpViewport(ref mut viewport) = obj.extra else {
+                return Err(tag!("Viewport object has invalid extra type"));
+            };
+            if let Some(surf_id) = viewport.wl_surface {
+                if let Some(ref mut object) = glob.objects.get_mut(&surf_id) {
+                    let WpExtra::WlSurface(ref mut surface) = object.extra else {
+                        return Err(tag!("Surface object has invalid extra type"));
+                    };
+
+                    surface.damage_history[0].viewport_dst = destination;
+                }
+            }
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::WpViewport, OPCODE_WP_VIEWPORT_SET_SOURCE) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+
+            let (x, y, w, h) = parse_req_wp_viewport_set_source(msg)?;
+            let source: Option<(i32, i32, i32, i32)> =
+                if x == -256 && y == -256 && w == -256 && h == -256 {
+                    None
+                } else if x < 0 || y < 0 || w <= 0 || h <= 0 {
+                    return Err(tag!("invalid wp_viewport source ({},{},{},{})", x, y, w, h));
+                } else {
+                    Some((x, y, w, h))
+                };
+
+            let WpExtra::WpViewport(ref mut viewport) = obj.extra else {
+                return Err(tag!("Viewport object has invalid extra type"));
+            };
+            if let Some(surf_id) = viewport.wl_surface {
+                if let Some(ref mut object) = glob.objects.get_mut(&surf_id) {
+                    let WpExtra::WlSurface(ref mut surface) = object.extra else {
+                        return Err(tag!("Surface object has invalid extra type"));
+                    };
+
+                    surface.damage_history[0].viewport_src = source;
+                }
+            }
             Ok(ProcMsg::Done)
         }
         (

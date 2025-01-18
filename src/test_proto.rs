@@ -87,7 +87,7 @@ struct TestInfo<'a> {
 }
 
 /* Constant, saves some code when allocating sequence ids */
-const ID_SEQUENCE: [ObjId; 10] = [
+const ID_SEQUENCE: [ObjId; 12] = [
     ObjId(1),
     ObjId(2),
     ObjId(3),
@@ -98,6 +98,8 @@ const ID_SEQUENCE: [ObjId; 10] = [
     ObjId(8),
     ObjId(9),
     ObjId(10),
+    ObjId(11),
+    ObjId(12),
 ];
 
 /* Write messages to the Wayland connection, followed by a test message that should directly pass through;
@@ -2890,6 +2892,149 @@ fn proto_dmabuf_damage(info: TestInfo, device: RenderDevice) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test to verify the damage is correctly calculated (or at least, overestimated)
+ * when using wp_viewport together with wl_surface.damage */
+fn proto_viewporter_damage(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
+        let [display, registry, shm, comp, viewporter, surface, pool, buffer, viewport, ..] =
+            ID_SEQUENCE;
+
+        let scale: u32 = 2;
+        let w: u32 = 50 * scale;
+        let h: u32 = 7 * scale;
+        let fmt = WlShmFormat::Argb8888;
+        let bpp = 4;
+        let stride = w * bpp;
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, registry);
+        }));
+
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, registry, 1, WL_SHM, 2);
+            write_evt_wl_registry_global(dst, registry, 2, WL_COMPOSITOR, 6);
+            write_evt_wl_registry_global(dst, registry, 3, WP_VIEWPORTER, 1);
+        }));
+
+        let file_sz: usize = (w * h * bpp) as usize;
+        let mut base = vec![0x01; file_sz];
+
+        let buffer_fd = make_file_with_contents(&base).unwrap();
+        let msg = build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, registry, 1, WL_SHM, 2, shm);
+            write_req_wl_registry_bind(dst, registry, 2, WL_COMPOSITOR, 6, comp);
+            write_req_wl_registry_bind(dst, registry, 3, WP_VIEWPORTER, 1, viewporter);
+            write_req_wl_compositor_create_surface(dst, comp, surface);
+            write_req_wl_shm_create_pool(dst, shm, false, pool, file_sz as i32);
+            write_req_wl_shm_pool_create_buffer(
+                dst,
+                pool,
+                buffer,
+                0,
+                w as i32,
+                h as i32,
+                (w * bpp) as i32,
+                fmt as u32,
+            );
+            write_req_wp_viewporter_get_viewport(dst, viewporter, viewport, surface);
+            write_req_wl_surface_set_buffer_scale(dst, surface, scale as i32);
+            write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
+        });
+        let (rmsg, mut rfd) = ctx.prog_write(&msg[..], &[&buffer_fd]).unwrap();
+        assert!(rmsg.concat() == msg);
+        assert!(rfd.len() == 1);
+        let output_fd = rfd.remove(0);
+
+        /* First, ensure replicated buffer matches */
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_surface_damage(dst, surface, 0, 0, i32::MAX, i32::MAX);
+            write_req_wl_surface_commit(dst, surface);
+        }));
+        assert!(get_file_contents(&output_fd, file_sz).unwrap() == base);
+
+        /* Scale-only test */
+        for x in w - 2..w {
+            for y in h - 1..h {
+                let o = (y * stride + x * bpp) as usize;
+                base[o..o + bpp as usize].copy_from_slice(&0x11223344_u32.to_le_bytes());
+            }
+        }
+        update_file_contents(&buffer_fd, &base).unwrap();
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wp_viewport_set_destination(dst, viewport, 200, 200);
+            write_req_wl_surface_damage(dst, surface, 196, 196, 4, 4);
+            write_req_wl_surface_commit(dst, surface);
+            write_req_wp_viewport_set_destination(dst, viewport, -1, -1);
+        }));
+        assert!(get_file_contents(&output_fd, file_sz).unwrap() == base);
+
+        /* Crop-only test */
+        for x in 25 * scale..(24 + 8) * scale {
+            for y in 5 * scale..7 * scale {
+                let o = (y * stride + x * bpp) as usize;
+                base[o..o + bpp as usize].copy_from_slice(&0xaabbccdd_u32.to_le_bytes());
+            }
+        }
+        update_file_contents(&buffer_fd, &base).unwrap();
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wp_viewport_set_source(
+                dst,
+                viewport,
+                24 * 256 + 128,
+                4 * 256,
+                7 * 256,
+                3 * 256,
+            );
+            write_req_wl_surface_damage(dst, surface, 1, 1, i32::MAX, i32::MAX);
+            write_req_wl_surface_commit(dst, surface);
+        }));
+        assert!(get_file_contents(&output_fd, file_sz).unwrap() == base);
+
+        /* Combination scale and crop test */
+        for x in (7 + 3) * scale..(7 + 7) * scale {
+            for y in 3 * scale..7 * scale {
+                let o = (y * stride + x * bpp) as usize;
+                base[o..o + bpp as usize].copy_from_slice(&0x12345678_u32.to_le_bytes());
+            }
+        }
+        update_file_contents(&buffer_fd, &base).unwrap();
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wp_viewport_set_source(
+                dst,
+                viewport,
+                7 * 256 + 128 + 1,
+                1,
+                7 * 256 + 254,
+                6 * 256 + 254,
+            );
+            write_req_wp_viewport_set_destination(dst, viewport, 2, 2);
+            write_req_wl_surface_damage(dst, surface, 1, 1, 1, 1);
+            write_req_wl_surface_commit(dst, surface);
+        }));
+        assert!(get_file_contents(&output_fd, file_sz).unwrap() == base);
+
+        /* Test destroying the viewport */
+        for x in 20 * scale..21 * scale {
+            for y in scale..2 * scale {
+                let o = (y * stride + x * bpp) as usize;
+                base[o..o + bpp as usize].copy_from_slice(&0x22222222_u32.to_le_bytes());
+            }
+        }
+        update_file_contents(&buffer_fd, &base).unwrap();
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wp_viewport_destroy(dst, viewport);
+            write_req_wl_surface_damage(dst, surface, 20, 1, 1, 1);
+            write_req_wl_surface_commit(dst, surface);
+        }));
+        assert!(get_file_contents(&output_fd, file_sz).unwrap() == base);
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_surface_destroy(dst, surface);
+        }));
+    })?;
+    Ok(StatusOk::Pass)
+}
+
 #[cfg(feature = "dmabuf")]
 fn proto_explicit_sync(info: TestInfo, device: RenderDevice) -> TestResult {
     let Ok(vulk) = setup_vulkan(device.id) else {
@@ -3901,6 +4046,7 @@ fn main() -> ExitCode {
     register_single(&mut tests, &f, "shm_damage", proto_shm_damage);
     register_single(&mut tests, &f, "shm_extend", proto_shm_extend);
     register_single(&mut tests, &f, "title_prefix", proto_title_prefix);
+    register_single(&mut tests, &f, "viewporter_damage", proto_viewporter_damage);
 
     #[cfg(feature = "dmabuf")]
     {
