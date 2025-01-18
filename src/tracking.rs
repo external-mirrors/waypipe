@@ -1612,7 +1612,7 @@ pub fn process_way_msg(
                     x, y, width, height
                 );
             } else {
-                surf.damage_history[0].damage.push(WlRect {
+                surf.damage_history[0].damage_buffer.push(WlRect {
                     x,
                     y,
                     width,
