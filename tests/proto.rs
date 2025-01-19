@@ -91,6 +91,7 @@ mod proto {
     define_test! {basic}
     define_test! {base_wire}
     define_test! {commit_timing}
+    define_test! {flip_damage}
     define_test! {gamma_control}
     define_test! {keymap}
     define_test! {many_fds}
@@ -98,6 +99,7 @@ mod proto {
     define_test! {oversized}
     define_test! {pipe_write}
     define_test! {presentation_time}
+    define_test! {rotating_damage}
     define_test! {screencopy_shm_ext}
     define_test! {screencopy_shm_wlr}
     define_test! {shm_buffer}

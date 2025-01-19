@@ -19,7 +19,7 @@ use nix::sys::{memfd, signal, socket, time, wait};
 use nix::{errno::Errno, fcntl, poll, unistd};
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::io::{IoSlice, IoSliceMut};
+use std::io::{IoSlice, IoSliceMut, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::atomic::AtomicBool;
@@ -71,8 +71,8 @@ enum TestCategory {
 }
 /** 77 is the automake return code for a skipped test */
 const EXITCODE_SKIPPED: u8 = 77;
-/** 99 is the automake return code for a hard error (failure of
- * test set up, segfault, or something else very unexpected) */
+/** 99 is the automake return code for a hard error (failure of test set up,
+ * segfault, failure of an external library, or something else very unexpected) */
 const EXITCODE_UNCLEAR: u8 = 99;
 
 struct Filter<'a> {
@@ -2953,6 +2953,13 @@ fn proto_viewporter_damage(info: TestInfo) -> TestResult {
         assert!(get_file_contents(&output_fd, file_sz).unwrap() == base);
 
         /* Scale-only test */
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            /* Set viewport parameters (which effectively invalidates buffer contents,
+             * making Waypipe replicate the entire visible buffer contents */
+            write_req_wp_viewport_set_destination(dst, viewport, 200, 200);
+            write_req_wl_surface_damage(dst, surface, 0, 0, i32::MAX, i32::MAX);
+            write_req_wl_surface_commit(dst, surface);
+        }));
         for x in w - 2..w {
             for y in h - 1..h {
                 let o = (y * stride + x * bpp) as usize;
@@ -2961,22 +2968,16 @@ fn proto_viewporter_damage(info: TestInfo) -> TestResult {
         }
         update_file_contents(&buffer_fd, &base).unwrap();
         ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_wp_viewport_set_destination(dst, viewport, 200, 200);
+            /* Now that viewport parameters are set, _this_ damage should be efficiently
+             * tracked */
             write_req_wl_surface_damage(dst, surface, 196, 196, 4, 4);
             write_req_wl_surface_commit(dst, surface);
-            write_req_wp_viewport_set_destination(dst, viewport, -1, -1);
         }));
         assert!(get_file_contents(&output_fd, file_sz).unwrap() == base);
 
         /* Crop-only test */
-        for x in 25 * scale..(24 + 8) * scale {
-            for y in 5 * scale..7 * scale {
-                let o = (y * stride + x * bpp) as usize;
-                base[o..o + bpp as usize].copy_from_slice(&0xaabbccdd_u32.to_le_bytes());
-            }
-        }
-        update_file_contents(&buffer_fd, &base).unwrap();
         ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wp_viewport_set_destination(dst, viewport, -1, -1);
             write_req_wp_viewport_set_source(
                 dst,
                 viewport,
@@ -2985,19 +2986,23 @@ fn proto_viewporter_damage(info: TestInfo) -> TestResult {
                 7 * 256,
                 3 * 256,
             );
+            write_req_wl_surface_damage(dst, surface, 0, 0, i32::MAX, i32::MAX);
+            write_req_wl_surface_commit(dst, surface);
+        }));
+        for x in 25 * scale..(24 + 8) * scale {
+            for y in 5 * scale..7 * scale {
+                let o = (y * stride + x * bpp) as usize;
+                base[o..o + bpp as usize].copy_from_slice(&0xaabbccdd_u32.to_le_bytes());
+            }
+        }
+        update_file_contents(&buffer_fd, &base).unwrap();
+        ctx.prog_write_passthrough(build_msgs(|dst| {
             write_req_wl_surface_damage(dst, surface, 1, 1, i32::MAX, i32::MAX);
             write_req_wl_surface_commit(dst, surface);
         }));
         assert!(get_file_contents(&output_fd, file_sz).unwrap() == base);
 
         /* Combination scale and crop test */
-        for x in (7 + 3) * scale..(7 + 7) * scale {
-            for y in 3 * scale..7 * scale {
-                let o = (y * stride + x * bpp) as usize;
-                base[o..o + bpp as usize].copy_from_slice(&0x12345678_u32.to_le_bytes());
-            }
-        }
-        update_file_contents(&buffer_fd, &base).unwrap();
         ctx.prog_write_passthrough(build_msgs(|dst| {
             write_req_wp_viewport_set_source(
                 dst,
@@ -3008,12 +3013,28 @@ fn proto_viewporter_damage(info: TestInfo) -> TestResult {
                 6 * 256 + 254,
             );
             write_req_wp_viewport_set_destination(dst, viewport, 2, 2);
+            write_req_wl_surface_damage(dst, surface, 0, 0, i32::MAX, i32::MAX);
+            write_req_wl_surface_commit(dst, surface);
+        }));
+        for x in (7 + 3) * scale..(7 + 7) * scale {
+            for y in 3 * scale..7 * scale {
+                let o = (y * stride + x * bpp) as usize;
+                base[o..o + bpp as usize].copy_from_slice(&0x12345678_u32.to_le_bytes());
+            }
+        }
+        update_file_contents(&buffer_fd, &base).unwrap();
+        ctx.prog_write_passthrough(build_msgs(|dst| {
             write_req_wl_surface_damage(dst, surface, 1, 1, 1, 1);
             write_req_wl_surface_commit(dst, surface);
         }));
         assert!(get_file_contents(&output_fd, file_sz).unwrap() == base);
 
         /* Test destroying the viewport */
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wp_viewport_destroy(dst, viewport);
+            write_req_wl_surface_damage(dst, surface, 0, 0, i32::MAX, i32::MAX);
+            write_req_wl_surface_commit(dst, surface);
+        }));
         for x in 20 * scale..21 * scale {
             for y in scale..2 * scale {
                 let o = (y * stride + x * bpp) as usize;
@@ -3022,7 +3043,6 @@ fn proto_viewporter_damage(info: TestInfo) -> TestResult {
         }
         update_file_contents(&buffer_fd, &base).unwrap();
         ctx.prog_write_passthrough(build_msgs(|dst| {
-            write_req_wp_viewport_destroy(dst, viewport);
             write_req_wl_surface_damage(dst, surface, 20, 1, 1, 1);
             write_req_wl_surface_commit(dst, surface);
         }));
@@ -3031,6 +3051,432 @@ fn proto_viewporter_damage(info: TestInfo) -> TestResult {
         ctx.prog_write_passthrough(build_msgs(|dst| {
             write_req_wl_surface_destroy(dst, surface);
         }));
+    })?;
+    Ok(StatusOk::Pass)
+}
+
+/** Test that the entire buffer is updated when a transform change implies buffer content
+ * changes. Flipping the way the buffer is linked to the surface may require changing its
+ * contents when there is no damage -- because damage is defined as the change to _surface_
+ * contents, not that to buffer contents */
+fn proto_flip_damage(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
+        let [display, registry, shm, comp, surface, pool, buffer, ..] = ID_SEQUENCE;
+
+        let w: u32 = 80;
+        let h: u32 = 2;
+        let fmt = WlShmFormat::R8;
+
+        let mut local_data = vec![0x00; (w * h) as usize];
+        for x in 0..w / 2 {
+            for y in 0..h {
+                local_data[(y * w + x) as usize] = 0xff;
+            }
+        }
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, registry);
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, registry, 1, WL_SHM, 2);
+            write_evt_wl_registry_global(dst, registry, 2, WL_COMPOSITOR, 6);
+        }));
+        let local_fd = make_file_with_contents(&local_data).unwrap();
+        let msg = build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, registry, 1, WL_SHM, 2, shm);
+            write_req_wl_registry_bind(dst, registry, 2, WL_COMPOSITOR, 6, comp);
+            write_req_wl_compositor_create_surface(dst, comp, surface);
+            write_req_wl_shm_create_pool(dst, shm, false, pool, (w * h) as i32);
+            write_req_wl_shm_pool_create_buffer(
+                dst, pool, buffer, 0, w as i32, h as i32, w as i32, fmt as u32,
+            );
+            write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
+            write_req_wl_surface_damage(dst, surface, 0, 0, i32::MAX, i32::MAX);
+            write_req_wl_surface_commit(dst, surface);
+        });
+        let (rmsg, mut rfd) = ctx.prog_write(&msg[..], &[&local_fd]).unwrap();
+        assert!(rmsg.concat() == msg);
+        assert!(rfd.len() == 1);
+        let remote_fd = rfd.remove(0);
+        assert!(get_file_contents(&remote_fd, (w * h) as usize).unwrap() == local_data);
+
+        /* Flip the buffer and its transform horizontally, but do not report any damage,
+         * since the pending buffer still agrees with the surface contents. */
+        local_data.fill(0xff);
+        for x in 0..w / 2 {
+            for y in 0..h {
+                local_data[(y * w + x) as usize] = 0x00;
+            }
+        }
+        update_file_contents(&local_fd, &local_data).unwrap();
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_surface_set_buffer_transform(
+                dst,
+                surface,
+                WlOutputTransform::Flipped as i32,
+            );
+            write_req_wl_surface_commit(dst, surface);
+        }));
+        let remote_data = get_file_contents(&remote_fd, (w * h) as usize).unwrap();
+        assert!(
+            remote_data == local_data,
+            "{:?} {:?}",
+            remote_data,
+            local_data
+        );
+    })?;
+    Ok(StatusOk::Pass)
+}
+
+/** Test that damage tracking is done _correctly_ when the surface transform and scale change.
+ *
+ * Design: with pseudorandomly transformed and scaled underlying buffers, render a scene in
+ * which a sequence of pixels (in surface coordinates) are drawn, using precise damage
+ * tracking to indicate in either surface or buffer coordinates what has changed. If Waypipe
+ * correctly and efficiently tracks damage, it should always successfully replicate the
+ * buffers.
+ */
+fn proto_rotating_damage(info: TestInfo) -> TestResult {
+    let transforms = [
+        WlOutputTransform::Normal,
+        WlOutputTransform::Item90,
+        WlOutputTransform::Item180,
+        WlOutputTransform::Item270,
+        WlOutputTransform::Flipped,
+        WlOutputTransform::Flipped90,
+        WlOutputTransform::Flipped180,
+        WlOutputTransform::Flipped270,
+    ];
+
+    /** Transform pixel from buffer coordinates to surface coordinates,
+     * assuming scale 1.
+     *
+     * `buf_sz` is the size of the buffer.
+     *
+     * `transform` is the transform passed to `wl_surface::set_buffer_transform`, which
+     * is the "transformation the client has already applied to the content of the buffer".
+     * As a result, when moving from buffer to surface, one needs to do the _inverse_ of the
+     * operation that the transform says to do.
+     */
+    fn buf_to_surface_tx(
+        transform: WlOutputTransform,
+        mut px: (i32, i32),
+        buf_sz: (u32, u32),
+    ) -> (i32, i32) {
+        let s: (i32, i32) = (buf_sz.0.try_into().unwrap(), buf_sz.1.try_into().unwrap());
+        px = match transform {
+            WlOutputTransform::Normal | WlOutputTransform::Flipped => (px.0, px.1),
+            WlOutputTransform::Item90 | WlOutputTransform::Flipped90 => (s.1 - 1 - px.1, px.0),
+            WlOutputTransform::Item180 | WlOutputTransform::Flipped180 => {
+                (s.0 - 1 - px.0, s.1 - 1 - px.1)
+            }
+            WlOutputTransform::Item270 | WlOutputTransform::Flipped270 => (px.1, s.0 - 1 - px.0),
+        };
+        match transform {
+            WlOutputTransform::Normal
+            | WlOutputTransform::Item90
+            | WlOutputTransform::Item180
+            | WlOutputTransform::Item270 => px,
+            WlOutputTransform::Flipped | WlOutputTransform::Flipped180 => (s.0 - 1 - px.0, px.1),
+            WlOutputTransform::Flipped90 | WlOutputTransform::Flipped270 => (s.1 - 1 - px.0, px.1),
+        }
+    }
+    /** Like buf_to_surface_tx; here the transform operation is applied to the input pixel
+     * within a surface.
+     *
+     * `buf_sz` is the size of the _buffer_, not the surface. */
+    fn surface_to_buf_tx(
+        transform: WlOutputTransform,
+        mut px: (i32, i32),
+        buf_sz: (u32, u32),
+    ) -> (i32, i32) {
+        let transpose = match transform {
+            WlOutputTransform::Normal
+            | WlOutputTransform::Item180
+            | WlOutputTransform::Flipped
+            | WlOutputTransform::Flipped180 => false,
+            WlOutputTransform::Item90
+            | WlOutputTransform::Item270
+            | WlOutputTransform::Flipped90
+            | WlOutputTransform::Flipped270 => true,
+        };
+        let surf_sz: (i32, i32) = if transpose {
+            (buf_sz.1.try_into().unwrap(), buf_sz.0.try_into().unwrap())
+        } else {
+            (buf_sz.0.try_into().unwrap(), buf_sz.1.try_into().unwrap())
+        };
+        /* flip over vertical axis happens before rotation */
+        px = match transform {
+            WlOutputTransform::Normal
+            | WlOutputTransform::Item90
+            | WlOutputTransform::Item180
+            | WlOutputTransform::Item270 => px,
+            /* Subtract 1 when flipping since pixels are actually [(x,x+1,y,y+1)]
+             * rectangles whose bounds swap on subtraction. */
+            WlOutputTransform::Flipped
+            | WlOutputTransform::Flipped90
+            | WlOutputTransform::Flipped180
+            | WlOutputTransform::Flipped270 => (surf_sz.0 - 1 - px.0, px.1),
+        };
+        match transform {
+            WlOutputTransform::Normal | WlOutputTransform::Flipped => (px.0, px.1),
+            /* contents rotated 90 deg ccw around the top left corner (0,0)
+             *
+             *   surface     buffer
+             * 0--------X    0---X
+             * |        |    |  *|
+             * |      * | -> |   |
+             * X--------X    |   |
+             *               |   |
+             *               X---X
+             */
+            WlOutputTransform::Item90 | WlOutputTransform::Flipped90 => {
+                (px.1, surf_sz.0 - 1 - px.0)
+            }
+            WlOutputTransform::Item180 | WlOutputTransform::Flipped180 => {
+                (surf_sz.0 - 1 - px.0, surf_sz.1 - 1 - px.1)
+            }
+            WlOutputTransform::Item270 | WlOutputTransform::Flipped270 => {
+                (surf_sz.1 - 1 - px.1, px.0)
+            }
+        }
+    }
+
+    /* Sanity check, that transforms work correctly */
+    for t in transforms {
+        let p = (1, 2);
+        let q = buf_to_surface_tx(t, p, (100, 200));
+        let r = surface_to_buf_tx(t, q, (100, 200));
+        println!("{:?} {:?} {:?} {:?}", t, p, q, r);
+        assert!(p == r);
+    }
+
+    fn draw_pixel(
+        region: &mut [u8],
+        buf_size: (u32, u32),
+        bpp: u32,
+        spx: (i32, i32),
+        scale: u32,
+        transform: WlOutputTransform,
+        value: u16,
+    ) -> Vec<(u32, u32)> {
+        assert!(buf_size.0 % scale == 0 && buf_size.1 % scale == 0);
+        let bpx = surface_to_buf_tx(transform, spx, (buf_size.0 / scale, buf_size.1 / scale));
+
+        println!(
+            "Draw pixel: {:?} {} {:?}, surface {:?} -> buffer {:?}",
+            transform,
+            scale,
+            (buf_size.0 / scale, buf_size.1 / scale),
+            spx,
+            (bpx.0 * scale as i32, bpx.1 * scale as i32),
+        );
+        let mut mod_pixels = Vec::new();
+        if bpx.0 >= 0 && bpx.1 >= 0 {
+            for x in (bpx.0 as u32) * scale..(bpx.0 as u32 + 1) * scale {
+                for y in (bpx.1 as u32) * scale..(bpx.1 as u32 + 1) * scale {
+                    if x >= buf_size.0 || y >= buf_size.1 {
+                        continue;
+                    }
+                    region[(y * buf_size.0 * bpp + x * bpp) as usize
+                        ..(y * buf_size.0 * bpp + x * bpp + bpp) as usize]
+                        .copy_from_slice(&value.to_le_bytes());
+                    mod_pixels.push((x, y));
+                }
+            }
+        }
+        mod_pixels
+    }
+
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
+        let [display, registry, shm, comp, surface, pool, buffer_base, ..] = ID_SEQUENCE;
+
+        let mut rng = BadRng { state: 1 };
+
+        let fmt = WlShmFormat::Rgb565;
+        let bpp = 2;
+        let pixel_s = 20; /* surface square size for pixel selection */
+        let s = 2 * pixel_s + 30; /* So that all pixels fall inside a scale 2 surface */
+        assert!(s * bpp >= 64);
+        /* A randomly shuffled sequence which uses every transform+scale combination at least once */
+        let buffer_sequence: &[(usize, u32, u32, u32)] = &[
+            /* transform idx, scale, width, height */
+            (0, 1, s, s), /* seed, default setup */
+            (5, 2, s, s),
+            (5, 1, s + 2, s - 2),
+            (3, 2, s + 4, s - 4),
+            (0, 1, s + 6, s - 6),
+            (6, 1, s + 8, s - 8),
+            (0, 2, s + 10, s - 10),
+            (7, 2, s + 12, s - 12),
+            (2, 1, s + 14, s - 14),
+            (2, 2, s + 16, s - 16),
+            (1, 1, s + 18, s - 18),
+            (7, 1, s + 20, s - 20),
+            (6, 2, s + 22, s - 22),
+            (3, 1, s + 24, s - 24),
+            (4, 1, s + 26, s - 26),
+            (4, 2, s + 28, s - 28),
+            (1, 2, s + 30, s - 30),
+        ];
+        let mut offsets: Vec<u32> = Vec::new();
+        offsets.push(0);
+        let mut file_sz = 0;
+        for b in buffer_sequence {
+            file_sz += (bpp * b.2 * b.3) as usize;
+            offsets.push(file_sz as u32);
+        }
+
+        /* Setup: zero initialize three wl_buffers */
+        let mut local_data = vec![0x01; file_sz];
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, registry);
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, registry, 1, WL_SHM, 2);
+            write_evt_wl_registry_global(dst, registry, 2, WL_COMPOSITOR, 6);
+        }));
+        let local_fd = make_file_with_contents(&local_data).unwrap();
+        let msg = build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, registry, 1, WL_SHM, 2, shm);
+            write_req_wl_registry_bind(dst, registry, 2, WL_COMPOSITOR, 6, comp);
+            write_req_wl_compositor_create_surface(dst, comp, surface);
+            write_req_wl_shm_create_pool(dst, shm, false, pool, file_sz as i32);
+            for i in 0..buffer_sequence.len() {
+                write_req_wl_shm_pool_create_buffer(
+                    dst,
+                    pool,
+                    ObjId(buffer_base.0 + i as u32),
+                    offsets[i] as i32,
+                    buffer_sequence[i].2 as i32,
+                    buffer_sequence[i].3 as i32,
+                    (buffer_sequence[i].2 * bpp) as i32,
+                    fmt as u32,
+                );
+            }
+            write_req_wl_surface_attach(dst, surface, buffer_base, 0, 0);
+            write_req_wl_surface_damage(dst, surface, 0, 0, i32::MAX, i32::MAX);
+            write_req_wl_surface_commit(dst, surface);
+        });
+        let (rmsg, mut rfd) = ctx.prog_write(&msg[..], &[&local_fd]).unwrap();
+        assert!(rmsg.concat() == msg);
+        assert!(rfd.len() == 1);
+        let remote_fd = rfd.remove(0);
+        let remote_data = get_file_contents(&remote_fd, file_sz).unwrap();
+        /* Check that the seed buffer was correctly replicated; others have not yet been used and may have arbitrary contents */
+        assert!(
+            remote_data[offsets[0] as usize..offsets[1] as usize]
+                == local_data[offsets[0] as usize..offsets[1] as usize]
+        );
+
+        let mut px_seq = Vec::new();
+
+        for step in 0..(3 * buffer_sequence.len() - 4) {
+            let px = (
+                (rng.next() as u32 % pixel_s) as i32,
+                (rng.next() as u32 % pixel_s) as i32,
+            );
+            px_seq.push(px);
+
+            /* Sequence; 0 121 232 343 ... 15.16.15 + 16 */
+            let buf_no = if step == 0 {
+                0
+            } else {
+                let b = 1 + (step - 1) / 3;
+                let o = ((step - 1) % 3 == 1) as usize;
+                b + o
+            };
+
+            let on_surface = rng.next() % 2 == 0;
+            let transform = transforms[buffer_sequence[buf_no].0];
+            let scale = buffer_sequence[buf_no].1;
+            let buf_size = (buffer_sequence[buf_no].2, buffer_sequence[buf_no].3);
+            println!(
+                "Step {}: buffer {}, scale {}, transform {:?}, size {:?}, px {:?}",
+                step, buf_no, scale, transform, buf_size, px
+            );
+
+            /* extract sub-buffer contents ? but note the stride difference, and that the pixel may miss */
+            let local_region =
+                &mut local_data[offsets[buf_no] as usize..offsets[buf_no + 1] as usize];
+
+            for (step, p) in px_seq[..px_seq.len() - 1].iter().enumerate() {
+                /* draw entire past pixel sequence; since each buffer only ever uses the same
+                 * scale/transform parameters the data will be consistent between commits. */
+                draw_pixel(
+                    local_region,
+                    buf_size,
+                    bpp,
+                    *p,
+                    scale,
+                    transform,
+                    (step + 100) as u16,
+                );
+            }
+            let mod_pixels = draw_pixel(
+                local_region,
+                buf_size,
+                bpp,
+                px,
+                scale,
+                transform,
+                (step + 100) as u16,
+            );
+            /* If pixel is not drawn this round, its damage can be ignored and Waypipe should
+             * not be expected to synchronize the not-actually-"damaged" spot for later commits. */
+            assert!(!mod_pixels.is_empty());
+
+            let cfg = build_msgs(|dst| {
+                write_req_wl_surface_attach(
+                    dst,
+                    surface,
+                    ObjId(buffer_base.0 + buf_no as u32),
+                    0,
+                    0,
+                );
+                write_req_wl_surface_set_buffer_scale(dst, surface, scale as i32);
+                write_req_wl_surface_set_buffer_transform(dst, surface, transform as i32);
+            });
+
+            update_file_contents(&local_fd, &local_data).unwrap();
+            if on_surface {
+                /* plain wl_surface::damage; just mark old and new pixel positions */
+                ctx.prog_write_passthrough(
+                    [
+                        cfg,
+                        build_msgs(|dst| {
+                            write_req_wl_surface_damage(dst, surface, px.0, px.1, 1, 1);
+                            write_req_wl_surface_commit(dst, surface);
+                        }),
+                    ]
+                    .concat(),
+                );
+            } else {
+                /* damage_buffer: compute difference between old and new images, and
+                 * report changed pixels from those */
+                ctx.prog_write_passthrough(
+                    [
+                        cfg,
+                        build_msgs(|dst| {
+                            for (x, y) in mod_pixels {
+                                write_req_wl_surface_damage_buffer(
+                                    dst, surface, x as i32, y as i32, 1, 1,
+                                );
+                            }
+                            write_req_wl_surface_commit(dst, surface);
+                        }),
+                    ]
+                    .concat(),
+                );
+            }
+
+            let remote_data = get_file_contents(&remote_fd, file_sz).unwrap();
+            let remote_region =
+                &remote_data[offsets[buf_no] as usize..offsets[buf_no + 1] as usize];
+            let local_region = &local_data[offsets[buf_no] as usize..offsets[buf_no + 1] as usize];
+
+            assert!(remote_region == local_region);
+        }
     })?;
     Ok(StatusOk::Pass)
 }
@@ -3997,6 +4443,12 @@ fn main() -> ExitCode {
                 .help("When matching test names, treat parts between :: as indivisible tokens"),
         )
         .arg(
+            Arg::new("core")
+                .long("core")
+                .action(ArgAction::SetTrue)
+                .help("Allow subprocesses to create core dumps on crash"),
+        )
+        .arg(
             Arg::new("quiet")
                 .long("quiet")
                 .short('q')
@@ -4014,66 +4466,48 @@ fn main() -> ExitCode {
         substrings: &substrings,
         exact: matches.get_flag("exact"),
     };
+    let core = matches.get_flag("core");
 
     let vk_device_ids = list_vulkan_device_ids();
 
     /* Construct a list of all tests */
     let mut tests: Vec<(String, Box<dyn Fn(TestInfo) -> TestResult>)> = Vec::new();
+    let t = &mut tests;
 
-    register_single(&mut tests, &f, "basic", proto_basic);
-    register_single(&mut tests, &f, "base_wire", proto_base_wire);
-    register_single(&mut tests, &f, "commit_timing", proto_commit_timing);
-    register_single(&mut tests, &f, "gamma_control", proto_gamma_control);
-    register_single(&mut tests, &f, "keymap", proto_keymap);
-    register_single(&mut tests, &f, "many_fds", proto_many_fds);
-    register_single(&mut tests, &f, "object_collision", proto_object_collision);
-    register_single(&mut tests, &f, "oversized", proto_oversized);
-    register_single(&mut tests, &f, "pipe_write", proto_pipe_write);
-    register_single(&mut tests, &f, "presentation_time", proto_presentation_time);
-    register_single(
-        &mut tests,
-        &f,
-        "screencopy_shm_wlr",
-        proto_screencopy_shm_wlr,
-    );
-    register_single(
-        &mut tests,
-        &f,
-        "screencopy_shm_ext",
-        proto_screencopy_shm_ext,
-    );
-    register_single(&mut tests, &f, "shm_buffer", proto_shm_buffer);
-    register_single(&mut tests, &f, "shm_damage", proto_shm_damage);
-    register_single(&mut tests, &f, "shm_extend", proto_shm_extend);
-    register_single(&mut tests, &f, "title_prefix", proto_title_prefix);
-    register_single(&mut tests, &f, "viewporter_damage", proto_viewporter_damage);
+    register_single(t, &f, "basic", proto_basic);
+    register_single(t, &f, "base_wire", proto_base_wire);
+    register_single(t, &f, "commit_timing", proto_commit_timing);
+    register_single(t, &f, "flip_damage", proto_flip_damage);
+    register_single(t, &f, "gamma_control", proto_gamma_control);
+    register_single(t, &f, "keymap", proto_keymap);
+    register_single(t, &f, "many_fds", proto_many_fds);
+    register_single(t, &f, "object_collision", proto_object_collision);
+    register_single(t, &f, "oversized", proto_oversized);
+    register_single(t, &f, "pipe_write", proto_pipe_write);
+    register_single(t, &f, "presentation_time", proto_presentation_time);
+    register_single(t, &f, "rotating_damage", proto_rotating_damage);
+    register_single(t, &f, "screencopy_shm_wlr", proto_screencopy_shm_wlr);
+    register_single(t, &f, "screencopy_shm_ext", proto_screencopy_shm_ext);
+    register_single(t, &f, "shm_buffer", proto_shm_buffer);
+    register_single(t, &f, "shm_damage", proto_shm_damage);
+    register_single(t, &f, "shm_extend", proto_shm_extend);
+    register_single(t, &f, "title_prefix", proto_title_prefix);
+    register_single(t, &f, "viewporter_damage", proto_viewporter_damage);
 
     #[cfg(feature = "dmabuf")]
     {
-        register_per_device(&mut tests, &f, &vk_device_ids, "dmabuf", proto_dmabuf);
+        register_per_device(t, &f, &vk_device_ids, "dmabuf", proto_dmabuf);
+        register_per_device(t, &f, &vk_device_ids, "dmabuf_damage", proto_dmabuf_damage);
+        register_per_device(t, &f, &vk_device_ids, "explicit_sync", proto_explicit_sync);
         register_per_device(
-            &mut tests,
-            &f,
-            &vk_device_ids,
-            "dmabuf_damage",
-            proto_dmabuf_damage,
-        );
-        register_per_device(
-            &mut tests,
-            &f,
-            &vk_device_ids,
-            "explicit_sync",
-            proto_explicit_sync,
-        );
-        register_per_device(
-            &mut tests,
+            t,
             &f,
             &vk_device_ids,
             "screencopy_dmabuf_ext",
             proto_screencopy_dmabuf_ext,
         );
         register_per_device(
-            &mut tests,
+            t,
             &f,
             &vk_device_ids,
             "screencopy_dmabuf_wlr",
@@ -4083,7 +4517,7 @@ fn main() -> ExitCode {
 
     #[cfg(feature = "video")]
     {
-        register_video_tests(&mut tests, &f, &vk_device_ids);
+        register_video_tests(t, &f, &vk_device_ids);
     }
 
     if matches.get_flag("list") {
@@ -4120,7 +4554,11 @@ fn main() -> ExitCode {
     let mut nfail: usize = 0;
     let mut nskip: usize = 0;
     for (name, func) in &tests {
-        print!("{} ...", name);
+        let mut stdout = std::io::stdout().lock();
+        write!(&mut stdout, "{} ...", name).unwrap();
+        /* flush immediately so that buffer is empty before fork and will not be written twice */
+        stdout.flush().unwrap();
+        drop(stdout);
 
         let info = TestInfo {
             test_name: name,
@@ -4159,23 +4597,22 @@ fn main() -> ExitCode {
                 }
                 drop(read_out);
 
-                // TODO: add option to disable this if nontrivial errors ever need to
-                // be debugged.
-
-                /* Disable core dumps for child process, because the tests report errors
-                 * using using panic! or a failed assert!, and core dumps should not need
-                 * recording. However: this _also_ prevents the Waypipe instances from
-                 * making a core dump */
-                assert!(
-                    unsafe {
-                        let x = libc::rlimit {
-                            rlim_cur: 0,
-                            rlim_max: 0,
-                        };
-                        /* SAFETY: x is properly aligned, is not captured by setrlimit, and lives until end of scope */
-                        libc::setrlimit(libc::RLIMIT_CORE, &x)
-                    } != -1
-                );
+                if !core {
+                    /* Disable core dumps for child process, because the tests report errors
+                     * using using panic! or a failed assert!, and core dumps should not need
+                     * recording. This _also_ prevents the Waypipe instances from making a
+                     * core dump. */
+                    assert!(
+                        unsafe {
+                            let x = libc::rlimit {
+                                rlim_cur: 0,
+                                rlim_max: 0,
+                            };
+                            /* SAFETY: x is properly aligned, is not captured by setrlimit, and lives until end of scope */
+                            libc::setrlimit(libc::RLIMIT_CORE, &x)
+                        } != -1
+                    );
+                }
 
                 // TODO: process group configuration to kill the child process and
                 // everything it spawns on timeout events?

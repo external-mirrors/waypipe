@@ -46,29 +46,40 @@ struct WlRect {
     height: i32,
 }
 
-/** Damage recorded for a surface during a commit interval, plus information
- * needed to interpret the damage and record the associated buffer.
- */
-#[derive(Clone)]
-struct DamageBatch {
-    /** wl_surface.damage is interpreted to have the scale/transform/viewport at the time
-     * the damage was committed, so these must be recorded per commit. (The buffer dimensions must
-     * be known in order to apply the scale and transform, so we delay this to better handle
-     * scenarios where the surface alternates between differently sized buffers.)
-     *
-     * Most clients use the better wl_buffer.damage_buffer, so perfection here is not critical. */
+/** Properties of a buffer's attachment to the surface, which are required to interpret how
+ * surface coordinates and buffer coordinates interact. */
+#[derive(Eq, PartialEq, Clone)]
+struct BufferAttachment {
+    /** Buffer scale */
     scale: u32,
+    /** Transform (from buffer to surface) */
     transform: WlOutputTransform,
-    damage: Vec<WlRect>,
-    damage_buffer: Vec<WlRect>,
     /** Viewport source x-offset,y-offset,width,height, all 24.8 fixed point and >=,>=,>,> 0 */
     viewport_src: Option<(i32, i32, i32, i32)>,
     /** Viewport destination width/height, should both be > 0 */
     viewport_dst: Option<(i32, i32)>,
-
     /** The buffer attached at the time the damage was committed (or an arbitrary value if
      * the batch was not yet committed.) */
     buffer_uid: u64,
+    /** Dimensions of the attached buffer; these are needed to properly evaluate transforms. */
+    buffer_size: (i32, i32),
+}
+
+/** Damage recorded for a surface during a commit interval, plus information
+ * needed to interpret the damage and record the associated buffer. */
+#[derive(Clone)]
+struct DamageBatch {
+    /** Information about which buffer is used in this batch and how it is attached to the surface */
+    attachment: BufferAttachment,
+    /** wl_surface::damage directly applies in the surface coordinate space, and the conversion to buffer
+     * coordinate space can only be done at commit time, so these must be cached instead of immediately
+     * converted. */
+    damage: Vec<WlRect>,
+    /** Most clients use wl_surface::damage_buffer, which is easier to use and more precise than wl_surface::damage.
+     * For Waypipe, it is usually easier, except in the rare case of accumulating damage over different
+     * buffers whose attachment parameters differ (and thus whose buffer coordinate spaces differ); then
+     * one must convert between spaces. */
+    damage_buffer: Vec<WlRect>,
 }
 
 /** Additional information for wl_surface */
@@ -417,6 +428,145 @@ fn apply_damage_rect_transform(
     })
 }
 
+/** Invert a viewport transform, rounding damage rectangle sizes up.
+ *
+ * The input is a nondegenerate rectangle _contained in_ the [0..buffer_size] rectangle.
+ */
+fn inverse_viewport_transform(
+    a: &Rect,
+    buffer_size: (i32, i32),
+    view_src: Option<(i32, i32, i32, i32)>,
+    view_dst: Option<(i32, i32)>,
+) -> Option<WlRect> {
+    assert!(buffer_size.0 > 0 && buffer_size.1 > 0);
+    assert!(
+        a.x1 < a.x2 && a.y1 < a.y2 && a.x2 <= buffer_size.0 as u32 && a.y2 <= buffer_size.1 as u32
+    );
+
+    /* 1: convert to .8 fixed point, and clip rectangle to 'src' */
+    let (mut x1, mut x2, mut y1, mut y2) = (
+        (a.x1 as u64) * 256,
+        (a.x2 as u64) * 256,
+        (a.y1 as u64) * 256,
+        (a.y2 as u64) * 256,
+    );
+    if let Some((sx, sy, sw, sh)) = view_src {
+        assert!(sx >= 0 && sy >= 0 && sw > 0 && sh > 0);
+        let e = (sx as u64 + sw as u64, sy as u64 + sh as u64);
+        x1 = x1.clamp(sx as u64, e.0) - (sx as u64);
+        x2 = x2.clamp(sx as u64, e.0) - (sx as u64);
+        y1 = y1.clamp(sy as u64, e.1) - (sy as u64);
+        y2 = y2.clamp(sy as u64, e.1) - (sy as u64);
+
+        /* Per protocol, parts of damage outside surface dimensions are ignored */
+        if x2 <= x1 || y2 <= y1 {
+            return None;
+        }
+    };
+    /* src size, in .8 fixed point */
+    let src: (u64, u64) = if let Some(x) = view_src {
+        (x.2 as u64, x.3 as u64)
+    } else {
+        (buffer_size.0 as u64 * 256, buffer_size.1 as u64 * 256)
+    };
+
+    /* 2: scale to 'dst' and round result to integer */
+    let dst: (u32, u32) = if let Some(x) = view_dst {
+        (x.0 as u32, x.1 as u32)
+    } else if let Some(x) = view_src {
+        /* in crop-only case, the crop rectangle size should be an integer */
+        (x.2 as u32 / 256, x.3 as u32 / 256)
+    } else {
+        (buffer_size.0 as u32, buffer_size.1 as u32)
+    };
+
+    /* Rectangle coordinates, in fixed point, are up to 31+8 bits,
+     * dst is at most 31 bits, and src.0 is at most 31 bits. Do operations
+     * in u128 to ensure 31+31+8 bit intermediate products are not clipped.
+     * (Note: it is possible to reduce the intermediate product size, since
+     * if view_src is not None, coordinates are clipped to 32 bits, and
+     * otherwise are divisible by 256.) */
+    let xl = ((x1 as u128) * (dst.0 as u128)) / (src.0 as u128);
+    let xh = ((x2 as u128) * (dst.0 as u128)).div_ceil(src.0 as u128);
+    let yl = ((y1 as u128) * (dst.1 as u128)) / (src.1 as u128);
+    let yh = ((y2 as u128) * (dst.1 as u128)).div_ceil(src.1 as u128);
+    assert!(xh > xl && yh > yl);
+    /* Results should fall within [0,i32::MAX] since dst is so bounded, and coordinates are <= src*256. */
+    assert!(xh <= i32::MAX as _ && yh <= i32::MAX as _);
+    Some(WlRect {
+        x: xl as i32,
+        y: yl as i32,
+        width: (xh - xl) as i32,
+        height: (yh - yl) as i32,
+    })
+}
+
+/** Transform a rectangle indicating damage on a buffer to a rectangle
+ * indicating damage on a surface.
+ *
+ * The rectangle processed may be clipped to the buffer size and to the viewport size;
+ * None will be returned if it has no overlap with the surface extents.
+ */
+fn inverse_damage_rect_transform(
+    a: &WlRect,
+    scale: u32,
+    transform: WlOutputTransform,
+    view_src: Option<(i32, i32, i32, i32)>,
+    view_dst: Option<(i32, i32)>,
+    width: i32,
+    height: i32,
+) -> Option<WlRect> {
+    assert!(width > 0 && height > 0 && scale > 0);
+
+    /* Each of the eight transformations corresponds to a
+     * unique set of reflections: X<->Y | Xflip | Yflip */
+    let seq = [0b000, 0b011, 0b110, 0b101, 0b010, 0b001, 0b100, 0b111];
+    let code = seq[transform as u32 as usize];
+    let swap_xy = code & 0x1 != 0;
+    let flip_x = code & 0x2 != 0;
+    let flip_y = code & 0x4 != 0;
+
+    let mut xl = a.x.clamp(0, width) as u32;
+    let mut xh = a.x.saturating_add(a.width).clamp(0, width) as u32;
+    let mut yl = a.y.clamp(0, height) as u32;
+    let mut yh = a.y.saturating_add(a.height).clamp(0, height) as u32;
+    if xh <= xl || yh <= yl {
+        /* Rectangle is degenerate after clipping */
+        return None;
+    }
+    let (end_w, end_h) = if swap_xy {
+        (height as u32, width as u32)
+    } else {
+        (width as u32, height as u32)
+    };
+
+    if swap_xy {
+        (xl, xh, yl, yh) = (yl, yh, xl, xh);
+    }
+    if flip_y {
+        (yh, yl) = (end_h - yl, end_h - yh);
+    }
+    if flip_x {
+        (xh, xl) = (end_w - xl, end_w - xh);
+    }
+    (xl, xh) = (xl / scale, xh.div_ceil(scale));
+    (yl, yh) = (yl / scale, yh.div_ceil(scale));
+
+    let post_vp_size = if swap_xy {
+        (height / scale as i32, width / scale as i32)
+    } else {
+        (width / scale as i32, height / scale as i32)
+    };
+
+    let b = Rect {
+        x1: xl,
+        x2: xh,
+        y1: yl,
+        y2: yh,
+    };
+    inverse_viewport_transform(&b, post_vp_size, view_src, view_dst)
+}
+
 /** Get an interval containing the entire memory region corresponding to the buffer */
 fn damage_for_entire_buffer(buffer: &ObjWlBufferShm) -> (usize, usize) {
     let start = (buffer.offset) as usize;
@@ -475,42 +625,101 @@ fn get_bpp(fmt: u32) -> Option<usize> {
 
 /** Return a list of rectangular areas damaged on a surface since the last time the given
  * buffer was committed; the rectangles are not guaranteed to be disjoint. */
-fn get_damage_rects(surface: &ObjWlSurface, buffer_uid: u64, width: i32, height: i32) -> Vec<Rect> {
+fn get_damage_rects(surface: &ObjWlSurface, attachment: &BufferAttachment) -> Vec<Rect> {
+    let (width, height) = attachment.buffer_size;
     let mut rects = Vec::<Rect>::new();
-    let Some(mut first_idx) = surface
-        .damage_history
-        .iter()
-        .position(|x| x.buffer_uid == buffer_uid)
-    else {
-        /* First time buffer was seen; mark the entire buffer as damaged */
-        rects.push(Rect {
-            x1: 0,
-            x2: width.try_into().unwrap(),
-            y1: 0,
-            y2: height.try_into().unwrap(),
-        });
-        return rects;
+    let full_damage = Rect {
+        x1: 0,
+        x2: width.try_into().unwrap(),
+        y1: 0,
+        y2: height.try_into().unwrap(),
     };
 
-    /* Except for the first slot (which gets updated later by this function's caller),
-     * if buffer_uid = buffer.unique_id, then the damage was already applied.
-     * Also, damage_history[0].buffer_uid = damage_history[1].buffer_uid at this point. */
-    first_idx = std::cmp::max(first_idx, 1);
+    /* The first slot will later be updated to match `attachment`. */
+    let Some(first_idx_offset) = surface
+        .damage_history
+        .iter()
+        .skip(1)
+        .position(|x| x.attachment.buffer_uid == attachment.buffer_uid)
+    else {
+        /* First time this buffer was seen at all; mark the entire buffer as damaged */
+        rects.push(full_damage);
+        return rects;
+    };
+    let first_idx = first_idx_offset + 1;
+    if surface.damage_history[first_idx].attachment != *attachment {
+        /* Require an exact match: it is posssible that the surface->buffer coordinate
+         * transform and the buffer contents have changed in concert so that the surface
+         * pixels remain the same, even though all buffer pixels are different. In this
+         * scenario no damage will be reported. However, Waypipe must still update all
+         * pixels, because the compositor may read from and rerender the surface at any
+         * time. It is only when the visible surface contents have no damage and the
+         * coordinate transform stays the same that the contents of the buffer are pinned.
+         *
+         * Note: in theory, one could special-case viewport-resize operations which preserve
+         * the mapping for all retained surface pixels, and then automatically damage the
+         * buffer pixels that are newly made visible. (Clients may do this to enable
+         * high-performance smooth resizing.)
+         */
+        rects.push(full_damage);
+        return rects;
+    }
 
-    for batch in &surface.damage_history[..first_idx] {
-        for w in &batch.damage_buffer {
-            if let Some(r) = clip_wlrect_to_buffer(w, width, height) {
-                rects.push(r);
+    /* Scan all recorded damage from previous commits */
+    for (i, batch) in surface.damage_history[..first_idx].iter().enumerate() {
+        if i == 0 {
+            /* Special case: damage to the target buffer needs no conversion */
+            for w in &batch.damage_buffer {
+                if let Some(r) = clip_wlrect_to_buffer(w, width, height) {
+                    rects.push(r);
+                }
+            }
+        } else {
+            for w in &batch.damage_buffer {
+                /* Translate damage from this buffer's coordinate space to the current
+                 * buffer's coordinate space, through the surface coordinate space.
+                 *
+                 * Note: buffer damage can be more precise than surface damage when the
+                 * scale is > 1 or wp_viewporter is involved, so this can round up buffer
+                 * sizes more than strictly necessary. */
+                let Some(s) = inverse_damage_rect_transform(
+                    w,
+                    batch.attachment.scale,
+                    batch.attachment.transform,
+                    batch.attachment.viewport_src,
+                    batch.attachment.viewport_dst,
+                    batch.attachment.buffer_size.0,
+                    batch.attachment.buffer_size.1,
+                ) else {
+                    continue;
+                };
+                if let Some(r) = apply_damage_rect_transform(
+                    &s,
+                    attachment.scale,
+                    attachment.transform,
+                    attachment.viewport_src,
+                    attachment.viewport_dst,
+                    width,
+                    height,
+                ) {
+                    rects.push(r);
+                }
             }
         }
 
         for w in &batch.damage {
+            /* Convert from surface space to local space, using the _current_ transform.
+             *
+             * Note: the damage is clipped according to the current surface size;
+             * technically one could clip damage at each commit according to the then-current
+             * surface size, and then reclip it for this one; however, such an optimization
+             * would be complicated and only benefits weird clients, so is not worth doing. */
             if let Some(r) = apply_damage_rect_transform(
                 w,
-                batch.scale,
-                batch.transform,
-                batch.viewport_src,
-                batch.viewport_dst,
+                attachment.scale,
+                attachment.transform,
+                attachment.viewport_src,
+                attachment.viewport_dst,
                 width,
                 height,
             ) {
@@ -523,7 +732,11 @@ fn get_damage_rects(surface: &ObjWlSurface, buffer_uid: u64, width: i32, height:
 
 /** Compute the (disjoint) damage intervals for a shared memory pool used by the buffer,
  * using damage accumulated since the last time the buffer was committed */
-fn get_damage_for_shm(buffer: &ObjWlBuffer, surface: &ObjWlSurface) -> Vec<(usize, usize)> {
+fn get_damage_for_shm(
+    buffer: &ObjWlBuffer,
+    surface: &ObjWlSurface,
+    attachment: &BufferAttachment,
+) -> Vec<(usize, usize)> {
     let Some(shm_info) = &buffer.shm_info else {
         panic!();
     };
@@ -533,7 +746,7 @@ fn get_damage_for_shm(buffer: &ObjWlBuffer, surface: &ObjWlSurface) -> Vec<(usiz
         return vec![damage_for_entire_buffer(shm_info)];
     };
 
-    let mut rects = get_damage_rects(surface, buffer.unique_id, shm_info.width, shm_info.height);
+    let mut rects = get_damage_rects(surface, attachment);
     compute_damaged_segments(
         &mut rects[..],
         6,
@@ -547,22 +760,14 @@ fn get_damage_for_shm(buffer: &ObjWlBuffer, surface: &ObjWlSurface) -> Vec<(usiz
 /** Compute the (disjoint) damage intervals for the linear view of a DMABUF's contents,
  * using damage accumulated since the last time the buffer was committed */
 fn get_damage_for_dmabuf(
-    buffer: &ObjWlBuffer,
     sfdd: &ShadowFdDmabuf,
     surface: &ObjWlSurface,
+    attachment: &BufferAttachment,
 ) -> Vec<(usize, usize)> {
     // TODO: deduplicate implementations
-    let (nom_len, width, height) = match sfdd.buf {
-        DmabufImpl::Vulkan(ref buf) => (
-            buf.nominal_size(sfdd.view_row_stride),
-            buf.width,
-            buf.height,
-        ),
-        DmabufImpl::Gbm(ref buf) => (
-            buf.nominal_size(sfdd.view_row_stride),
-            buf.width,
-            buf.height,
-        ),
+    let (nom_len, width) = match sfdd.buf {
+        DmabufImpl::Vulkan(ref buf) => (buf.nominal_size(sfdd.view_row_stride), buf.width),
+        DmabufImpl::Gbm(ref buf) => (buf.nominal_size(sfdd.view_row_stride), buf.width),
     };
 
     let wayl_format = drm_to_wayland(sfdd.drm_format);
@@ -571,7 +776,7 @@ fn get_damage_for_dmabuf(
         return vec![(0, align(nom_len, 64))];
     };
 
-    let mut rects = get_damage_rects(surface, buffer.unique_id, width as i32, height as i32);
+    let mut rects = get_damage_rects(surface, attachment);
     /* Stride: tightly packed. */
     // except: possibly gcd(4,bpp) aligned ?
     let stride = sfdd.view_row_stride.unwrap_or(width * (bpp as u32));
@@ -1445,13 +1650,16 @@ pub fn process_way_msg(
             let surf_id = parse_req_wl_compositor_create_surface(msg)?;
 
             let d = DamageBatch {
-                scale: 1,
-                transform: WlOutputTransform::Normal,
                 damage: Vec::new(),
                 damage_buffer: Vec::new(),
-                viewport_src: None,
-                viewport_dst: None,
-                buffer_uid: 0,
+                attachment: BufferAttachment {
+                    scale: 1,
+                    transform: WlOutputTransform::Normal,
+                    viewport_src: None,
+                    viewport_dst: None,
+                    buffer_uid: 0,
+                    buffer_size: (0, 0),
+                },
             };
 
             insert_new_object(
@@ -1538,7 +1746,7 @@ pub fn process_way_msg(
                 return Err(tag!("Surface object has invalid extra type"));
             };
 
-            surf.damage_history[0].scale = s as u32;
+            surf.damage_history[0].attachment.scale = s as u32;
 
             Ok(ProcMsg::Done)
         }
@@ -1554,7 +1762,7 @@ pub fn process_way_msg(
             if t < 0 {
                 return Err(tag!("Buffer transform value should be nonnegative"));
             }
-            surf.damage_history[0].transform = (t as u32)
+            surf.damage_history[0].attachment.transform = (t as u32)
                 .try_into()
                 .map_err(|()| "Not a valid transform type")?;
 
@@ -1730,10 +1938,13 @@ pub fn process_way_msg(
             std::mem::swap(&mut x.acquire_pt, &mut acq_pt);
             std::mem::swap(&mut x.release_pt, &mut rel_pt);
 
+            let mut current_attachment = x.damage_history[0].attachment.clone();
+
             /* This shifts all entries of x.damage_history right by one */
             // mutable wl_surface reference dropped; now reading from wl_buffer and wl_surface objects
 
-            let buffer_uid = if let Some(buf_id) = opt_buf_id {
+            let mut found_buffer = false;
+            if let Some(buf_id) = opt_buf_id {
                 /* Note: this is vulnerable to ABA-type problems when the buffer is
                  * destroyed and a new one with the same id is recreated; however,
                  * this is client misbehavior and Waypipe can silently ignore it,
@@ -1746,14 +1957,44 @@ pub fn process_way_msg(
                     };
                     if let WpExtra::WlBuffer(ref buf_data) = buf.extra {
                         let mut sfd = buf_data.sfd.borrow_mut();
+                        let buffer_size: (i32, i32) = if let ShadowFdVariant::File(_) = sfd.data {
+                            let Some(shm_info) = buf_data.shm_info else {
+                                return Err(tag!(
+                                    "Expected shm info for wl_buffer with File-type ShadowFd"
+                                ));
+                            };
+                            (shm_info.width, shm_info.height)
+                        } else if let ShadowFdVariant::Dmabuf(ref y) = sfd.data {
+                            match y.buf {
+                                DmabufImpl::Vulkan(ref buf) => (
+                                    buf.width.try_into().unwrap(),
+                                    buf.height.try_into().unwrap(),
+                                ),
+                                DmabufImpl::Gbm(ref buf) => (
+                                    buf.width.try_into().unwrap(),
+                                    buf.height.try_into().unwrap(),
+                                ),
+                            }
+                        } else {
+                            return Err(tag!("Expected buffer shadowfd to be of file type"));
+                        };
+
+                        current_attachment.buffer_uid = buf_data.unique_id;
+                        current_attachment.buffer_size = buffer_size;
+                        found_buffer = true;
+
                         if let ShadowFdVariant::File(ref mut y) = &mut sfd.data {
                             match &y.damage {
                                 Damage::Everything => {}
                                 Damage::Nothing => {
-                                    y.damage = Damage::Intervals(get_damage_for_shm(buf_data, x));
+                                    y.damage = Damage::Intervals(get_damage_for_shm(
+                                        buf_data,
+                                        x,
+                                        &current_attachment,
+                                    ));
                                 }
                                 Damage::Intervals(old) => {
-                                    let dmg = get_damage_for_shm(buf_data, x);
+                                    let dmg = get_damage_for_shm(buf_data, x, &current_attachment);
                                     y.damage =
                                         Damage::Intervals(union_damage(&old[..], &dmg[..], 128));
                                 }
@@ -1762,11 +2003,14 @@ pub fn process_way_msg(
                             match &y.damage {
                                 Damage::Everything => {}
                                 Damage::Nothing => {
-                                    y.damage =
-                                        Damage::Intervals(get_damage_for_dmabuf(buf_data, y, x));
+                                    y.damage = Damage::Intervals(get_damage_for_dmabuf(
+                                        y,
+                                        x,
+                                        &current_attachment,
+                                    ));
                                 }
                                 Damage::Intervals(old) => {
-                                    let dmg = get_damage_for_dmabuf(buf_data, y, x);
+                                    let dmg = get_damage_for_dmabuf(y, x, &current_attachment);
                                     y.damage =
                                         Damage::Intervals(union_damage(&old[..], &dmg[..], 128));
                                 }
@@ -1789,21 +2033,13 @@ pub fn process_way_msg(
                                 y.releases.insert((trid, pt), timeline);
                             }
                         } else {
-                            return Err(tag!("Expected buffer shadowfd to be of file type"));
+                            unreachable!();
                         }
-
-                        Some(buf_data.unique_id)
-                    } else {
-                        None
                     }
                 } else {
                     debug!("Attached wl_buffer {} for wl_surface {} destroyed before commit: the result of this is not specified and compositors may do anything. Interpreting as null attachment.", buf_id, object_id);
-                    None
                 }
-            } else {
-                /* Attached null, wipe */
-                None
-            };
+            }
 
             /* acquire mutable reference again */
             let obj = &mut glob.objects.get_mut(&object_id).unwrap();
@@ -1812,16 +2048,12 @@ pub fn process_way_msg(
                 return Err(tag!("Surface object has invalid extra type"));
             };
 
-            if let Some(b) = buffer_uid {
-                /* The damage accumulated for this commit is associated with b, but was not yet updated */
-                x.damage_history[0].buffer_uid = b;
+            if found_buffer {
+                /* Have not yet updated properties for the current buffer attachment, so do so now */
+                x.damage_history[0].attachment = current_attachment.clone();
                 /* Rotate the damage log */
                 let mut fresh = DamageBatch {
-                    scale: x.damage_history[0].scale,
-                    transform: x.damage_history[0].transform,
-                    viewport_src: x.damage_history[0].viewport_src,
-                    viewport_dst: x.damage_history[0].viewport_dst,
-                    buffer_uid: b,
+                    attachment: current_attachment.clone(),
                     damage: Vec::new(),
                     damage_buffer: Vec::new(),
                 };
@@ -1833,18 +2065,12 @@ pub fn process_way_msg(
                 x.damage_history.swap(1, 2);
                 x.damage_history.swap(0, 1);
             } else {
-                /* Null attachment, wipe history */
-                let scale = x.damage_history[0].scale;
-                let transform = x.damage_history[0].transform;
-                let viewport_src = x.damage_history[0].viewport_src;
-                let viewport_dst = x.damage_history[0].viewport_dst;
+                /* Null attachment (or buffer of unknown properties and size), wipe history */
+                current_attachment.buffer_uid = 0;
+                current_attachment.buffer_size = (0, 0);
                 for i in 0..7 {
                     x.damage_history[i] = DamageBatch {
-                        scale,
-                        transform,
-                        viewport_src,
-                        viewport_dst,
-                        buffer_uid: 0,
+                        attachment: current_attachment.clone(),
                         damage: Vec::new(),
                         damage_buffer: Vec::new(),
                     };
@@ -1886,8 +2112,8 @@ pub fn process_way_msg(
                     let WpExtra::WlSurface(ref mut surface) = object.extra else {
                         return Err(tag!("Surface object has invalid extra type"));
                     };
-                    surface.damage_history[0].viewport_src = None;
-                    surface.damage_history[0].viewport_dst = None;
+                    surface.damage_history[0].attachment.viewport_src = None;
+                    surface.damage_history[0].attachment.viewport_dst = None;
                     surface.viewport_id = None;
                 }
             }
@@ -1915,7 +2141,7 @@ pub fn process_way_msg(
                         return Err(tag!("Surface object has invalid extra type"));
                     };
 
-                    surface.damage_history[0].viewport_dst = destination;
+                    surface.damage_history[0].attachment.viewport_dst = destination;
                 }
             }
             Ok(ProcMsg::Done)
@@ -1943,7 +2169,7 @@ pub fn process_way_msg(
                         return Err(tag!("Surface object has invalid extra type"));
                     };
 
-                    surface.damage_history[0].viewport_src = source;
+                    surface.damage_history[0].attachment.viewport_src = source;
                 }
             }
             Ok(ProcMsg::Done)
