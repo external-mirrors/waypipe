@@ -45,19 +45,26 @@ use util::*;
 use wayland::*;
 use wayland_gen::*;
 
+/** Test result codes for which error-type control flow is not needed. */
 #[derive(Debug)]
 enum StatusOk {
+    /** Corresponds to [TestCategory::Pass] */
     Pass,
+    /** Corresponds to [TestCategory::Skipped] */
     Skipped,
 }
+/** Test result codes which, like errors, typically are worth stopping a test over. */
 #[derive(Debug)]
 enum StatusBad {
+    /** Corresponds to [TestCategory::Unclear] */
     Unclear(String),
+    /** Corresponds to [TestCategory::Fail] */
     Fail(String),
 }
 /** Result of a test, organized so that StatusBad can be progated with ? */
 type TestResult = Result<StatusOk, StatusBad>;
 
+/** The result of a test. */
 #[derive(Debug)]
 enum TestCategory {
     /** Test passed */
@@ -75,18 +82,23 @@ const EXITCODE_SKIPPED: u8 = 77;
  * segfault, failure of an external library, or something else very unexpected) */
 const EXITCODE_UNCLEAR: u8 = 99;
 
+/** Specifications for a filter of test names. */
 struct Filter<'a> {
     substrings: &'a [&'a str],
     exact: bool,
 }
 
+/** Basic parameters needed to run a test. */
 struct TestInfo<'a> {
+    /** The name of the test. */
     test_name: &'a str,
+    /** File to execute (posix_spawnp) for the `waypipe client` connection handling instance. */
     waypipe_client: &'a OsStr,
+    /** File to execute (posix_spawnp) for the `waypipe server` connection handling instance. */
     waypipe_server: &'a OsStr,
 }
 
-/* Constant, saves some code when allocating sequence ids */
+/** A constant that saves some code when allocating sequentual object ids */
 const ID_SEQUENCE: [ObjId; 12] = [
     ObjId(1),
     ObjId(2),
@@ -102,7 +114,7 @@ const ID_SEQUENCE: [ObjId; 12] = [
     ObjId(12),
 ];
 
-/* Write messages to the Wayland connection, followed by a test message that should directly pass through;
+/** Write messages to the Wayland connection, followed by a test message that should directly pass through;
  * possibly stopping early if the connection is closed.
  *
  * Returns: the messages received on the other end, minus the test message; if there was an error details
@@ -345,7 +357,7 @@ fn test_interact(
     }
 }
 
-/* Write messages to the Wayland connection, followed by a test message that should directly pass through;
+/** Write messages to the Wayland connection, followed by a test message that should directly pass through;
  * possibly stopping early if the connection is closed. (Note: in that case, test_read_msgs should
  * capture an error message). */
 fn test_write_msgs(socket: &OwnedFd, data: &[u8], fds: &[&OwnedFd]) {
@@ -432,12 +444,14 @@ fn test_write_msgs(socket: &OwnedFd, data: &[u8], fds: &[&OwnedFd]) {
     }
 }
 
+/** Buffer holding data read from a socket and whether the connection has closed. */
 struct ReadRecv {
     data: Vec<u8>,
     fds: Vec<OwnedFd>,
     eof: bool,
 }
 
+/** Read data/fds from a socket, and return true on EOF. */
 fn test_read_from_socket(socket: BorrowedFd, recv: &mut ReadRecv) -> bool {
     let mut tmp = vec![0u8; 16384];
     let mut iovs = [IoSliceMut::new(&mut tmp)];
@@ -481,7 +495,7 @@ fn test_read_from_socket(socket: BorrowedFd, recv: &mut ReadRecv) -> bool {
     }
 }
 
-/* Read messages from the Wayland connection, until an error is returned or the test message is found.
+/** Read messages from the Wayland connection, until an error is returned or the test message is found.
  * If opposite_fd is not None, then it is the program-side socket and will receive wl_display_error. */
 fn test_read_msgs(
     socket: &OwnedFd,
@@ -585,6 +599,8 @@ fn test_read_msgs(
     (msgs, fds, err)
 }
 
+/** Helper function to return a `Vec<u8>`, given a function that builds its
+ * contents by writing to a `&mut &mut [u8]`. Used to build Wayland message sequences. */
 fn build_msgs<F>(f: F) -> Vec<u8>
 where
     F: FnOnce(&mut &mut [u8]),
@@ -597,6 +613,7 @@ where
     Vec::from(&buf[..nwritten])
 }
 
+/** Return true iff the interaction result in `x` matches concatenated messages `concat`. */
 fn is_plain_msgs(
     x: Result<(Vec<Vec<u8>>, Vec<OwnedFd>), (ObjId, u32, String)>,
     concat: Vec<u8>,
@@ -608,12 +625,14 @@ fn is_plain_msgs(
     }
 }
 
+/** Things needed for the test program to interact with a linked pair of Waypipe instances. */
 struct ProtocolTestContext {
     sock_prog: OwnedFd,
     sock_comp: OwnedFd,
 }
 
 impl ProtocolTestContext {
+    /** Write data and fds to the program-side Waypipe instance, and return the resulting messages or error message. */
     fn prog_write(
         &mut self,
         data: &[u8],
@@ -626,6 +645,7 @@ impl ProtocolTestContext {
             Ok((msg, ofds))
         }
     }
+    /** Write data and fds to the compositor-side Waypipe instance, and return the resulting messages or error message. */
     fn comp_write(
         &mut self,
         data: &[u8],
@@ -638,15 +658,17 @@ impl ProtocolTestContext {
             Ok((msg, ofds))
         }
     }
-
+    /** Write messages to a program-side Waypipe instance, and panic if they are not passed through unchanged. */
     fn prog_write_passthrough(&mut self, data: Vec<u8>) {
         assert!(is_plain_msgs(self.prog_write(&data, &[]), data));
     }
+    /** Write messages to a compositor-side Waypipe instance, and panic if they are not passed through unchanged. */
     fn comp_write_passthrough(&mut self, data: Vec<u8>) {
         assert!(is_plain_msgs(self.comp_write(&data, &[]), data));
     }
 }
 
+/** Options to be passed to an instance of Waypipe */
 struct WaypipeOptions<'a> {
     wire_version: Option<u32>,
     drm_node: Option<u64>,
@@ -655,6 +677,7 @@ struct WaypipeOptions<'a> {
     compression: Compression,
 }
 
+/** Construct the command to run a Waypipe connection handling process, with specified options. */
 fn build_arguments(waypipe_bin: &OsStr, opts: &WaypipeOptions, is_client: bool) -> Vec<String> {
     let mut v = Vec::new();
 
@@ -694,6 +717,7 @@ fn build_arguments(waypipe_bin: &OsStr, opts: &WaypipeOptions, is_client: bool) 
     v
 }
 
+/** Run a protocol test with the specified options. */
 fn run_protocol_test_with_opts(
     info: &TestInfo,
     opts_client: &WaypipeOptions,
@@ -779,6 +803,7 @@ fn run_protocol_test_with_opts(
     Ok(())
 }
 
+/** Run a protocol test with both sides of the connection using the DRM node for `device`. */
 #[cfg(feature = "dmabuf")]
 fn run_protocol_test_with_drm_node(
     info: &TestInfo,
@@ -795,6 +820,7 @@ fn run_protocol_test_with_drm_node(
     run_protocol_test_with_opts(info, &options, &options, test_fn)
 }
 
+/** Run a protocol test with default options. */
 fn run_protocol_test(
     info: &TestInfo,
     test_fn: &dyn Fn(ProtocolTestContext),
@@ -809,6 +835,7 @@ fn run_protocol_test(
     run_protocol_test_with_opts(info, &options, &options, test_fn)
 }
 
+/** Try to setup a Vulkan instance and device for the given `device_id`. */
 #[cfg(feature = "dmabuf")]
 fn setup_vulkan(device_id: u64) -> Result<Arc<VulkanDevice>, String> {
     let instance = setup_vulkan_instance(true, &VideoSetting::default())?;
@@ -818,6 +845,7 @@ fn setup_vulkan(device_id: u64) -> Result<Arc<VulkanDevice>, String> {
     ))
 }
 
+/** Return a memfd whose contents are precisely `data`. */
 fn make_file_with_contents(data: &[u8]) -> Result<OwnedFd, String> {
     let local_fd = memfd::memfd_create(
         c"/waypipe",
@@ -832,12 +860,14 @@ fn make_file_with_contents(data: &[u8]) -> Result<OwnedFd, String> {
 
     Ok(local_fd)
 }
+/** Replace the contents of a memfd, whose length is already `data.len()`, with `data`. */
 fn update_file_contents(fd: &OwnedFd, data: &[u8]) -> Result<(), String> {
     let mapping = ExternalMapping::new(fd, data.len(), false)?;
     copy_onto_mapping(data, &mapping, 0);
     drop(mapping);
     Ok(())
 }
+/** Replace the conents of a memfd with `data`, changing the file size as needed. */
 fn resize_file_with_contents(fd: &OwnedFd, data: &[u8]) -> Result<(), String> {
     unistd::ftruncate(fd, data.len().try_into().unwrap())
         .map_err(|x| tag!("Failed to resize memfd: {:?}", x))?;
@@ -845,6 +875,8 @@ fn resize_file_with_contents(fd: &OwnedFd, data: &[u8]) -> Result<(), String> {
     copy_onto_mapping(data, &mapping, 0);
     Ok(())
 }
+/** Get the contents of the file, assuming its length is `len`. May error or SIGBUS if the actual
+ * length is shorter */
 fn get_file_contents(fd: &OwnedFd, len: usize) -> Result<Vec<u8>, String> {
     let mapping = ExternalMapping::new(fd, len, true)?;
     let mut data = vec![0xff_u8; len];
@@ -853,6 +885,7 @@ fn get_file_contents(fd: &OwnedFd, len: usize) -> Result<Vec<u8>, String> {
     Ok(data)
 }
 
+/** Return true iff the name matches the given filter.  */
 fn test_is_included(name: &str, filter: &Filter) -> bool {
     if filter.substrings.is_empty() {
         return true;
@@ -871,19 +904,22 @@ fn test_is_included(name: &str, filter: &Filter) -> bool {
     false
 }
 
+/** Register a single test, if the name passes the filter. */
 fn register_single<'a>(
     tests: &mut Vec<(String, Box<dyn Fn(TestInfo) -> TestResult + 'a>)>,
     filter: &Filter,
     name: &str,
     func: fn(TestInfo) -> TestResult,
 ) {
-    if !test_is_included(name, filter) {
+    let ext_name = format!("proto::{}", name);
+    if !test_is_included(&ext_name, filter) {
         return;
     }
 
-    tests.push((format!("proto::{}", name), Box::new(func)));
+    tests.push((ext_name, Box::new(func)));
 }
 
+/** Register a test instance for each device in the list, if the resulting test name passes the filter. */
 fn register_per_device<'a>(
     tests: &mut Vec<(String, Box<dyn Fn(TestInfo) -> TestResult + 'a>)>,
     filter: &Filter,
@@ -911,12 +947,15 @@ fn register_per_device<'a>(
     }
 }
 
+/** Information about a render device. */
 struct RenderDevice<'a> {
     #[allow(unused)]
     name: &'a str,
     id: u64,
 }
 
+/** List all render devices on this system. This just checks file properties
+ * and does not test that they are actually usable. */
 pub fn list_vulkan_device_ids() -> Vec<(String, u64)> {
     use nix::sys::stat;
     use std::os::unix::ffi::OsStrExt;
@@ -950,8 +989,8 @@ pub fn list_vulkan_device_ids() -> Vec<(String, u64)> {
 /** No-op signal handler (used to ensure SIGCHLD interrupts poll) */
 extern "C" fn noop_signal_handler(_: i32) {}
 
+/** Test to verify that a simple message exchange behaves as expected */
 fn proto_basic(info: TestInfo) -> TestResult {
-    /* Test to verify that a simple message exchange behaves as expected */
     run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let write_prog = build_msgs(|dst| {
             write_req_wl_display_get_registry(dst, ObjId(1), ObjId(2));
@@ -970,8 +1009,8 @@ fn proto_basic(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test that using the base protocol version still works, for basic operations */
 fn proto_base_wire(info: TestInfo) -> TestResult {
-    /* Test that using the base protocol version still works, for basic operations */
     let opts = WaypipeOptions {
         wire_version: Some(MIN_PROTOCOL_VERSION),
         drm_node: None,
@@ -1307,6 +1346,8 @@ fn check_pipe_transfer(
     }
 }
 
+/** Test to check that basic pipe replication works for the various copy-paste type protocols, and
+ * that the pipe replicated can be used to transfer various amounts of data. */
 fn proto_pipe_write(info: TestInfo) -> TestResult {
     let (display, registry, manager, seat, dev, source) =
         (ObjId(1), ObjId(2), ObjId(3), ObjId(4), ObjId(5), ObjId(6));
@@ -1774,6 +1815,8 @@ fn proto_commit_timing(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test that an error is reported when a Wayland client attempts to make two objects
+ * with the same ID at the same time. */
 fn proto_object_collision(info: TestInfo) -> TestResult {
     run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let (display, registry) = (ObjId(1), ObjId(2));
@@ -1790,6 +1833,7 @@ fn proto_object_collision(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test to check that a wl_shm buffer can be created and its contents replicated. */
 fn proto_shm_buffer(info: TestInfo) -> TestResult {
     run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let (display, registry, shm, comp, surface, pool, buffer) = (
@@ -1887,6 +1931,7 @@ fn proto_shm_buffer(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test that wl_shm_pool::resize is handled correctly. */
 fn proto_shm_extend(info: TestInfo) -> TestResult {
     run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let (display, registry, shm, comp, surface, pool, buf_a, buf_b, buf_c) = (
@@ -1975,6 +2020,9 @@ fn proto_shm_extend(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Helper function: send dmabuf_feedback events for the given `feedback` object, and
+ * return the map of format-modifier combinations supported by the program-side Waypipe
+ * instance. */
 #[cfg(feature = "dmabuf")]
 fn send_linux_dmabuf_feedback(
     ctx: &mut ProtocolTestContext,
@@ -2093,6 +2141,10 @@ fn send_linux_dmabuf_feedback(
     assert!(rfds.is_empty());
     mod_table
 }
+
+/** Helper function: setup wl_compositor and zwp_linux_dmabuf_v1 globals and a surface,
+ * and return the map of format-modifier combinations supported by the program-side Waypipe
+ * instance. */
 #[cfg(feature = "dmabuf")]
 fn setup_linux_dmabuf(
     ctx: &mut ProtocolTestContext,
@@ -2123,6 +2175,7 @@ fn setup_linux_dmabuf(
     send_linux_dmabuf_feedback(ctx, vulk, feedback)
 }
 
+/** Test that `wl_buffer` objects backed by DMABUFs are properly replicated. */
 #[cfg(feature = "dmabuf")]
 fn proto_dmabuf(info: TestInfo, device: RenderDevice) -> TestResult {
     let Ok(vulk) = setup_vulkan(device.id) else {
@@ -2266,6 +2319,8 @@ fn proto_dmabuf(info: TestInfo, device: RenderDevice) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Helper function to return data for a test image split into four quadrants with
+ * different colors */
 #[cfg(feature = "video")]
 fn fill_blocks_xrgb(w: usize, h: usize) -> Vec<u8> {
     let bpp = 4;
@@ -2282,6 +2337,8 @@ fn fill_blocks_xrgb(w: usize, h: usize) -> Vec<u8> {
     img_data
 }
 
+/** Fill a buffer with a pattern that does not have any major obvious patterns and
+ * is unlikely to video-encode well */
 #[cfg(feature = "video")]
 fn fill_pseudorand_xrgb(w: usize, h: usize) -> Vec<u8> {
     let bpp = 4;
@@ -2297,6 +2354,7 @@ fn fill_pseudorand_xrgb(w: usize, h: usize) -> Vec<u8> {
     img_data
 }
 
+/** Helper function to create and share a DMABUF with a wl_buffer. */
 #[cfg(feature = "dmabuf")]
 fn create_dmabuf_and_copy(
     vulk: &Arc<VulkanDevice>,
@@ -2368,6 +2426,8 @@ fn create_dmabuf_and_copy(
     Ok((img, mirror))
 }
 
+/** Helper function to test that video encoding works and approximately replicates test patterns;
+ * the format and other video properties are specified in `opts`. */
 #[cfg(feature = "video")]
 fn test_dmavid_inner(vulk: &Arc<VulkanDevice>, info: &TestInfo, opts: &WaypipeOptions) -> bool {
     let accurate_replication = AtomicBool::new(true);
@@ -2501,6 +2561,7 @@ fn test_dmavid_inner(vulk: &Arc<VulkanDevice>, info: &TestInfo, opts: &WaypipeOp
     accurate_replication.load(std::sync::atomic::Ordering::SeqCst)
 }
 
+/** Test that video encoding works and approximately replicates test patterns. */
 #[cfg(feature = "video")]
 fn proto_dmavid(
     info: TestInfo,
@@ -2560,6 +2621,7 @@ fn proto_dmavid(
     }
 }
 
+/** Test that very long messages are either cleanly accepted or cleanly rejected. */
 fn proto_oversized(info: TestInfo) -> TestResult {
     run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let (display, registry) = (ObjId(1), ObjId(2));
@@ -2655,6 +2717,7 @@ fn get_diff_damage(
     }
 }
 
+/** Test to check that damaged regions of shm-type `wl_buffer`s are replicated. */
 fn proto_shm_damage(info: TestInfo) -> TestResult {
     run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
         let (display, registry, shm, comp, surface, pool, buffer) = (
@@ -2754,6 +2817,7 @@ fn proto_shm_damage(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test to check that damaged regions of DMABUF-type `wl_buffer`s are replicated. */
 #[cfg(feature = "dmabuf")]
 fn proto_dmabuf_damage(info: TestInfo, device: RenderDevice) -> TestResult {
     let Ok(vulk) = setup_vulkan(device.id) else {
@@ -3481,6 +3545,7 @@ fn proto_rotating_damage(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test that timeline semaphores for the linux-drm-syncobj-v1 protocol are correctly handled. */
 #[cfg(feature = "dmabuf")]
 fn proto_explicit_sync(info: TestInfo, device: RenderDevice) -> TestResult {
     let Ok(vulk) = setup_vulkan(device.id) else {
@@ -3655,9 +3720,8 @@ fn proto_explicit_sync(info: TestInfo, device: RenderDevice) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test that Waypipe can successfully process a large number of FDS */
 fn proto_many_fds(info: TestInfo) -> TestResult {
-    /* Check that Waypipe can successfully process a large number of FDS */
-
     let mut files: Vec<(Vec<u8>, OwnedFd)> = Vec::new();
     /* 100 is the > the 28 max fds sent in a batch by libwayland, but also
      * not that large that having four copies of each would break a standard
@@ -3710,6 +3774,7 @@ fn proto_many_fds(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test that Waypipe either cleanly processes or errors when applying a title prefix. */
 fn proto_title_prefix(info: TestInfo) -> TestResult {
     // /* test lengths are: empty, short, too long for small buffers, cannot fit in a Wayland message */
     for (prefix_len, fail) in [(0, false), (100, false), (10000, true), (100000, true)] {
@@ -4351,6 +4416,8 @@ fn proto_screencopy_dmabuf_ext(info: TestInfo, device: RenderDevice) -> TestResu
     proto_screencopy_dmabuf(info, device, ScreencopyType::ExtImageCopyCapture)
 }
 
+/** Register an array of video tests for various video format and hardware/software
+ * encoding/decoding parameters */
 #[cfg(feature = "video")]
 fn register_video_tests<'a>(
     tests: &mut Vec<(String, Box<dyn Fn(TestInfo) -> TestResult + 'a>)>,
@@ -4399,6 +4466,7 @@ fn register_video_tests<'a>(
     }
 }
 
+/** Main entry point. */
 fn main() -> ExitCode {
     let command = ClapCommand::new(env!("CARGO_BIN_NAME"))
         .help_expected(true)
