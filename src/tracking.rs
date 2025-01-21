@@ -34,7 +34,6 @@ pub struct WpObject {
     /** Extra data associated with the object; in practice this enum either matches
      * WaylandInterface or is WpExtra::None */
     extra: WpExtra,
-    is_zombie: bool,
 }
 
 /** Damage rectangle, of the form directly provided by wl_surface.damage and wl_surface.damage_buffer */
@@ -973,7 +972,6 @@ fn register_generic_new_ids(
                     id,
                     WpObject {
                         obj_type: *new_intf,
-                        is_zombie: false,
                         extra: WpExtra::None,
                     },
                 )?;
@@ -996,7 +994,6 @@ fn register_generic_new_ids(
                         id,
                         WpObject {
                             obj_type: new_intf,
-                            is_zombie: false,
                             extra: WpExtra::None,
                         },
                     );
@@ -1507,7 +1504,6 @@ pub fn process_way_msg(
                 registry_id,
                 WpObject {
                     obj_type: WaylandInterface::WlRegistry,
-                    is_zombie: false,
                     extra: WpExtra::WlRegistry(Box::new(ObjWlRegistry {
                         syncobj_manager_replay: Vec::new(),
                     })),
@@ -1562,7 +1558,6 @@ pub fn process_way_msg(
                 pool_id,
                 WpObject {
                     obj_type: WaylandInterface::WlShmPool,
-                    is_zombie: false,
                     extra: WpExtra::WlShmPool(Box::new(ObjWlShmPool { buffer })),
                 },
             )?;
@@ -1589,7 +1584,6 @@ pub fn process_way_msg(
                 buffer_id,
                 WpObject {
                     obj_type: WaylandInterface::WlBuffer,
-                    is_zombie: false,
                     extra: WpExtra::WlBuffer(Box::new(ObjWlBuffer {
                         sfd,
                         shm_info: Some(ObjWlBufferShm {
@@ -1667,7 +1661,6 @@ pub fn process_way_msg(
                 surf_id,
                 WpObject {
                     obj_type: WaylandInterface::WlSurface,
-                    is_zombie: false,
                     extra: WpExtra::WlSurface(Box::new(ObjWlSurface {
                         attached_buffer_id: None,
                         damage_history: [
@@ -2089,7 +2082,6 @@ pub fn process_way_msg(
                 new_id,
                 WpObject {
                     obj_type: WaylandInterface::WpViewport,
-                    is_zombie: false,
                     extra: WpExtra::WpViewport(Box::new(ObjWpViewport {
                         wl_surface: Some(surface),
                     })),
@@ -2191,7 +2183,6 @@ pub fn process_way_msg(
                 new_id,
                 WpObject {
                     obj_type: WaylandInterface::WpLinuxDrmSyncobjSurfaceV1,
-                    is_zombie: false,
                     extra: WpExtra::WpDrmSyncobjSurface(Box::new(ObjWpDrmSyncobjSurface {
                         // TODO: check if ABA problem applies
                         surface: surf_id,
@@ -2239,7 +2230,6 @@ pub fn process_way_msg(
                 new_id,
                 WpObject {
                     obj_type: WaylandInterface::WpLinuxDrmSyncobjTimelineV1,
-                    is_zombie: false,
                     extra: WpExtra::WpDrmSyncobjTimeline(Box::new(ObjWpDrmSyncobjTimeline {
                         // TODO: check if ABA problem applies
                         timeline: sfd,
@@ -2375,7 +2365,6 @@ pub fn process_way_msg(
                 params_id,
                 WpObject {
                     obj_type: WaylandInterface::ZwpLinuxBufferParamsV1,
-                    is_zombie: false,
                     extra: WpExtra::ZwpDmabufParams(Box::new(ObjZwpLinuxDmabufParams {
                         planes: Vec::new(),
                         dmabuf: None,
@@ -2538,7 +2527,6 @@ pub fn process_way_msg(
                 buffer_id,
                 WpObject {
                     obj_type: WaylandInterface::WlBuffer,
-                    is_zombie: false,
                     extra: WpExtra::WlBuffer(Box::new(ObjWlBuffer {
                         sfd,
                         shm_info: None,
@@ -2697,7 +2685,6 @@ pub fn process_way_msg(
                 obj_id,
                 WpObject {
                     obj_type: WaylandInterface::WlBuffer,
-                    is_zombie: false,
                     extra: WpExtra::WlBuffer(Box::new(ObjWlBuffer {
                         sfd,
                         shm_info: None,
@@ -2727,7 +2714,6 @@ pub fn process_way_msg(
                 feedback_id,
                 WpObject {
                     obj_type: WaylandInterface::ZwpLinuxDmabufFeedbackV1,
-                    is_zombie: false,
                     extra: WpExtra::ZwpDmabufFeedback(Box::new(ObjZwpLinuxDmabufFeedback {
                         table_fd: None,
                         table_sfd: None,
@@ -3053,7 +3039,6 @@ pub fn process_way_msg(
                 gamma,
                 WpObject {
                     obj_type: WaylandInterface::ZwlrGammaControlV1,
-                    is_zombie: false,
                     extra: WpExtra::ZwlrGammaControl(Box::new(ObjZwlrGammaControl {
                         gamma_size: None,
                     })),
@@ -3171,7 +3156,6 @@ pub fn process_way_msg(
                 frame,
                 WpObject {
                     obj_type: WaylandInterface::ZwlrScreencopyFrameV1,
-                    is_zombie: false,
                     extra: WpExtra::ZwlrScreencopyFrame(Box::new(ObjZwlrScreencopyFrame {
                         buffer: None,
                     })),
@@ -3192,7 +3176,6 @@ pub fn process_way_msg(
                 frame,
                 WpObject {
                     obj_type: WaylandInterface::ZwlrScreencopyFrameV1,
-                    is_zombie: false,
                     extra: WpExtra::ZwlrScreencopyFrame(Box::new(ObjZwlrScreencopyFrame {
                         buffer: None,
                     })),
@@ -3213,7 +3196,6 @@ pub fn process_way_msg(
                 frame,
                 WpObject {
                     obj_type: WaylandInterface::ExtImageCopyCaptureSessionV1,
-                    is_zombie: false,
                     extra: WpExtra::ExtImageCopyCaptureSession(Box::new(
                         ObjExtImageCopyCaptureSession {
                             dmabuf_device: None,
@@ -3237,7 +3219,6 @@ pub fn process_way_msg(
                 frame,
                 WpObject {
                     obj_type: WaylandInterface::ExtImageCopyCaptureSessionV1,
-                    is_zombie: false,
                     extra: WpExtra::ExtImageCopyCaptureSession(Box::new(
                         ObjExtImageCopyCaptureSession {
                             dmabuf_device: None,
@@ -3423,7 +3404,6 @@ pub fn process_way_msg(
                 frame,
                 WpObject {
                     obj_type: WaylandInterface::ExtImageCopyCaptureFrameV1,
-                    is_zombie: false,
                     extra: WpExtra::ExtImageCopyCaptureFrame(Box::new(
                         ObjExtImageCopyCaptureFrame { buffer: None },
                     )),
@@ -3912,7 +3892,6 @@ pub fn process_way_msg(
                     oid,
                     WpObject {
                         obj_type: WaylandInterface::ZwpLinuxDmabufV1,
-                        is_zombie: false,
                         extra: WpExtra::ZwpDmabuf(Box::new(ObjZwpLinuxDmabuf {
                             formats_seen: BTreeSet::new(),
                         })),
@@ -3939,7 +3918,6 @@ pub fn setup_object_map() -> BTreeMap<ObjId, WpObject> {
         ObjId(1),
         WpObject {
             obj_type: WaylandInterface::WlDisplay,
-            is_zombie: false,
             extra: WpExtra::None,
         },
     );
