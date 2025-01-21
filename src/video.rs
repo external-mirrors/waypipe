@@ -1329,7 +1329,9 @@ pub fn start_dmavid_decode_hw(
         avvulk.lock_frame.as_ref().unwrap()(hwfc_ref, vkframe);
 
         /* Assert single image output */
-        assert!(vkframe.img[1..].iter().all(|x| x.is_null()));
+        assert!(vkframe.img[1..]
+            .iter()
+            .all(|x| vk::Image::from_raw(*x as _).is_null()));
 
         assert!(avvulk.format[0] == (vk::Format::G8_B8R8_2PLANE_420_UNORM.as_raw() as u32));
 
@@ -2297,7 +2299,9 @@ pub fn start_dmavid_encode_hw(
         vk_fc.lock_frame.as_ref().unwrap()(hwfc_ref, vkframe);
 
         assert!(vk_fc.format[0] == vk::Format::G8_B8R8_2PLANE_420_UNORM.as_raw() as _);
-        assert!(vkframe.img[1..].iter().all(|x| x.is_null()));
+        assert!(vkframe.img[1..]
+            .iter()
+            .all(|x| vk::Image::from_raw(*x as _).is_null()));
 
         /* Blocking wait for semaphores; remove this later */
         let wait_sems = &[vk::Semaphore::from_raw(vkframe.sem[0] as _)];

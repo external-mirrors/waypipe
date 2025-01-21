@@ -29,3 +29,6 @@ cross build --target i686-unknown-freebsd --no-default-features --features test_
 
 # Check that the build still works with older Rust versions
 cargo msrv verify
+
+# on 64 bit systems with the necessary libraries, cross build to 32 bit
+# PKG_CONFIG_ALLOW_CROSS=1 cargo build --target=i686-unknown-linux-gnu
