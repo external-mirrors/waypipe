@@ -24,7 +24,7 @@ void main() {
     for (int j = 0; j < 2; j++) {
       ivec2 pos = ivec2(2 * gl_GlobalInvocationID.x + i,
                         2 * gl_GlobalInvocationID.y + j);
-      vec2 sample_pos = vec2(pos);
+      vec2 sample_pos = vec2(pos) + 0.5;
       vec4 rgbo = vec4(texture(input_rgb, sample_pos).rgb, 1.0);
       float y = (transpose(push.rgb_to_yrb) * rgbo).r;
       int store_pos = pos.y * push.stride_y + pos.x;
@@ -33,7 +33,7 @@ void main() {
     }
   }
   ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
-  vec2 sample_pos = vec2(2 * pos + 0.5);
+  vec2 sample_pos = vec2(2 * pos + 0.5) + 0.5;
   //   vec4 rgbo = vec4(texture(input_rgb, sample_pos).rgb, 1.0);
   vec4 rgbo = avg / 4;
   vec2 vu = (transpose(push.rgb_to_yrb) * rgbo).bg;

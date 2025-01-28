@@ -15,7 +15,7 @@ void main() {
   /* input_vu has exactly half the size of input_y */
 
   /* invocation x/y ranges over all pixels of output */
-  vec2 pos = vec2(min(ivec2(gl_GlobalInvocationID.xy), ydim));
+  vec2 pos = min(vec2(gl_GlobalInvocationID.xy) + 0.5, vec2(ydim));
 
   float y = texture(input_y, pos).r;
   vec2 br = texture(input_vu, pos / 2.0).gr;
