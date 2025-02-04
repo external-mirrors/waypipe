@@ -6180,6 +6180,149 @@ const DATA_XDG_POPUP: WaylandData = WaylandData {
     version: 6,
 };
 pub const XDG_POPUP: &[u8] = DATA_XDG_POPUP.name.as_bytes();
+pub fn write_req_xdg_toplevel_icon_manager_v1_create_icon(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    id: ObjId,
+) {
+    let l = length_req_xdg_toplevel_icon_manager_v1_create_icon();
+    write_header(dst, for_id, l, 1, 0);
+    write_obj(dst, id);
+}
+pub fn length_req_xdg_toplevel_icon_manager_v1_create_icon() -> usize {
+    12
+}
+pub fn parse_req_xdg_toplevel_icon_manager_v1_create_icon<'a>(
+    mut msg: &'a [u8],
+) -> Result<ObjId, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_XDG_TOPLEVEL_ICON_MANAGER_V1_CREATE_ICON: MethodId = MethodId::Request(1);
+pub fn write_evt_xdg_toplevel_icon_manager_v1_icon_size(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    size: i32,
+) {
+    let l = length_evt_xdg_toplevel_icon_manager_v1_icon_size();
+    write_header(dst, for_id, l, 0, 0);
+    write_i32(dst, size);
+}
+pub fn length_evt_xdg_toplevel_icon_manager_v1_icon_size() -> usize {
+    12
+}
+pub fn parse_evt_xdg_toplevel_icon_manager_v1_icon_size<'a>(
+    mut msg: &'a [u8],
+) -> Result<i32, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_i32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_XDG_TOPLEVEL_ICON_MANAGER_V1_ICON_SIZE: MethodId = MethodId::Event(0);
+pub fn write_evt_xdg_toplevel_icon_manager_v1_done(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_evt_xdg_toplevel_icon_manager_v1_done();
+    write_header(dst, for_id, l, 1, 0);
+}
+pub fn length_evt_xdg_toplevel_icon_manager_v1_done() -> usize {
+    8
+}
+pub fn parse_evt_xdg_toplevel_icon_manager_v1_done<'a>(msg: &'a [u8]) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_XDG_TOPLEVEL_ICON_MANAGER_V1_DONE: MethodId = MethodId::Event(1);
+const DATA_XDG_TOPLEVEL_ICON_MANAGER_V1: WaylandData = WaylandData {
+    name: "xdg_toplevel_icon_manager_v1",
+    evts: &[
+        WaylandMethod {
+            name: "icon_size",
+            sig: &[Int],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "done",
+            sig: &[],
+            destructor: false,
+        },
+    ],
+    reqs: &[
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "create_icon",
+            sig: &[NewId(XdgToplevelIconV1)],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "set_icon",
+            sig: &[Object(XdgToplevel), Object(XdgToplevelIconV1)],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const XDG_TOPLEVEL_ICON_MANAGER_V1: &[u8] = DATA_XDG_TOPLEVEL_ICON_MANAGER_V1.name.as_bytes();
+pub fn write_req_xdg_toplevel_icon_v1_add_buffer(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    buffer: ObjId,
+    scale: i32,
+) {
+    let l = length_req_xdg_toplevel_icon_v1_add_buffer();
+    write_header(dst, for_id, l, 2, 0);
+    write_obj(dst, buffer);
+    write_i32(dst, scale);
+}
+pub fn length_req_xdg_toplevel_icon_v1_add_buffer() -> usize {
+    16
+}
+pub fn parse_req_xdg_toplevel_icon_v1_add_buffer<'a>(
+    mut msg: &'a [u8],
+) -> Result<(ObjId, i32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    let arg2 = parse_i32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2))
+}
+pub const OPCODE_XDG_TOPLEVEL_ICON_V1_ADD_BUFFER: MethodId = MethodId::Request(2);
+const DATA_XDG_TOPLEVEL_ICON_V1: WaylandData = WaylandData {
+    name: "xdg_toplevel_icon_v1",
+    evts: &[],
+    reqs: &[
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "set_name",
+            sig: &[String],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "add_buffer",
+            sig: &[Object(WlBuffer), Int],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const XDG_TOPLEVEL_ICON_V1: &[u8] = DATA_XDG_TOPLEVEL_ICON_V1.name.as_bytes();
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum WaylandInterface {
@@ -6238,30 +6381,32 @@ pub enum WaylandInterface {
     XdgPositioner = 52,
     XdgSurface = 53,
     XdgToplevel = 54,
-    XdgWmBase = 55,
-    ZwlrDataControlDeviceV1 = 56,
-    ZwlrDataControlManagerV1 = 57,
-    ZwlrDataControlOfferV1 = 58,
-    ZwlrDataControlSourceV1 = 59,
-    ZwlrExportDmabufFrameV1 = 60,
-    ZwlrExportDmabufManagerV1 = 61,
-    ZwlrGammaControlManagerV1 = 62,
-    ZwlrGammaControlV1 = 63,
-    ZwlrScreencopyFrameV1 = 64,
-    ZwlrScreencopyManagerV1 = 65,
-    ZwpInputMethodKeyboardGrabV2 = 66,
-    ZwpInputMethodManagerV2 = 67,
-    ZwpInputMethodV2 = 68,
-    ZwpInputPopupSurfaceV2 = 69,
-    ZwpLinuxBufferParamsV1 = 70,
-    ZwpLinuxDmabufFeedbackV1 = 71,
-    ZwpLinuxDmabufV1 = 72,
-    ZwpPrimarySelectionDeviceManagerV1 = 73,
-    ZwpPrimarySelectionDeviceV1 = 74,
-    ZwpPrimarySelectionOfferV1 = 75,
-    ZwpPrimarySelectionSourceV1 = 76,
-    ZwpVirtualKeyboardManagerV1 = 77,
-    ZwpVirtualKeyboardV1 = 78,
+    XdgToplevelIconManagerV1 = 55,
+    XdgToplevelIconV1 = 56,
+    XdgWmBase = 57,
+    ZwlrDataControlDeviceV1 = 58,
+    ZwlrDataControlManagerV1 = 59,
+    ZwlrDataControlOfferV1 = 60,
+    ZwlrDataControlSourceV1 = 61,
+    ZwlrExportDmabufFrameV1 = 62,
+    ZwlrExportDmabufManagerV1 = 63,
+    ZwlrGammaControlManagerV1 = 64,
+    ZwlrGammaControlV1 = 65,
+    ZwlrScreencopyFrameV1 = 66,
+    ZwlrScreencopyManagerV1 = 67,
+    ZwpInputMethodKeyboardGrabV2 = 68,
+    ZwpInputMethodManagerV2 = 69,
+    ZwpInputMethodV2 = 70,
+    ZwpInputPopupSurfaceV2 = 71,
+    ZwpLinuxBufferParamsV1 = 72,
+    ZwpLinuxDmabufFeedbackV1 = 73,
+    ZwpLinuxDmabufV1 = 74,
+    ZwpPrimarySelectionDeviceManagerV1 = 75,
+    ZwpPrimarySelectionDeviceV1 = 76,
+    ZwpPrimarySelectionOfferV1 = 77,
+    ZwpPrimarySelectionSourceV1 = 78,
+    ZwpVirtualKeyboardManagerV1 = 79,
+    ZwpVirtualKeyboardV1 = 80,
 }
 impl TryFrom<u32> for WaylandInterface {
     type Error = ();
@@ -6322,30 +6467,32 @@ impl TryFrom<u32> for WaylandInterface {
             52 => WaylandInterface::XdgPositioner,
             53 => WaylandInterface::XdgSurface,
             54 => WaylandInterface::XdgToplevel,
-            55 => WaylandInterface::XdgWmBase,
-            56 => WaylandInterface::ZwlrDataControlDeviceV1,
-            57 => WaylandInterface::ZwlrDataControlManagerV1,
-            58 => WaylandInterface::ZwlrDataControlOfferV1,
-            59 => WaylandInterface::ZwlrDataControlSourceV1,
-            60 => WaylandInterface::ZwlrExportDmabufFrameV1,
-            61 => WaylandInterface::ZwlrExportDmabufManagerV1,
-            62 => WaylandInterface::ZwlrGammaControlManagerV1,
-            63 => WaylandInterface::ZwlrGammaControlV1,
-            64 => WaylandInterface::ZwlrScreencopyFrameV1,
-            65 => WaylandInterface::ZwlrScreencopyManagerV1,
-            66 => WaylandInterface::ZwpInputMethodKeyboardGrabV2,
-            67 => WaylandInterface::ZwpInputMethodManagerV2,
-            68 => WaylandInterface::ZwpInputMethodV2,
-            69 => WaylandInterface::ZwpInputPopupSurfaceV2,
-            70 => WaylandInterface::ZwpLinuxBufferParamsV1,
-            71 => WaylandInterface::ZwpLinuxDmabufFeedbackV1,
-            72 => WaylandInterface::ZwpLinuxDmabufV1,
-            73 => WaylandInterface::ZwpPrimarySelectionDeviceManagerV1,
-            74 => WaylandInterface::ZwpPrimarySelectionDeviceV1,
-            75 => WaylandInterface::ZwpPrimarySelectionOfferV1,
-            76 => WaylandInterface::ZwpPrimarySelectionSourceV1,
-            77 => WaylandInterface::ZwpVirtualKeyboardManagerV1,
-            78 => WaylandInterface::ZwpVirtualKeyboardV1,
+            55 => WaylandInterface::XdgToplevelIconManagerV1,
+            56 => WaylandInterface::XdgToplevelIconV1,
+            57 => WaylandInterface::XdgWmBase,
+            58 => WaylandInterface::ZwlrDataControlDeviceV1,
+            59 => WaylandInterface::ZwlrDataControlManagerV1,
+            60 => WaylandInterface::ZwlrDataControlOfferV1,
+            61 => WaylandInterface::ZwlrDataControlSourceV1,
+            62 => WaylandInterface::ZwlrExportDmabufFrameV1,
+            63 => WaylandInterface::ZwlrExportDmabufManagerV1,
+            64 => WaylandInterface::ZwlrGammaControlManagerV1,
+            65 => WaylandInterface::ZwlrGammaControlV1,
+            66 => WaylandInterface::ZwlrScreencopyFrameV1,
+            67 => WaylandInterface::ZwlrScreencopyManagerV1,
+            68 => WaylandInterface::ZwpInputMethodKeyboardGrabV2,
+            69 => WaylandInterface::ZwpInputMethodManagerV2,
+            70 => WaylandInterface::ZwpInputMethodV2,
+            71 => WaylandInterface::ZwpInputPopupSurfaceV2,
+            72 => WaylandInterface::ZwpLinuxBufferParamsV1,
+            73 => WaylandInterface::ZwpLinuxDmabufFeedbackV1,
+            74 => WaylandInterface::ZwpLinuxDmabufV1,
+            75 => WaylandInterface::ZwpPrimarySelectionDeviceManagerV1,
+            76 => WaylandInterface::ZwpPrimarySelectionDeviceV1,
+            77 => WaylandInterface::ZwpPrimarySelectionOfferV1,
+            78 => WaylandInterface::ZwpPrimarySelectionSourceV1,
+            79 => WaylandInterface::ZwpVirtualKeyboardManagerV1,
+            80 => WaylandInterface::ZwpVirtualKeyboardV1,
             _ => return Err(()),
         })
     }
@@ -6406,6 +6553,8 @@ pub const INTERFACE_TABLE: &[WaylandData] = &[
     DATA_XDG_POSITIONER,
     DATA_XDG_SURFACE,
     DATA_XDG_TOPLEVEL,
+    DATA_XDG_TOPLEVEL_ICON_MANAGER_V1,
+    DATA_XDG_TOPLEVEL_ICON_V1,
     DATA_XDG_WM_BASE,
     DATA_ZWLR_DATA_CONTROL_DEVICE_V1,
     DATA_ZWLR_DATA_CONTROL_MANAGER_V1,

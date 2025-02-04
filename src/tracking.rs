@@ -3429,7 +3429,7 @@ pub fn process_way_msg(
                 )
             })?;
             let WpExtra::WlBuffer(ref d) = buf_obj.extra else {
-                return Err(tag!("Expected wp_presentation_feedback object"));
+                return Err(tag!("Expected wl_buffer object"));
             };
             let buf_info = (d.sfd.clone(), d.shm_info);
 
@@ -3662,6 +3662,58 @@ pub fn process_way_msg(
             concat.extend_from_slice(prefix);
             concat.extend_from_slice(title);
             write_req_xdg_toplevel_set_title(dst, object_id, &concat);
+            Ok(ProcMsg::Done)
+        }
+        (WaylandInterface::XdgToplevelIconV1, OPCODE_XDG_TOPLEVEL_ICON_V1_ADD_BUFFER) => {
+            check_space!(msg.len(), 0, remaining_space);
+
+            let (buffer_id, _scale) = parse_req_xdg_toplevel_icon_v1_add_buffer(msg)?;
+
+            let Some(buffer) = glob.objects.get(&buffer_id) else {
+                return Err(tag!(
+                    "Provided buffer is null, was never created, or is not tracked"
+                ));
+            };
+            let WpExtra::WlBuffer(ref extra) = buffer.extra else {
+                return Err(tag!("Expected wl_buffer object"));
+            };
+
+            /* This request makes the current buffer contents available to the compositor. */
+            if glob.on_display_side {
+                let b = extra.sfd.borrow();
+                // Only wl_shm buffers are allowed for xdg_toplevel_icon_v1::add_buffer
+                let apply_count = if let ShadowFdVariant::File(data) = &b.data {
+                    data.pending_apply_tasks
+                } else {
+                    return Err(tag!("Attached buffer shadowfd is not of file type"));
+                };
+                if apply_count > 0 {
+                    return Ok(ProcMsg::WaitFor(b.remote_id));
+                }
+            }
+
+            copy_msg(msg, dst);
+
+            if !glob.on_display_side {
+                /* Mark entire buffer as damaged */
+                let mut sfd = extra.sfd.borrow_mut();
+                if let ShadowFdVariant::File(ref mut y) = &mut sfd.data {
+                    let damage_interval =
+                        damage_for_entire_buffer(extra.shm_info.as_ref().unwrap());
+                    match &y.damage {
+                        Damage::Everything => {}
+                        Damage::Nothing => {
+                            y.damage = Damage::Intervals(vec![damage_interval]);
+                        }
+                        Damage::Intervals(old) => {
+                            let dmg = &[damage_interval];
+                            y.damage = Damage::Intervals(union_damage(&old[..], &dmg[..], 128));
+                        }
+                    }
+                } else {
+                    return Err(tag!("Expected buffer shadowfd to be of file type"));
+                }
+            }
             Ok(ProcMsg::Done)
         }
         (WaylandInterface::WpPresentationFeedback, OPCODE_WP_PRESENTATION_FEEDBACK_PRESENTED) => {

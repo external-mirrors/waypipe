@@ -4466,6 +4466,89 @@ fn register_video_tests<'a>(
     }
 }
 
+/** Test that Waypipe correctly updates buffers when xdg_toplevel_icon_v1::add_buffer is used */
+fn proto_toplevel_icon(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
+        let [display, registry, shm, ico_mgr, pool, icon, buffer1, buffer2, buffer3, ..] =
+            ID_SEQUENCE;
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, registry);
+        }));
+
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, registry, 1, WL_SHM, 2);
+            write_evt_wl_registry_global(dst, registry, 2, XDG_TOPLEVEL_ICON_MANAGER_V1, 1);
+        }));
+
+        let size = 1300;
+        let mut data = vec![0x01; size];
+        let offsets: [u32; 3] = [0, 99, 600];
+        let sizes: [u32; 3] = [1, 10, 13];
+        let format = WlShmFormat::Argb8888;
+        let buffers = [buffer1, buffer2, buffer3];
+        let msgs = build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, registry, 1, WL_SHM, 2, shm);
+            write_req_wl_registry_bind(dst, registry, 2, XDG_TOPLEVEL_ICON_MANAGER_V1, 1, ico_mgr);
+
+            write_req_wl_shm_create_pool(dst, shm, false, pool, size as i32);
+            write_req_xdg_toplevel_icon_manager_v1_create_icon(dst, ico_mgr, icon);
+
+            for ((size, offset), buffer) in sizes.iter().zip(offsets.iter()).zip(buffers.iter()) {
+                write_req_wl_shm_pool_create_buffer(
+                    dst,
+                    pool,
+                    *buffer,
+                    *offset as i32,
+                    *size as i32,
+                    *size as i32,
+                    *size as i32 * 4,
+                    format as u32,
+                );
+            }
+        });
+        let pool_fd = make_file_with_contents(&data).unwrap();
+
+        let (rmsg, mut rfd) = ctx.prog_write(&msgs[..], &[&pool_fd]).unwrap();
+        assert!(rmsg.concat() == msgs);
+        assert!(rfd.len() == 1);
+        let output_fd = rfd.remove(0);
+
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            for size in sizes {
+                write_evt_xdg_toplevel_icon_manager_v1_icon_size(dst, ico_mgr, size as i32);
+            }
+            write_evt_xdg_toplevel_icon_manager_v1_done(dst, ico_mgr);
+        }));
+
+        // Fill icon buffer contents
+        for (size, offset) in sizes.iter().zip(offsets.iter()) {
+            for (z, c) in data[(*offset as usize)..(*offset + size * size * 4) as usize]
+                .chunks_exact_mut(4)
+                .enumerate()
+            {
+                c.copy_from_slice(&(z as u32 + 10).to_le_bytes());
+            }
+        }
+        update_file_contents(&pool_fd, &data).unwrap();
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            for buffer in buffers {
+                write_req_xdg_toplevel_icon_v1_add_buffer(dst, icon, buffer, 1);
+            }
+        }));
+
+        // Verify buffers were replicated
+        let rcontents = get_file_contents(&output_fd, data.len()).unwrap();
+
+        for (size, offset) in sizes.iter().zip(offsets.iter()) {
+            let range = (*offset as usize)..(*offset + size * size * 4) as usize;
+            assert!(data[range.clone()] == rcontents[range.clone()]);
+        }
+    })?;
+    Ok(StatusOk::Pass)
+}
+
 /** Main entry point. */
 fn main() -> ExitCode {
     let command = ClapCommand::new(env!("CARGO_BIN_NAME"))
@@ -4560,6 +4643,7 @@ fn main() -> ExitCode {
     register_single(t, &f, "shm_damage", proto_shm_damage);
     register_single(t, &f, "shm_extend", proto_shm_extend);
     register_single(t, &f, "title_prefix", proto_title_prefix);
+    register_single(t, &f, "toplevel_icon", proto_toplevel_icon);
     register_single(t, &f, "viewporter_damage", proto_viewporter_damage);
 
     #[cfg(feature = "dmabuf")]
