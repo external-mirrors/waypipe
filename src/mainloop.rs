@@ -474,7 +474,6 @@ type TaskResult = Result<TaskOutput, String>;
 #[derive(PartialEq, Eq, Debug)]
 pub enum Damage {
     Everything,
-    Nothing,
     Intervals(Vec<(usize, usize)>),
 }
 
@@ -1058,7 +1057,7 @@ pub fn translate_shm_fd(
             damage: if default_damage {
                 Damage::Everything
             } else {
-                Damage::Nothing
+                Damage::Intervals(Vec::new())
             },
             pending_apply_tasks: 0,
             core,
@@ -1140,7 +1139,7 @@ pub fn translate_dmabuf_fd(
             drm_format,
             first_damage: true,
             export_planes: Vec::new(),
-            damage: Damage::Nothing,
+            damage: Damage::Intervals(Vec::new()),
             video_decode: None,
             video_encode,
             acquires: Vec::new(),
@@ -1316,7 +1315,7 @@ fn process_sfd_msg(
                     buffer_size: size as usize,
                     readonly: false,
                     remote_bufsize: size as usize,
-                    damage: Damage::Nothing,
+                    damage: Damage::Intervals(Vec::new()),
                     core,
                     pending_apply_tasks: 0,
                 }),
@@ -1563,7 +1562,7 @@ fn process_sfd_msg(
                     drm_format,
                     view_row_stride,
                     first_damage: true,
-                    damage: Damage::Nothing,
+                    damage: Damage::Intervals(Vec::new()),
                     export_planes: add_planes,
                     video_decode: None,
                     video_encode: None,
@@ -1651,7 +1650,7 @@ fn process_sfd_msg(
                     drm_format,
                     view_row_stride,
                     first_damage: true,
-                    damage: Damage::Nothing,
+                    damage: Damage::Intervals(Vec::new()),
                     export_planes: add_planes,
                     video_decode: Some(Arc::new(video_decode_state)),
                     video_encode: None,
@@ -2093,7 +2092,6 @@ fn collect_updates(
 
             let full_region = &[(0, align(data.buffer_size, 64))];
             let damaged_intervals: &[(usize, usize)] = match &data.damage {
-                Damage::Nothing => &[],
                 Damage::Everything => full_region,
                 Damage::Intervals(ref x) => &x[..],
             };
@@ -2136,7 +2134,7 @@ fn collect_updates(
             }
 
             /* Reset damage */
-            data.damage = Damage::Nothing;
+            data.damage = Damage::Intervals(Vec::new());
             Ok(true)
         }
         ShadowFdVariant::Dmabuf(data) => {
@@ -2169,7 +2167,6 @@ fn collect_updates(
                 /* Get damage as a list of intervals */
                 let full_region = &[(0, align(buf.nominal_size(data.view_row_stride), 64))];
                 let damaged_intervals: &[(usize, usize)] = match &data.damage {
-                    Damage::Nothing => &[],
                     Damage::Everything => full_region,
                     Damage::Intervals(ref x) => &x[..],
                 };
@@ -2177,7 +2174,7 @@ fn collect_updates(
                     /* Nothing to do here */
                     return Ok(true);
                 }
-                data.damage = Damage::Nothing;
+                data.damage = Damage::Intervals(Vec::new());
 
                 let task = VideoEncodeTask {
                     remote_id: sfd.remote_id,
@@ -2227,7 +2224,6 @@ fn collect_updates(
             /* Get damage as a list of intervals */
             let full_region = &[(0, align(nominal_size, 64))];
             let damaged_intervals: &[(usize, usize)] = match &data.damage {
-                Damage::Nothing => &[],
                 Damage::Everything => full_region,
                 Damage::Intervals(ref x) => &x[..],
             };
@@ -2352,7 +2348,7 @@ fn collect_updates(
                     tasksys.task_notify.notify_one();
                 }
             }
-            data.damage = Damage::Nothing;
+            data.damage = Damage::Intervals(Vec::new());
 
             Ok(true)
         }

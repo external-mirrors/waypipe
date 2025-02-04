@@ -1979,13 +1979,6 @@ pub fn process_way_msg(
                         if let ShadowFdVariant::File(ref mut y) = &mut sfd.data {
                             match &y.damage {
                                 Damage::Everything => {}
-                                Damage::Nothing => {
-                                    y.damage = Damage::Intervals(get_damage_for_shm(
-                                        buf_data,
-                                        x,
-                                        &current_attachment,
-                                    ));
-                                }
                                 Damage::Intervals(old) => {
                                     let dmg = get_damage_for_shm(buf_data, x, &current_attachment);
                                     y.damage =
@@ -1995,13 +1988,6 @@ pub fn process_way_msg(
                         } else if let ShadowFdVariant::Dmabuf(ref mut y) = &mut sfd.data {
                             match &y.damage {
                                 Damage::Everything => {}
-                                Damage::Nothing => {
-                                    y.damage = Damage::Intervals(get_damage_for_dmabuf(
-                                        y,
-                                        x,
-                                        &current_attachment,
-                                    ));
-                                }
                                 Damage::Intervals(old) => {
                                     let dmg = get_damage_for_dmabuf(y, x, &current_attachment);
                                     y.damage =
@@ -3525,9 +3511,6 @@ pub fn process_way_msg(
                     let damage_interval = damage_for_entire_buffer(shm_info.as_ref().unwrap());
                     match &y.damage {
                         Damage::Everything => {}
-                        Damage::Nothing => {
-                            y.damage = Damage::Intervals(vec![damage_interval]);
-                        }
                         Damage::Intervals(old) => {
                             let dmg = &[damage_interval];
                             y.damage = Damage::Intervals(union_damage(&old[..], &dmg[..], 128));
@@ -3611,9 +3594,6 @@ pub fn process_way_msg(
                     let damage_interval = damage_for_entire_buffer(shm_info.as_ref().unwrap());
                     match &y.damage {
                         Damage::Everything => {}
-                        Damage::Nothing => {
-                            y.damage = Damage::Intervals(vec![damage_interval]);
-                        }
                         Damage::Intervals(old) => {
                             let dmg = &[damage_interval];
                             y.damage = Damage::Intervals(union_damage(&old[..], &dmg[..], 128));
@@ -3702,9 +3682,6 @@ pub fn process_way_msg(
                         damage_for_entire_buffer(extra.shm_info.as_ref().unwrap());
                     match &y.damage {
                         Damage::Everything => {}
-                        Damage::Nothing => {
-                            y.damage = Damage::Intervals(vec![damage_interval]);
-                        }
                         Damage::Intervals(old) => {
                             let dmg = &[damage_interval];
                             y.damage = Damage::Intervals(union_damage(&old[..], &dmg[..], 128));
