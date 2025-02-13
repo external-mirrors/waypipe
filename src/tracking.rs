@@ -1256,6 +1256,40 @@ fn translate_timestamp(
     Ok((new_sec_hi, new_sec_lo, new_nsec))
 }
 
+/** Handle a readonly file whose contents need exact replication.
+ *
+ * When the message comes from Wayland, translate it; when the message comes from the
+ * channel, return Ok(Some(ProcMsg::WaitFor(...))) if the file is not yet ready to export.
+ */
+fn translate_or_wait_for_fixed_file(
+    transl: TranslationInfo,
+    glob: &mut Globals,
+    file_sz: u32,
+) -> Result<Option<ProcMsg>, String> {
+    match transl {
+        TranslationInfo::FromChannel((x, y)) => {
+            let sfd = &x.front().ok_or_else(|| tag!("Missing fd"))?;
+            let rid = sfd.borrow().remote_id;
+            if file_has_pending_apply_tasks(sfd)? {
+                return Ok(Some(ProcMsg::WaitFor(rid)));
+            }
+            y.push_back(x.pop_front().unwrap());
+        }
+        TranslationInfo::FromWayland((x, y)) => {
+            let v = translate_shm_fd(
+                x.pop_front().ok_or_else(|| tag!("Missing fd"))?,
+                file_sz.try_into().unwrap(),
+                &mut glob.map,
+                &mut glob.max_local_id,
+                true,
+                true,
+            )?;
+            y.push(v);
+        }
+    };
+    Ok(None)
+}
+
 /** A helper structure to print a Wayland method's arguments, on demand */
 struct MethodArguments<'a> {
     meth: &'a WaylandMethod,
@@ -2990,9 +3024,44 @@ pub fn process_way_msg(
             check_space!(msg.len(), 1, remaining_space);
 
             let (_, keymap_size) = parse_evt_wl_keyboard_keymap(msg)?;
-            let pos_size = keymap_size
-                .try_into()
-                .map_err(|_| tag!("Need nonnegative key map size, not {:?}", keymap_size))?;
+            if let Some(wait) = translate_or_wait_for_fixed_file(transl, glob, keymap_size)? {
+                return Ok(wait);
+            }
+            copy_msg_tag_fd(msg, dst, from_channel)?;
+
+            Ok(ProcMsg::Done)
+        }
+        (
+            WaylandInterface::WpImageDescriptionInfoV1,
+            OPCODE_WP_IMAGE_DESCRIPTION_INFO_V1_ICC_FILE,
+        ) => {
+            check_space!(msg.len(), 1, remaining_space);
+
+            let file_size = parse_evt_wp_image_description_info_v1_icc_file(msg)?;
+            if let Some(wait) = translate_or_wait_for_fixed_file(transl, glob, file_size)? {
+                return Ok(wait);
+            }
+            copy_msg_tag_fd(msg, dst, from_channel)?;
+            Ok(ProcMsg::Done)
+        }
+        (
+            WaylandInterface::WpImageDescriptionCreatorIccV1,
+            OPCODE_WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_SET_ICC_FILE,
+        ) => {
+            check_space!(msg.len(), 1, remaining_space);
+
+            // TODO: only damage the portion of the file between 'offset' and 'offset+length'.
+            // Or, to save remote resources: reduce the offset to zero and have Waypipe
+            // convert between coordinates.
+            // Also: mmap is not required to be supported, only seek+read, so this file may
+            // need different handling anyway.
+            let (offset, length) = parse_req_wp_image_description_creator_icc_v1_set_icc_file(msg)?;
+            if length == 0 {
+                return Err(tag!("File length for wp_image_description_creator_icc_v1::set_icc_file should not be zero"));
+            }
+            let Some(file_sz) = offset.checked_add(length) else {
+                return Err(tag!("File offset+length={}+{} overflow for wp_image_description_creator_icc_v1::set_icc_file", offset, length));
+            };
 
             match transl {
                 TranslationInfo::FromChannel((x, y)) => {
@@ -3006,7 +3075,7 @@ pub fn process_way_msg(
                 TranslationInfo::FromWayland((x, y)) => {
                     let v = translate_shm_fd(
                         x.pop_front().ok_or_else(|| tag!("Missing fd"))?,
-                        pos_size,
+                        file_sz.try_into().unwrap(),
                         &mut glob.map,
                         &mut glob.max_local_id,
                         true,
@@ -3017,7 +3086,6 @@ pub fn process_way_msg(
             };
 
             copy_msg_tag_fd(msg, dst, from_channel)?;
-
             Ok(ProcMsg::Done)
         }
         (
@@ -3068,28 +3136,11 @@ pub fn process_way_msg(
                 ));
             };
 
-            match transl {
-                TranslationInfo::FromChannel((x, y)) => {
-                    let sfd = &x.front().ok_or_else(|| tag!("Missing fd"))?;
-                    let rid = sfd.borrow().remote_id;
-                    if file_has_pending_apply_tasks(sfd)? {
-                        return Ok(ProcMsg::WaitFor(rid));
-                    }
-                    y.push_back(x.pop_front().unwrap());
-                }
-                TranslationInfo::FromWayland((x, y)) => {
-                    let v = translate_shm_fd(
-                        x.pop_front().ok_or_else(|| tag!("Missing fd"))?,
-                        gamma_size.checked_mul(6).unwrap() as usize,
-                        &mut glob.map,
-                        &mut glob.max_local_id,
-                        true,
-                        true,
-                    )?;
-                    y.push(v);
-                }
-            };
-
+            if let Some(wait) =
+                translate_or_wait_for_fixed_file(transl, glob, gamma_size.checked_mul(6).unwrap())?
+            {
+                return Ok(wait);
+            }
             copy_msg_tag_fd(msg, dst, from_channel)?;
 
             Ok(ProcMsg::Done)

@@ -94,6 +94,7 @@ mod proto {
     define_test! {flip_damage}
     define_test! {gamma_control}
     define_test! {keymap}
+    define_test! {icc}
     define_test! {many_fds}
     define_test! {object_collision}
     define_test! {oversized}

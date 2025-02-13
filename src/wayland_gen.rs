@@ -4,6 +4,466 @@ use crate::wayland::WaylandArgument::*;
 use crate::wayland::*;
 use WaylandInterface::*;
 
+pub fn write_req_wp_color_manager_v1_get_output(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    id: ObjId,
+    output: ObjId,
+) {
+    let l = length_req_wp_color_manager_v1_get_output();
+    write_header(dst, for_id, l, 1, 0);
+    write_obj(dst, id);
+    write_obj(dst, output);
+}
+pub fn length_req_wp_color_manager_v1_get_output() -> usize {
+    16
+}
+pub fn parse_req_wp_color_manager_v1_get_output<'a>(
+    mut msg: &'a [u8],
+) -> Result<(ObjId, ObjId), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    let arg2 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg1, arg2))
+}
+pub const OPCODE_WP_COLOR_MANAGER_V1_GET_OUTPUT: MethodId = MethodId::Request(1);
+pub fn write_req_wp_color_manager_v1_create_icc_creator(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    obj: ObjId,
+) {
+    let l = length_req_wp_color_manager_v1_create_icc_creator();
+    write_header(dst, for_id, l, 4, 0);
+    write_obj(dst, obj);
+}
+pub fn length_req_wp_color_manager_v1_create_icc_creator() -> usize {
+    12
+}
+pub fn parse_req_wp_color_manager_v1_create_icc_creator<'a>(
+    mut msg: &'a [u8],
+) -> Result<ObjId, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_WP_COLOR_MANAGER_V1_CREATE_ICC_CREATOR: MethodId = MethodId::Request(4);
+const DATA_WP_COLOR_MANAGER_V1: WaylandData = WaylandData {
+    name: "wp_color_manager_v1",
+    evts: &[
+        WaylandMethod {
+            name: "supported_intent",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "supported_feature",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "supported_tf_named",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "supported_primaries_named",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "done",
+            sig: &[],
+            destructor: false,
+        },
+    ],
+    reqs: &[
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "get_output",
+            sig: &[NewId(WpColorManagementOutputV1), Object(WlOutput)],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "get_surface",
+            sig: &[NewId(WpColorManagementSurfaceV1), Object(WlSurface)],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "get_surface_feedback",
+            sig: &[NewId(WpColorManagementSurfaceFeedbackV1), Object(WlSurface)],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "create_icc_creator",
+            sig: &[NewId(WpImageDescriptionCreatorIccV1)],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "create_parametric_creator",
+            sig: &[NewId(WpImageDescriptionCreatorParamsV1)],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "create_windows_scrgb",
+            sig: &[NewId(WpImageDescriptionV1)],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const WP_COLOR_MANAGER_V1: &[u8] = DATA_WP_COLOR_MANAGER_V1.name.as_bytes();
+pub fn write_req_wp_color_management_output_v1_get_image_description(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    image_description: ObjId,
+) {
+    let l = length_req_wp_color_management_output_v1_get_image_description();
+    write_header(dst, for_id, l, 1, 0);
+    write_obj(dst, image_description);
+}
+pub fn length_req_wp_color_management_output_v1_get_image_description() -> usize {
+    12
+}
+pub fn parse_req_wp_color_management_output_v1_get_image_description<'a>(
+    mut msg: &'a [u8],
+) -> Result<ObjId, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_WP_COLOR_MANAGEMENT_OUTPUT_V1_GET_IMAGE_DESCRIPTION: MethodId =
+    MethodId::Request(1);
+const DATA_WP_COLOR_MANAGEMENT_OUTPUT_V1: WaylandData = WaylandData {
+    name: "wp_color_management_output_v1",
+    evts: &[WaylandMethod {
+        name: "image_description_changed",
+        sig: &[],
+        destructor: false,
+    }],
+    reqs: &[
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "get_image_description",
+            sig: &[NewId(WpImageDescriptionV1)],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const WP_COLOR_MANAGEMENT_OUTPUT_V1: &[u8] = DATA_WP_COLOR_MANAGEMENT_OUTPUT_V1.name.as_bytes();
+const DATA_WP_COLOR_MANAGEMENT_SURFACE_V1: WaylandData = WaylandData {
+    name: "wp_color_management_surface_v1",
+    evts: &[],
+    reqs: &[
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "set_image_description",
+            sig: &[Object(WpImageDescriptionV1), Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "unset_image_description",
+            sig: &[],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const WP_COLOR_MANAGEMENT_SURFACE_V1: &[u8] =
+    DATA_WP_COLOR_MANAGEMENT_SURFACE_V1.name.as_bytes();
+const DATA_WP_COLOR_MANAGEMENT_SURFACE_FEEDBACK_V1: WaylandData = WaylandData {
+    name: "wp_color_management_surface_feedback_v1",
+    evts: &[WaylandMethod {
+        name: "preferred_changed",
+        sig: &[Uint],
+        destructor: false,
+    }],
+    reqs: &[
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "get_preferred",
+            sig: &[NewId(WpImageDescriptionV1)],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "get_preferred_parametric",
+            sig: &[NewId(WpImageDescriptionV1)],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const WP_COLOR_MANAGEMENT_SURFACE_FEEDBACK_V1: &[u8] =
+    DATA_WP_COLOR_MANAGEMENT_SURFACE_FEEDBACK_V1.name.as_bytes();
+pub fn write_req_wp_image_description_creator_icc_v1_set_icc_file(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    tag_fds: bool,
+    offset: u32,
+    length: u32,
+) {
+    let l = length_req_wp_image_description_creator_icc_v1_set_icc_file();
+    write_header(dst, for_id, l, 1, if tag_fds { 1 } else { 0 });
+    write_u32(dst, offset);
+    write_u32(dst, length);
+}
+pub fn length_req_wp_image_description_creator_icc_v1_set_icc_file() -> usize {
+    16
+}
+pub fn parse_req_wp_image_description_creator_icc_v1_set_icc_file<'a>(
+    mut msg: &'a [u8],
+) -> Result<(u32, u32), &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg2 = parse_u32(&mut msg)?;
+    let arg3 = parse_u32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok((arg2, arg3))
+}
+pub const OPCODE_WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_SET_ICC_FILE: MethodId = MethodId::Request(1);
+const DATA_WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1: WaylandData = WaylandData {
+    name: "wp_image_description_creator_icc_v1",
+    evts: &[],
+    reqs: &[
+        WaylandMethod {
+            name: "create",
+            sig: &[NewId(WpImageDescriptionV1)],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "set_icc_file",
+            sig: &[Fd, Uint, Uint],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1: &[u8] =
+    DATA_WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1.name.as_bytes();
+const DATA_WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1: WaylandData = WaylandData {
+    name: "wp_image_description_creator_params_v1",
+    evts: &[],
+    reqs: &[
+        WaylandMethod {
+            name: "create",
+            sig: &[NewId(WpImageDescriptionV1)],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "set_tf_named",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "set_tf_power",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "set_primaries_named",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "set_primaries",
+            sig: &[Int, Int, Int, Int, Int, Int, Int, Int],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "set_luminances",
+            sig: &[Uint, Uint, Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "set_mastering_display_primaries",
+            sig: &[Int, Int, Int, Int, Int, Int, Int, Int],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "set_mastering_luminance",
+            sig: &[Uint, Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "set_max_cll",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "set_max_fall",
+            sig: &[Uint],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1: &[u8] =
+    DATA_WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1.name.as_bytes();
+pub fn write_req_wp_image_description_v1_get_information(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    information: ObjId,
+) {
+    let l = length_req_wp_image_description_v1_get_information();
+    write_header(dst, for_id, l, 1, 0);
+    write_obj(dst, information);
+}
+pub fn length_req_wp_image_description_v1_get_information() -> usize {
+    12
+}
+pub fn parse_req_wp_image_description_v1_get_information<'a>(
+    mut msg: &'a [u8],
+) -> Result<ObjId, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_WP_IMAGE_DESCRIPTION_V1_GET_INFORMATION: MethodId = MethodId::Request(1);
+const DATA_WP_IMAGE_DESCRIPTION_V1: WaylandData = WaylandData {
+    name: "wp_image_description_v1",
+    evts: &[
+        WaylandMethod {
+            name: "failed",
+            sig: &[Uint, String],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "ready",
+            sig: &[Uint],
+            destructor: false,
+        },
+    ],
+    reqs: &[
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "get_information",
+            sig: &[NewId(WpImageDescriptionInfoV1)],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const WP_IMAGE_DESCRIPTION_V1: &[u8] = DATA_WP_IMAGE_DESCRIPTION_V1.name.as_bytes();
+pub fn write_evt_wp_image_description_info_v1_icc_file(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    tag_fds: bool,
+    icc_size: u32,
+) {
+    let l = length_evt_wp_image_description_info_v1_icc_file();
+    write_header(dst, for_id, l, 1, if tag_fds { 1 } else { 0 });
+    write_u32(dst, icc_size);
+}
+pub fn length_evt_wp_image_description_info_v1_icc_file() -> usize {
+    12
+}
+pub fn parse_evt_wp_image_description_info_v1_icc_file<'a>(
+    mut msg: &'a [u8],
+) -> Result<u32, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg2 = parse_u32(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg2)
+}
+pub const OPCODE_WP_IMAGE_DESCRIPTION_INFO_V1_ICC_FILE: MethodId = MethodId::Event(1);
+const DATA_WP_IMAGE_DESCRIPTION_INFO_V1: WaylandData = WaylandData {
+    name: "wp_image_description_info_v1",
+    evts: &[
+        WaylandMethod {
+            name: "done",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "icc_file",
+            sig: &[Fd, Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "primaries",
+            sig: &[Int, Int, Int, Int, Int, Int, Int, Int],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "primaries_named",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "tf_power",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "tf_named",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "luminances",
+            sig: &[Uint, Uint, Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "target_primaries",
+            sig: &[Int, Int, Int, Int, Int, Int, Int, Int],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "target_luminance",
+            sig: &[Uint, Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "target_max_cll",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "target_max_fall",
+            sig: &[Uint],
+            destructor: false,
+        },
+    ],
+    reqs: &[],
+    version: 1,
+};
+pub const WP_IMAGE_DESCRIPTION_INFO_V1: &[u8] = DATA_WP_IMAGE_DESCRIPTION_INFO_V1.name.as_bytes();
 pub fn write_req_wp_commit_timing_manager_v1_get_timer(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -6366,47 +6826,55 @@ pub enum WaylandInterface {
     WlSubsurface = 37,
     WlSurface = 38,
     WlTouch = 39,
-    WpCommitTimerV1 = 40,
-    WpCommitTimingManagerV1 = 41,
-    WpLinuxDrmSyncobjManagerV1 = 42,
-    WpLinuxDrmSyncobjSurfaceV1 = 43,
-    WpLinuxDrmSyncobjTimelineV1 = 44,
-    WpPresentation = 45,
-    WpPresentationFeedback = 46,
-    WpSecurityContextManagerV1 = 47,
-    WpSecurityContextV1 = 48,
-    WpViewport = 49,
-    WpViewporter = 50,
-    XdgPopup = 51,
-    XdgPositioner = 52,
-    XdgSurface = 53,
-    XdgToplevel = 54,
-    XdgToplevelIconManagerV1 = 55,
-    XdgToplevelIconV1 = 56,
-    XdgWmBase = 57,
-    ZwlrDataControlDeviceV1 = 58,
-    ZwlrDataControlManagerV1 = 59,
-    ZwlrDataControlOfferV1 = 60,
-    ZwlrDataControlSourceV1 = 61,
-    ZwlrExportDmabufFrameV1 = 62,
-    ZwlrExportDmabufManagerV1 = 63,
-    ZwlrGammaControlManagerV1 = 64,
-    ZwlrGammaControlV1 = 65,
-    ZwlrScreencopyFrameV1 = 66,
-    ZwlrScreencopyManagerV1 = 67,
-    ZwpInputMethodKeyboardGrabV2 = 68,
-    ZwpInputMethodManagerV2 = 69,
-    ZwpInputMethodV2 = 70,
-    ZwpInputPopupSurfaceV2 = 71,
-    ZwpLinuxBufferParamsV1 = 72,
-    ZwpLinuxDmabufFeedbackV1 = 73,
-    ZwpLinuxDmabufV1 = 74,
-    ZwpPrimarySelectionDeviceManagerV1 = 75,
-    ZwpPrimarySelectionDeviceV1 = 76,
-    ZwpPrimarySelectionOfferV1 = 77,
-    ZwpPrimarySelectionSourceV1 = 78,
-    ZwpVirtualKeyboardManagerV1 = 79,
-    ZwpVirtualKeyboardV1 = 80,
+    WpColorManagementOutputV1 = 40,
+    WpColorManagementSurfaceFeedbackV1 = 41,
+    WpColorManagementSurfaceV1 = 42,
+    WpColorManagerV1 = 43,
+    WpCommitTimerV1 = 44,
+    WpCommitTimingManagerV1 = 45,
+    WpImageDescriptionCreatorIccV1 = 46,
+    WpImageDescriptionCreatorParamsV1 = 47,
+    WpImageDescriptionInfoV1 = 48,
+    WpImageDescriptionV1 = 49,
+    WpLinuxDrmSyncobjManagerV1 = 50,
+    WpLinuxDrmSyncobjSurfaceV1 = 51,
+    WpLinuxDrmSyncobjTimelineV1 = 52,
+    WpPresentation = 53,
+    WpPresentationFeedback = 54,
+    WpSecurityContextManagerV1 = 55,
+    WpSecurityContextV1 = 56,
+    WpViewport = 57,
+    WpViewporter = 58,
+    XdgPopup = 59,
+    XdgPositioner = 60,
+    XdgSurface = 61,
+    XdgToplevel = 62,
+    XdgToplevelIconManagerV1 = 63,
+    XdgToplevelIconV1 = 64,
+    XdgWmBase = 65,
+    ZwlrDataControlDeviceV1 = 66,
+    ZwlrDataControlManagerV1 = 67,
+    ZwlrDataControlOfferV1 = 68,
+    ZwlrDataControlSourceV1 = 69,
+    ZwlrExportDmabufFrameV1 = 70,
+    ZwlrExportDmabufManagerV1 = 71,
+    ZwlrGammaControlManagerV1 = 72,
+    ZwlrGammaControlV1 = 73,
+    ZwlrScreencopyFrameV1 = 74,
+    ZwlrScreencopyManagerV1 = 75,
+    ZwpInputMethodKeyboardGrabV2 = 76,
+    ZwpInputMethodManagerV2 = 77,
+    ZwpInputMethodV2 = 78,
+    ZwpInputPopupSurfaceV2 = 79,
+    ZwpLinuxBufferParamsV1 = 80,
+    ZwpLinuxDmabufFeedbackV1 = 81,
+    ZwpLinuxDmabufV1 = 82,
+    ZwpPrimarySelectionDeviceManagerV1 = 83,
+    ZwpPrimarySelectionDeviceV1 = 84,
+    ZwpPrimarySelectionOfferV1 = 85,
+    ZwpPrimarySelectionSourceV1 = 86,
+    ZwpVirtualKeyboardManagerV1 = 87,
+    ZwpVirtualKeyboardV1 = 88,
 }
 impl TryFrom<u32> for WaylandInterface {
     type Error = ();
@@ -6452,47 +6920,55 @@ impl TryFrom<u32> for WaylandInterface {
             37 => WaylandInterface::WlSubsurface,
             38 => WaylandInterface::WlSurface,
             39 => WaylandInterface::WlTouch,
-            40 => WaylandInterface::WpCommitTimerV1,
-            41 => WaylandInterface::WpCommitTimingManagerV1,
-            42 => WaylandInterface::WpLinuxDrmSyncobjManagerV1,
-            43 => WaylandInterface::WpLinuxDrmSyncobjSurfaceV1,
-            44 => WaylandInterface::WpLinuxDrmSyncobjTimelineV1,
-            45 => WaylandInterface::WpPresentation,
-            46 => WaylandInterface::WpPresentationFeedback,
-            47 => WaylandInterface::WpSecurityContextManagerV1,
-            48 => WaylandInterface::WpSecurityContextV1,
-            49 => WaylandInterface::WpViewport,
-            50 => WaylandInterface::WpViewporter,
-            51 => WaylandInterface::XdgPopup,
-            52 => WaylandInterface::XdgPositioner,
-            53 => WaylandInterface::XdgSurface,
-            54 => WaylandInterface::XdgToplevel,
-            55 => WaylandInterface::XdgToplevelIconManagerV1,
-            56 => WaylandInterface::XdgToplevelIconV1,
-            57 => WaylandInterface::XdgWmBase,
-            58 => WaylandInterface::ZwlrDataControlDeviceV1,
-            59 => WaylandInterface::ZwlrDataControlManagerV1,
-            60 => WaylandInterface::ZwlrDataControlOfferV1,
-            61 => WaylandInterface::ZwlrDataControlSourceV1,
-            62 => WaylandInterface::ZwlrExportDmabufFrameV1,
-            63 => WaylandInterface::ZwlrExportDmabufManagerV1,
-            64 => WaylandInterface::ZwlrGammaControlManagerV1,
-            65 => WaylandInterface::ZwlrGammaControlV1,
-            66 => WaylandInterface::ZwlrScreencopyFrameV1,
-            67 => WaylandInterface::ZwlrScreencopyManagerV1,
-            68 => WaylandInterface::ZwpInputMethodKeyboardGrabV2,
-            69 => WaylandInterface::ZwpInputMethodManagerV2,
-            70 => WaylandInterface::ZwpInputMethodV2,
-            71 => WaylandInterface::ZwpInputPopupSurfaceV2,
-            72 => WaylandInterface::ZwpLinuxBufferParamsV1,
-            73 => WaylandInterface::ZwpLinuxDmabufFeedbackV1,
-            74 => WaylandInterface::ZwpLinuxDmabufV1,
-            75 => WaylandInterface::ZwpPrimarySelectionDeviceManagerV1,
-            76 => WaylandInterface::ZwpPrimarySelectionDeviceV1,
-            77 => WaylandInterface::ZwpPrimarySelectionOfferV1,
-            78 => WaylandInterface::ZwpPrimarySelectionSourceV1,
-            79 => WaylandInterface::ZwpVirtualKeyboardManagerV1,
-            80 => WaylandInterface::ZwpVirtualKeyboardV1,
+            40 => WaylandInterface::WpColorManagementOutputV1,
+            41 => WaylandInterface::WpColorManagementSurfaceFeedbackV1,
+            42 => WaylandInterface::WpColorManagementSurfaceV1,
+            43 => WaylandInterface::WpColorManagerV1,
+            44 => WaylandInterface::WpCommitTimerV1,
+            45 => WaylandInterface::WpCommitTimingManagerV1,
+            46 => WaylandInterface::WpImageDescriptionCreatorIccV1,
+            47 => WaylandInterface::WpImageDescriptionCreatorParamsV1,
+            48 => WaylandInterface::WpImageDescriptionInfoV1,
+            49 => WaylandInterface::WpImageDescriptionV1,
+            50 => WaylandInterface::WpLinuxDrmSyncobjManagerV1,
+            51 => WaylandInterface::WpLinuxDrmSyncobjSurfaceV1,
+            52 => WaylandInterface::WpLinuxDrmSyncobjTimelineV1,
+            53 => WaylandInterface::WpPresentation,
+            54 => WaylandInterface::WpPresentationFeedback,
+            55 => WaylandInterface::WpSecurityContextManagerV1,
+            56 => WaylandInterface::WpSecurityContextV1,
+            57 => WaylandInterface::WpViewport,
+            58 => WaylandInterface::WpViewporter,
+            59 => WaylandInterface::XdgPopup,
+            60 => WaylandInterface::XdgPositioner,
+            61 => WaylandInterface::XdgSurface,
+            62 => WaylandInterface::XdgToplevel,
+            63 => WaylandInterface::XdgToplevelIconManagerV1,
+            64 => WaylandInterface::XdgToplevelIconV1,
+            65 => WaylandInterface::XdgWmBase,
+            66 => WaylandInterface::ZwlrDataControlDeviceV1,
+            67 => WaylandInterface::ZwlrDataControlManagerV1,
+            68 => WaylandInterface::ZwlrDataControlOfferV1,
+            69 => WaylandInterface::ZwlrDataControlSourceV1,
+            70 => WaylandInterface::ZwlrExportDmabufFrameV1,
+            71 => WaylandInterface::ZwlrExportDmabufManagerV1,
+            72 => WaylandInterface::ZwlrGammaControlManagerV1,
+            73 => WaylandInterface::ZwlrGammaControlV1,
+            74 => WaylandInterface::ZwlrScreencopyFrameV1,
+            75 => WaylandInterface::ZwlrScreencopyManagerV1,
+            76 => WaylandInterface::ZwpInputMethodKeyboardGrabV2,
+            77 => WaylandInterface::ZwpInputMethodManagerV2,
+            78 => WaylandInterface::ZwpInputMethodV2,
+            79 => WaylandInterface::ZwpInputPopupSurfaceV2,
+            80 => WaylandInterface::ZwpLinuxBufferParamsV1,
+            81 => WaylandInterface::ZwpLinuxDmabufFeedbackV1,
+            82 => WaylandInterface::ZwpLinuxDmabufV1,
+            83 => WaylandInterface::ZwpPrimarySelectionDeviceManagerV1,
+            84 => WaylandInterface::ZwpPrimarySelectionDeviceV1,
+            85 => WaylandInterface::ZwpPrimarySelectionOfferV1,
+            86 => WaylandInterface::ZwpPrimarySelectionSourceV1,
+            87 => WaylandInterface::ZwpVirtualKeyboardManagerV1,
+            88 => WaylandInterface::ZwpVirtualKeyboardV1,
             _ => return Err(()),
         })
     }
@@ -6538,8 +7014,16 @@ pub const INTERFACE_TABLE: &[WaylandData] = &[
     DATA_WL_SUBSURFACE,
     DATA_WL_SURFACE,
     DATA_WL_TOUCH,
+    DATA_WP_COLOR_MANAGEMENT_OUTPUT_V1,
+    DATA_WP_COLOR_MANAGEMENT_SURFACE_FEEDBACK_V1,
+    DATA_WP_COLOR_MANAGEMENT_SURFACE_V1,
+    DATA_WP_COLOR_MANAGER_V1,
     DATA_WP_COMMIT_TIMER_V1,
     DATA_WP_COMMIT_TIMING_MANAGER_V1,
+    DATA_WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1,
+    DATA_WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1,
+    DATA_WP_IMAGE_DESCRIPTION_INFO_V1,
+    DATA_WP_IMAGE_DESCRIPTION_V1,
     DATA_WP_LINUX_DRM_SYNCOBJ_MANAGER_V1,
     DATA_WP_LINUX_DRM_SYNCOBJ_SURFACE_V1,
     DATA_WP_LINUX_DRM_SYNCOBJ_TIMELINE_V1,

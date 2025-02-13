@@ -1103,6 +1103,90 @@ fn proto_keymap(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test to verify that data for wp_image_description_creator_icc_v1::set_icc_file and
+ * wp_image_description_info_v1::icc_file is correctly transferred */
+fn proto_icc(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
+        let [display, registry, color_mgr, output, creator, color_output, desc, info, ..] =
+            ID_SEQUENCE;
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, registry);
+        }));
+
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, registry, 1, WL_OUTPUT, 4);
+            write_evt_wl_registry_global(dst, registry, 2, WP_COLOR_MANAGER_V1, 1);
+        }));
+
+        let offset: u32 = 2048;
+        let length: u32 = 1024;
+        let file_sz: u32 = 4096;
+        assert!(file_sz >= offset + length);
+
+        let data: Vec<u8> = (0..file_sz / 2)
+            .flat_map(|x| (x as u16).to_le_bytes())
+            .collect();
+        let base_fd = make_file_with_contents(&data).unwrap();
+
+        // Check that wp_image_description_creator_icc_v1::set_icc_file works
+        let msg_start = build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, registry, 2, WP_COLOR_MANAGER_V1, 1, color_mgr);
+            write_req_wl_registry_bind(dst, registry, 1, WL_OUTPUT, 4, output);
+            write_req_wp_color_manager_v1_create_icc_creator(dst, color_mgr, creator);
+            write_req_wp_color_manager_v1_get_output(dst, color_mgr, color_output, output);
+            write_req_wp_color_management_output_v1_get_image_description(dst, color_output, desc);
+            write_req_wp_image_description_v1_get_information(dst, desc, info);
+        });
+        let msg_fd = build_msgs(|dst| {
+            write_req_wp_image_description_creator_icc_v1_set_icc_file(
+                dst, creator, false, offset, length,
+            );
+        });
+        let mut smsgs = msg_start.clone();
+        smsgs.extend_from_slice(&msg_fd);
+
+        let (mut rmsgs, mut rfds) = ctx.prog_write(&smsgs, &[&base_fd]).unwrap();
+        let rmsg_fd = rmsgs.pop().unwrap();
+        let fd_from_prog = rfds.pop().unwrap();
+        assert!(rfds.is_empty());
+        assert!(
+            parse_wl_header(&rmsg_fd)
+                == (
+                    creator,
+                    length_req_wp_image_description_creator_icc_v1_set_icc_file(),
+                    OPCODE_WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_SET_ICC_FILE.code()
+                )
+        );
+        let (roffset, rlength) =
+            parse_req_wp_image_description_creator_icc_v1_set_icc_file(&rmsg_fd).unwrap();
+        assert!(rlength == length);
+        assert!(rmsgs.concat() == msg_start);
+
+        let data_from_prog = get_file_contents(
+            &fd_from_prog,
+            (offset.checked_add(length).unwrap()) as usize,
+        )
+        .unwrap();
+        assert!(
+            data_from_prog[roffset as usize..(roffset + length) as usize]
+                == data[offset as usize..(offset + length) as usize]
+        );
+
+        // Check that wp_image_description_info_v1::icc_file works
+        let cmsgs = build_msgs(|dst| {
+            write_evt_wp_image_description_info_v1_icc_file(dst, info, false, length);
+        });
+        let (rcmsgs, mut rcfds) = ctx.comp_write(&cmsgs, &[&base_fd]).unwrap();
+        assert!(rcmsgs.concat() == cmsgs);
+        let fd_from_comp = rcfds.pop().unwrap();
+        assert!(rcfds.is_empty());
+        let data_from_comp = get_file_contents(&fd_from_comp, length as usize).unwrap();
+        assert!(data_from_comp == data[..length as usize]);
+    })?;
+    Ok(StatusOk::Pass)
+}
+
 /** Test to verify that proper replication for wlr_gamma_control_unstable_v1 */
 fn proto_gamma_control(info: TestInfo) -> TestResult {
     let gamma_size: usize = 4096;
@@ -4631,6 +4715,7 @@ fn main() -> ExitCode {
     register_single(t, &f, "flip_damage", proto_flip_damage);
     register_single(t, &f, "gamma_control", proto_gamma_control);
     register_single(t, &f, "keymap", proto_keymap);
+    register_single(t, &f, "icc", proto_icc);
     register_single(t, &f, "many_fds", proto_many_fds);
     register_single(t, &f, "object_collision", proto_object_collision);
     register_single(t, &f, "oversized", proto_oversized);
