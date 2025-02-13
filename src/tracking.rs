@@ -1436,11 +1436,17 @@ pub fn process_way_msg(
         TranslationInfo::FromWayland((_x, y)) => (false, y.len()),
     };
 
+    let is_req = glob.on_display_side == from_channel;
     let Some(ref mut obj) = glob.objects.get_mut(&object_id) else {
+        debug!(
+            "Processing {} on unknown object {}; opcode {} length {}",
+            if is_req { "request" } else { "event" },
+            object_id,
+            opcode,
+            length
+        );
         return proc_unknown_way_msg(msg, dst, transl);
     };
-
-    let is_req = glob.on_display_side == from_channel;
 
     let opt_meth: Option<&WaylandMethod> = if is_req {
         INTERFACE_TABLE[obj.obj_type as usize].reqs.get(opcode)
@@ -1459,7 +1465,8 @@ pub fn process_way_msg(
     /* note: this may fail */
     if log::log_enabled!(log::Level::Debug) {
         debug!(
-            "Processing method: {}@{}.{}({})",
+            "Processing {}: {}@{}.{}({})",
+            if is_req { "request" } else { "event" },
             INTERFACE_TABLE[obj.obj_type as usize].name,
             object_id,
             meth.name,
