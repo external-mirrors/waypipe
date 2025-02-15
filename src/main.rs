@@ -170,18 +170,18 @@ fn get_rand_tag() -> Result<[u8; 10], String> {
 #[cfg(target_os = "linux")]
 fn dir_flags() -> fcntl::OFlag {
     /* O_PATH is from 2.6.39 Linux */
-    nix::fcntl::OFlag::O_PATH | nix::fcntl::OFlag::O_DIRECTORY
+    fcntl::OFlag::O_PATH | fcntl::OFlag::O_DIRECTORY
 }
 #[cfg(not(target_os = "linux"))]
 fn dir_flags() -> fcntl::OFlag {
-    nix::fcntl::OFlag::O_DIRECTORY
+    fcntl::OFlag::O_DIRECTORY
 }
 
 /** Get a file descriptor corresponding to a path, suitable for `fchdir()` */
 fn open_folder(p: &Path) -> Result<OwnedFd, String> {
-    let raw_fd = nix::fcntl::open(
+    let raw_fd = fcntl::open(
         p,
-        dir_flags() | nix::fcntl::OFlag::O_CLOEXEC,
+        dir_flags() | fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NOCTTY,
         nix::sys::stat::Mode::empty(),
     )
     .map_err(|x| tag!("Failed to open folder '{:?}': {}", p, x))?;

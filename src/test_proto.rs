@@ -4809,7 +4809,7 @@ fn main() -> ExitCode {
             OwnedFd::from_raw_fd(
                 fcntl::open(
                     "/dev/null",
-                    fcntl::OFlag::O_RDONLY,
+                    fcntl::OFlag::O_RDONLY | fcntl::OFlag::O_NOCTTY,
                     nix::sys::stat::Mode::empty(),
                 )
                 .unwrap(),
