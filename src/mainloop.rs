@@ -3671,8 +3671,17 @@ fn process_channel(
                         &mut chan_msg.output.fds,
                     ));
                     let ret = process_way_msg(waymsg, &mut chan_out_tail, aux, glob)?;
+                    let new_dst_len = chan_out_tail.len();
                     match ret {
-                        ProcMsg::Done => (),
+                        ProcMsg::Done => {
+                            log_way_msg_output(
+                                waymsg,
+                                &chan_msg.output.data
+                                    [chan_msg.output.len..chan_msg.output.data.len() - new_dst_len],
+                                &glob.objects,
+                                glob.on_display_side,
+                            );
+                        }
                         ProcMsg::WaitFor(r) => {
                             chan_msg.waiting_for = Some(r);
                             break;
@@ -3689,7 +3698,7 @@ fn process_channel(
                         }
                     }
                     // update amount written
-                    chan_msg.output.len += orig_tail_len - chan_out_tail.len();
+                    chan_msg.output.len += orig_tail_len - new_dst_len;
 
                     // after message processed, update region
                     msg_region = tail;
@@ -3799,8 +3808,17 @@ fn process_wayland_1(
             &mut way_msg.output.protocol_rids,
         ));
         let ret = process_way_msg(msg, &mut dst, aux, glob)?;
+        let new_dst_len = dst.len();
         match ret {
-            ProcMsg::Done => (),
+            ProcMsg::Done => {
+                log_way_msg_output(
+                    msg,
+                    &way_msg.output.protocol_data[way_msg.output.protocol_len
+                        ..way_msg.output.protocol_data.len() - new_dst_len],
+                    &glob.objects,
+                    !glob.on_display_side,
+                );
+            }
             ProcMsg::WaitFor(_) => {
                 unreachable!("Unexpected ProcMsg::WaitFor")
             }
@@ -3819,7 +3837,7 @@ fn process_wayland_1(
                     "Skipping last message: not enough space ({},{}) vs ({},{})",
                     nbytes,
                     nfds,
-                    dst.len(),
+                    new_dst_len,
                     MAX_OUTGOING_FDS - way_msg.output.protocol_rids.len()
                 );
                 break;
@@ -3828,7 +3846,7 @@ fn process_wayland_1(
 
         // update amount read and written
         nread += length;
-        way_msg.output.protocol_len += orig_dst_len - dst.len();
+        way_msg.output.protocol_len += orig_dst_len - new_dst_len;
     }
     way_msg.input.len -= nread;
     way_msg

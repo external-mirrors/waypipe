@@ -3998,6 +3998,65 @@ pub fn process_way_msg(
     }
 }
 
+/** Log the _changed_ messages in the given buffer whose corresponding object is
+ * currently in the provided set of objects.
+ *
+ * To avoid issues resulting from object deletion, this should be called
+ * promptly after processing a message and producing `output_msgs`.
+ */
+pub fn log_way_msg_output(
+    orig_msg: &[u8],
+    mut output_msgs: &[u8],
+    objects: &BTreeMap<ObjId, WpObject>,
+    is_req: bool,
+) {
+    if !log::log_enabled!(log::Level::Debug) {
+        return;
+    }
+
+    if output_msgs.is_empty() {
+        debug!("Dropped last {}", if is_req { "request" } else { "event" },);
+        return;
+    }
+    if orig_msg[0..4] == output_msgs[0..4] && orig_msg[8..] == output_msgs[8..] {
+        /* No change, only message was copied as is, modulo fd tagging changes */
+        return;
+    }
+
+    /* Output messages should be well formed. */
+    while !output_msgs.is_empty() {
+        let object_id = ObjId(u32::from_le_bytes(output_msgs[0..4].try_into().unwrap()));
+        let header2 = u32::from_le_bytes(output_msgs[4..8].try_into().unwrap());
+        let length = (header2 >> 16) as usize;
+        let opcode = (header2 & ((1 << 11) - 1)) as usize;
+        let msg = &output_msgs[..length];
+        output_msgs = &output_msgs[length..];
+
+        let Some(obj) = objects.get(&object_id) else {
+            /* Unknown messages will always be copied, so no point in logging them again */
+            continue;
+        };
+
+        let opt_meth: Option<&WaylandMethod> = if is_req {
+            INTERFACE_TABLE[obj.obj_type as usize].reqs.get(opcode)
+        } else {
+            INTERFACE_TABLE[obj.obj_type as usize].evts.get(opcode)
+        };
+        let Some(meth) = opt_meth else {
+            /* Method out of range, will be copied */
+            continue;
+        };
+        debug!(
+            "Modified {}: {}@{}.{}({})",
+            if is_req { "request" } else { "event" },
+            INTERFACE_TABLE[obj.obj_type as usize].name,
+            object_id,
+            meth.name,
+            MethodArguments { meth, msg }
+        );
+    }
+}
+
 /** Construct the Wayland object map with the initial object, wl_display#1 */
 pub fn setup_object_map() -> BTreeMap<ObjId, WpObject> {
     let mut map = BTreeMap::new();
