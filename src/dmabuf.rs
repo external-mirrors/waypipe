@@ -1339,21 +1339,22 @@ pub fn setup_vulkan_device(
     Ok(Some(Arc::new(dev)))
 }
 
+/** Get the first available memory type in `bitmask` with the given property flags.*/
 fn vulkan_get_memory_type_index(
     info: &VulkanDevice,
     bitmask: u32,
     flags: vk::MemoryPropertyFlags,
-) -> u32 {
+) -> Option<u32> {
     for (i, t) in info.memory_properties.memory_types
         [..(info.memory_properties.memory_type_count as usize)]
         .iter()
         .enumerate()
     {
         if t.property_flags.contains(flags) && (bitmask & (1u32 << i)) != 0 {
-            return i as u32;
+            return Some(i as u32);
         }
     }
-    panic!("No matching memory type for {:?}", flags);
+    None
 }
 
 /** Image memory barrier for use when transferring image to the current queue from the FOREIGN queue.
@@ -1445,18 +1446,31 @@ fn create_cpu_visible_buffer(
         let memreq = vulk.dev.get_buffer_memory_requirements(buffer);
         assert!(memreq.size >= size as u64);
 
-        /* note: not HOST_COHERENT, so memory must be explicitly flushed or invalidated */
-        let mem_type = if read_optimized {
-            vk::MemoryPropertyFlags::HOST_VISIBLE |
-            /* HOST_CACHED allows for much faster processing from CPU side; without
-             * it, individual read movs can become very slow. Probably not important
-             * for writing due to sequential pattern + write combination. */
-            vk::MemoryPropertyFlags::HOST_CACHED
-        } else {
-            vk::MemoryPropertyFlags::HOST_VISIBLE
+        /* note: not asking for HOST_COHERENT, so memory must be explicitly flushed or invalidated */
+        let Some(mut mem_index) = vulkan_get_memory_type_index(
+            vulk,
+            memreq.memory_type_bits,
+            vk::MemoryPropertyFlags::HOST_VISIBLE,
+        ) else {
+            return Err(tag!(
+                "No acceptable host visible memory type index for buffer"
+            ));
         };
-
-        let mem_index = vulkan_get_memory_type_index(vulk, memreq.memory_type_bits, mem_type);
+        if read_optimized {
+            /* HOST_CACHED sometimes allows for much faster processing from CPU side;
+             * without it, individual read movs can become very slow. This isn't needed
+             * when only writing because write combination is typically used, and
+             * the write pattern is sequential. However, Vulkan devices are not
+             * guaranteed to have this: they only need to have DEVICE_LOCAL and
+             * HOST_VISIBLE|HOST_COHERENT types. */
+            if let Some(cached_mem_index) = vulkan_get_memory_type_index(
+                vulk,
+                memreq.memory_type_bits,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_CACHED,
+            ) {
+                mem_index = cached_mem_index;
+            }
+        }
 
         let alloc_info = vk::MemoryAllocateInfo::default()
             .allocation_size(memreq.size)
