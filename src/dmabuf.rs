@@ -1675,8 +1675,6 @@ pub fn vulkan_import_dmabuf(
     let mut ext_create_info = vk::ExternalMemoryImageCreateInfo::default()
         .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
 
-    let init_layout = vk::ImageLayout::UNDEFINED;
-
     let usage_bits = if can_store_and_sample {
         vk::ImageUsageFlags::TRANSFER_SRC
             | vk::ImageUsageFlags::TRANSFER_DST
@@ -1685,6 +1683,16 @@ pub fn vulkan_import_dmabuf(
     } else {
         vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST
     };
+
+    /* Import the DMABUF with UNDEFINED layout, but thereafter assume GENERAL layout
+     * (so that no layout transition is done). This is needed to avoid doing an
+     * UNDEFINED->GENERAL layout transition that drops CCS plane contents and
+     * corrupts the image. This may not be strictly per Vulkan spec but seems to
+     * be the best solution; Gamescope and wlroots have done the same thing.
+     * Future spec updates may resolve the issue.
+     */
+    let import_layout = vk::ImageLayout::UNDEFINED;
+    let init_layout = vk::ImageLayout::GENERAL;
 
     let image_info = vk::ImageCreateInfo::default()
         .flags(if format_info.planes > 1 {
@@ -1705,7 +1713,7 @@ pub fn vulkan_import_dmabuf(
         .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
         .usage(usage_bits)
         .sharing_mode(vk::SharingMode::EXCLUSIVE) // only one queue family may use this
-        .initial_layout(init_layout)
+        .initial_layout(import_layout)
         .push_next(&mut ext_create_info)
         .push_next(&mut modifier_info);
 
