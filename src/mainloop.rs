@@ -1034,6 +1034,7 @@ pub fn translate_shm_fd(
     max_local_id: &mut i32,
     default_damage: bool,
     readonce: bool,
+    local_only: bool,
 ) -> Result<Rc<RefCell<ShadowFd>>, String> {
     let remote_id = allocate_rid(max_local_id);
 
@@ -1048,7 +1049,7 @@ pub fn translate_shm_fd(
 
     let sfd = Rc::new(RefCell::new(ShadowFd {
         remote_id,
-        only_here: true,
+        only_here: !local_only,
         data: ShadowFdVariant::File(ShadowFdFile {
             fd,
             buffer_size: size_lb,

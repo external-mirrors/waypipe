@@ -2104,6 +2104,83 @@ fn proto_shm_extend(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Helper function: _process_ dmabuf_feedback events for the given `feedback` object, and
+ * return the map of format-modifier combinations supported by the program-side Waypipe
+ * instance. `format_table` should be, and will be updated to, the most recently received
+ * format table. */
+fn process_linux_dmabuf_feedback(
+    rmsgs: Vec<Vec<u8>>,
+    mut rfds: Vec<OwnedFd>,
+    format_table: &mut Vec<(u32, u64)>,
+    feedback: ObjId,
+) -> BTreeMap<u32, Vec<u64>> {
+    rfds.reverse();
+
+    let mut mod_table: BTreeMap<u32, Vec<u64>> = BTreeMap::new();
+    let mut tranches: Vec<Vec<(u32, u64)>> = Vec::new();
+    let mut current_tranche = Vec::new();
+    for msg in rmsgs {
+        let (obj, _len, opcode) = parse_wl_header(&msg);
+        /* Have only send events to this dmabuf_feedback */
+        assert!(obj == feedback);
+        match MethodId::Event(opcode) {
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_MAIN_DEVICE => {
+                /* ignore, Waypipe may choose a different one */
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_TARGET_DEVICE => {
+                /* ignore, Waypipe currently doesn't do anything interesting here */
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_FLAGS => {
+                /* ignore, Waypipe currently doesn't do anything interesting here */
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_FORMATS => {
+                let format_list =
+                    parse_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(&msg).unwrap();
+                /* The indices correspond to the last received format table, and should must be interpreted immediately
+                 * in case the format table is changed later on */
+                for c in format_list.chunks_exact(2) {
+                    let idx = u16::from_le_bytes(c.try_into().unwrap());
+                    let entry: (u32, u64) = *format_table
+                        .get(idx as usize)
+                        .expect("format index out of range");
+                    current_tranche.push(entry);
+                }
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_DONE => {
+                tranches.push(current_tranche.clone());
+                current_tranche = Vec::new();
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_FORMAT_TABLE => {
+                format_table.clear();
+                let fd = rfds.pop().unwrap();
+                let len = parse_evt_zwp_linux_dmabuf_feedback_v1_format_table(&msg).unwrap();
+                let table_contents = get_file_contents(&fd, len as usize).unwrap();
+                for chunk in table_contents.chunks_exact(16) {
+                    let format: u32 = u32::from_le_bytes(chunk[..4].try_into().unwrap());
+                    let modifier: u64 = u64::from_le_bytes(chunk[8..].try_into().unwrap());
+                    format_table.push((format, modifier));
+                }
+            }
+            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_DONE => {
+                mod_table = BTreeMap::new();
+                for t in &tranches {
+                    for (fmt, modifier) in t {
+                        mod_table
+                            .entry(*fmt)
+                            .and_modify(|x| x.push(*modifier))
+                            .or_insert(vec![*modifier]);
+                    }
+                }
+            }
+            _ => {
+                panic!("Unexpected opcode: {}", opcode);
+            }
+        }
+    }
+    assert!(rfds.is_empty());
+    mod_table
+}
+
 /** Helper function: send dmabuf_feedback events for the given `feedback` object, and
  * return the map of format-modifier combinations supported by the program-side Waypipe
  * instance. */
@@ -2158,72 +2235,9 @@ fn send_linux_dmabuf_feedback(
         write_evt_zwp_linux_dmabuf_feedback_v1_tranche_done(dst, feedback);
         write_evt_zwp_linux_dmabuf_feedback_v1_done(dst, feedback);
     });
-    let (rmsgs, mut rfds) = ctx.comp_write(&msgs[..], &[&table_fd]).unwrap();
-    rfds.reverse();
-
-    let mut mod_table: BTreeMap<u32, Vec<u64>> = BTreeMap::new();
-    let mut tranches: Vec<Vec<(u32, u64)>> = Vec::new();
-    let mut current_tranche = Vec::new();
-    let mut format_table: Vec<(u32, u64)> = Vec::new();
-    for msg in rmsgs {
-        let (obj, _len, opcode) = parse_wl_header(&msg);
-        /* Have only send events to this dmabuf_feedback */
-        assert!(obj == feedback);
-        match MethodId::Event(opcode) {
-            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_MAIN_DEVICE => {
-                /* ignore, Waypipe may choose a different one */
-            }
-            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_TARGET_DEVICE => {
-                /* ignore, Waypipe currently doesn't do anything interesting here */
-            }
-            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_FLAGS => {
-                /* ignore, Waypipe currently doesn't do anything interesting here */
-            }
-            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_FORMATS => {
-                let format_list =
-                    parse_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(&msg).unwrap();
-                /* The indices correspond to the last received format table, and should must be interpreted immediately
-                 * in case the format table is changed later on */
-                for c in format_list.chunks_exact(2) {
-                    let idx = u16::from_le_bytes(c.try_into().unwrap());
-                    let entry: (u32, u64) = *format_table
-                        .get(idx as usize)
-                        .expect("format index out of range");
-                    current_tranche.push(entry);
-                }
-            }
-            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_DONE => {
-                tranches.push(current_tranche.clone());
-                current_tranche = Vec::new();
-            }
-            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_FORMAT_TABLE => {
-                let fd = rfds.pop().unwrap();
-                let len = parse_evt_zwp_linux_dmabuf_feedback_v1_format_table(&msg).unwrap();
-                let table_contents = get_file_contents(&fd, len as usize).unwrap();
-                for chunk in table_contents.chunks_exact(16) {
-                    let format: u32 = u32::from_le_bytes(chunk[..4].try_into().unwrap());
-                    let modifier: u64 = u64::from_le_bytes(chunk[8..].try_into().unwrap());
-                    format_table.push((format, modifier));
-                }
-            }
-            OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_DONE => {
-                mod_table = BTreeMap::new();
-                for t in &tranches {
-                    for (fmt, modifier) in t {
-                        mod_table
-                            .entry(*fmt)
-                            .and_modify(|x| x.push(*modifier))
-                            .or_insert(vec![*modifier]);
-                    }
-                }
-            }
-            _ => {
-                panic!("Unexpected opcode: {}", opcode);
-            }
-        }
-    }
-    assert!(rfds.is_empty());
-    mod_table
+    let (rmsgs, rfds) = ctx.comp_write(&msgs[..], &[&table_fd]).unwrap();
+    let mut format_table = Vec::new();
+    process_linux_dmabuf_feedback(rmsgs, rfds, &mut format_table, feedback)
 }
 
 /** Helper function: setup wl_compositor and zwp_linux_dmabuf_v1 globals and a surface,
@@ -2400,6 +2414,234 @@ fn proto_dmabuf(info: TestInfo, device: RenderDevice) -> TestResult {
             }));
         }
     })?;
+    Ok(StatusOk::Pass)
+}
+
+/** Test that Waypipe can process dmabuf feedback _changes_ (including table changes
+ * during the feedback events) properly */
+#[cfg(feature = "dmabuf")]
+fn proto_dmabuf_feedback_table(info: TestInfo, device: RenderDevice) -> TestResult {
+    if setup_vulkan(device.id).is_err() {
+        return Ok(StatusOk::Skipped);
+    };
+
+    fn make_simple_format_table(formats: &[u32]) -> (OwnedFd, u32) {
+        let mod_linear = 0u64;
+
+        let mut table: Vec<u8> = Vec::new();
+        for fmt in formats {
+            table.extend_from_slice(&fmt.to_le_bytes());
+            table.extend_from_slice(&0_u32.to_le_bytes());
+            table.extend_from_slice(&mod_linear.to_le_bytes());
+        }
+        (make_file_with_contents(&table).unwrap(), table.len() as u32)
+    }
+    fn make_index_array(indices: &[usize]) -> Vec<u8> {
+        let mut arr: Vec<u8> = Vec::new();
+        for i in indices {
+            arr.extend_from_slice(&(*i as u16).to_le_bytes());
+        }
+        arr
+    }
+
+    run_protocol_test_with_drm_node(&info, &device, &|mut ctx: ProtocolTestContext| {
+        let [display, registry, dmabuf, feedback, ..] = ID_SEQUENCE;
+
+        /* Note: Vulkan implementations are required to support TRANSFER_SRC_BIT |
+         * TRANSFER_DST_BIT for the following formats, so Waypipe should be able to
+         * process all their corresponding formats.
+         *
+         * R5G6B5_UNORM_PACK16, R8G8_UNORM, R8G8B8A8_UNORM, A2B10G10R10_UNORM
+         * R16G16B16A16_SFLOAT.
+         */
+
+        let formats: [u32; 4] = [
+            wayland_to_drm(WlShmFormat::R8),
+            wayland_to_drm(WlShmFormat::Rgb565),
+            wayland_to_drm(WlShmFormat::Argb8888),
+            wayland_to_drm(WlShmFormat::Xrgb8888),
+        ];
+        println!("Formats: {:?}", formats);
+        let unsupported_format: u32 = 0xFFFFFFFF;
+
+        let main_device = &device.id.to_le_bytes();
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, registry);
+        }));
+
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, registry, 1, ZWP_LINUX_DMABUF_V1, 5);
+        }));
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, registry, 1, ZWP_LINUX_DMABUF_V1, 5, dmabuf);
+            write_req_zwp_linux_dmabuf_v1_get_default_feedback(dst, dmabuf, feedback);
+        }));
+
+        /* Round 1: Regular setup */
+        let r1_formats = [formats[0], formats[1]];
+        let (r1_fd, r1_size) = make_simple_format_table(&r1_formats);
+        let mut format_table = Vec::new();
+
+        let ret = ctx
+            .comp_write(
+                &build_msgs(|dst| {
+                    write_evt_zwp_linux_dmabuf_feedback_v1_format_table(
+                        dst, feedback, false, r1_size,
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_main_device(dst, feedback, main_device);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_target_device(
+                        dst,
+                        feedback,
+                        main_device,
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_flags(dst, feedback, 0);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(
+                        dst,
+                        feedback,
+                        &make_index_array(&[1, 0]),
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_done(dst, feedback);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_done(dst, feedback);
+                }),
+                &[&r1_fd],
+            )
+            .unwrap();
+        let map = process_linux_dmabuf_feedback(ret.0, ret.1, &mut format_table, feedback);
+        println!("Round 1: {:?}", map);
+        for f in r1_formats {
+            assert!(map.contains_key(&f), "missing {:x}", f);
+        }
+
+        /* Round 2: Repeat setup with slightly different tranches, keeping the same table */
+        let ret = ctx
+            .comp_write(
+                &build_msgs(|dst| {
+                    write_evt_zwp_linux_dmabuf_feedback_v1_main_device(dst, feedback, main_device);
+
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_target_device(
+                        dst,
+                        feedback,
+                        main_device,
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_flags(dst, feedback, 0);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(
+                        dst,
+                        feedback,
+                        &make_index_array(&[0]),
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_done(dst, feedback);
+
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_target_device(
+                        dst,
+                        feedback,
+                        main_device,
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_flags(dst, feedback, 0);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(
+                        dst,
+                        feedback,
+                        &make_index_array(&[1]),
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_done(dst, feedback);
+
+                    write_evt_zwp_linux_dmabuf_feedback_v1_done(dst, feedback);
+                }),
+                &[],
+            )
+            .unwrap();
+        let map = process_linux_dmabuf_feedback(ret.0, ret.1, &mut format_table, feedback);
+        println!("Round 2: {:?}", map);
+        for f in r1_formats {
+            assert!(map.contains_key(&f), "missing {:x}", f);
+        }
+
+        /* Round 3: Changing format table for each tranche, or more frequently.
+         * (Note: the protocol specification implies but does not explicitly state that
+         * there is at most one format table per feedback::done; in practice most
+         * implementations will work even if the table is changed more often.)
+         *
+         * Table 1; tranche 1
+         * Table 2: tranche 2
+         * Table 3: ignored
+         * Table 4: empty, ignored
+         * Table 5: tranches 3+4
+         */
+        let t1_formats = [formats[1]];
+        let t2_formats = [unsupported_format, formats[0]];
+        let t3_formats = [formats[0], formats[3], formats[3], formats[0]];
+        let t4_formats: [u32; 0] = [];
+        let t5_formats = [formats[3], formats[2], unsupported_format];
+        let (t1, t2, t3, t4, t5) = (
+            make_simple_format_table(&t1_formats),
+            make_simple_format_table(&t2_formats),
+            make_simple_format_table(&t3_formats),
+            make_simple_format_table(&t4_formats),
+            make_simple_format_table(&t5_formats),
+        );
+        let ret = ctx
+            .comp_write(
+                &build_msgs(|dst| {
+                    write_evt_zwp_linux_dmabuf_feedback_v1_main_device(dst, feedback, main_device);
+
+                    write_evt_zwp_linux_dmabuf_feedback_v1_format_table(dst, feedback, false, t1.1);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_target_device(
+                        dst,
+                        feedback,
+                        main_device,
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_flags(dst, feedback, 0);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(
+                        dst,
+                        feedback,
+                        &make_index_array(&[0]),
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_done(dst, feedback);
+
+                    write_evt_zwp_linux_dmabuf_feedback_v1_format_table(dst, feedback, false, t2.1);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_target_device(
+                        dst,
+                        feedback,
+                        main_device,
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_flags(dst, feedback, 0);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(
+                        dst,
+                        feedback,
+                        &make_index_array(&[1]),
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_done(dst, feedback);
+
+                    write_evt_zwp_linux_dmabuf_feedback_v1_format_table(dst, feedback, false, t3.1);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_format_table(dst, feedback, false, t4.1);
+
+                    write_evt_zwp_linux_dmabuf_feedback_v1_format_table(dst, feedback, false, t5.1);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_target_device(
+                        dst,
+                        feedback,
+                        main_device,
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_flags(dst, feedback, 0);
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(
+                        dst,
+                        feedback,
+                        &make_index_array(&[0, 1, 2]),
+                    );
+                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_done(dst, feedback);
+
+                    write_evt_zwp_linux_dmabuf_feedback_v1_done(dst, feedback);
+                }),
+                &[&t1.0, &t2.0, &t3.0, &t4.0, &t5.0],
+            )
+            .unwrap();
+        let map = process_linux_dmabuf_feedback(ret.0, ret.1, &mut format_table, feedback);
+        println!("Round 3: {:?}", map);
+        for f in formats {
+            assert!(map.contains_key(&f), "missing {:x}", f);
+        }
+    })?;
+
     Ok(StatusOk::Pass)
 }
 
@@ -4735,6 +4977,13 @@ fn main() -> ExitCode {
     {
         register_per_device(t, &f, &vk_device_ids, "dmabuf", proto_dmabuf);
         register_per_device(t, &f, &vk_device_ids, "dmabuf_damage", proto_dmabuf_damage);
+        register_per_device(
+            t,
+            &f,
+            &vk_device_ids,
+            "dmabuf_feedback_table",
+            proto_dmabuf_feedback_table,
+        );
         register_per_device(t, &f, &vk_device_ids, "explicit_sync", proto_explicit_sync);
         register_per_device(
             t,

@@ -7,7 +7,6 @@ use crate::dmabuf::*;
 use crate::gbm::*;
 use crate::kernel::*;
 use crate::mainloop::*;
-use crate::mirror::*;
 #[cfg(any(not(feature = "video"), not(feature = "gbmfallback")))]
 use crate::stub::*;
 use crate::tag;
@@ -25,7 +24,6 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::os::fd::OwnedFd;
 use std::rc::Rc;
-use std::sync::Arc;
 
 /** Structure storing information for a specific Wayland object */
 pub struct WpObject {
@@ -131,9 +129,11 @@ struct ObjWlBuffer {
 /** Data of a format tranche from zwp_linux_dmabuf_feedback_v1 */
 struct DmabufTranche {
     flags: u32,
-    /* note: these can only be interpreted when the "done" event arrives
-     * and the format table is known */
-    entries: Vec<u16>,
+    /** Format table entries; these are interpreted _immediately_ when the
+     * tranche is provided, using the last format table to arrive. */
+    values: Vec<(u32, u64)>,
+    /** When translating tranche, cache output indices here */
+    indices: Vec<u8>,
     device: u64,
 }
 
@@ -150,14 +150,18 @@ struct ObjZwpLinuxDmabuf {
 
 /** Additional information for zwp_linux_dmabuf_feedback_v1 */
 struct ObjZwpLinuxDmabufFeedback {
-    /* Cache of the last sent table fd */
-    table_fd: Option<(OwnedFd, u32)>,
-    table_sfd: Option<Rc<RefCell<ShadowFd>>>,
-    format_table: Vec<(u32, u64)>,
+    /** Last format table received from the Wayland compositor */
+    input_format_table: Option<Vec<(u32, u64)>>,
+    /** Contents of last format table sent (or which will be sent to) to the Wayland client */
+    output_format_table: Option<Vec<u8>>,
 
     main_device: Option<u64>,
     tranches: Vec<DmabufTranche>,
     current: DmabufTranche,
+    /* If true, have already processed tranches */
+    processed: bool,
+    /* If true, should send format table when processing ::done */
+    queued_format_table: Option<(Rc<RefCell<ShadowFd>>, u32)>,
 }
 
 /** Additional information for zwp_linux_buffer_params_v1 */
@@ -782,12 +786,49 @@ fn get_damage_for_dmabuf(
     compute_damaged_segments(&mut rects[..], 6, 128, 0, stride as usize, bpp)
 }
 
+/** Construct a format table for use by the zwp_linux_dmabuf_v1 protocol,
+ * from the tranches */
+fn process_dmabuf_feedback(feedback: &mut ObjZwpLinuxDmabufFeedback) -> Result<Vec<u8>, String> {
+    let mut index: BTreeMap<(u32, u64), u16> = BTreeMap::new();
+    for t in feedback.tranches.iter() {
+        for f in t.values.iter() {
+            index.insert(*f, u16::MAX);
+        }
+    }
+
+    if index.len() > u16::MAX as usize {
+        return Err(tag!(
+            "Format table is too large ({} > {})",
+            index.len(),
+            u16::MAX
+        ));
+    }
+
+    let mut table = Vec::new();
+    for (i, (f, v)) in index.iter_mut().enumerate() {
+        table.extend_from_slice(&f.0.to_le_bytes());
+        table.extend_from_slice(&0u32.to_le_bytes());
+        table.extend_from_slice(&f.1.to_le_bytes());
+        *v = i as u16;
+    }
+
+    for t in feedback.tranches.iter_mut() {
+        let mut indices = Vec::new();
+        for f in t.values.iter() {
+            let idx = index.get(f).expect("Inserted key should still be present");
+            indices.extend_from_slice(&idx.to_le_bytes());
+        }
+        t.indices = indices;
+    }
+
+    Ok(table)
+}
+
 /** Construct a format table for use by the zwp_linux_dmabuf_v1 protocol */
-fn build_new_format_table(
+fn rebuild_format_table(
     dmabuf_dev: &DmabufDevice,
-    sfd: &Rc<RefCell<ShadowFd>>,
     feedback: &mut ObjZwpLinuxDmabufFeedback,
-) -> Result<usize, String> {
+) -> Result<(), String> {
     /* Identify the remotely supported formats */
     let mut remote_formats = BTreeSet::<u32>::new();
     for t in feedback.tranches.iter() {
@@ -795,74 +836,10 @@ fn build_new_format_table(
             /* Only use main device of compositor; at least one tranche will use it. */
             continue;
         }
-        for i in t.entries.iter() {
-            let format: (u32, u64) = *feedback
-                .format_table
-                .get(*i as usize)
-                .ok_or("Index error in format list")?;
-            remote_formats.insert(format.0);
+        for (fmt, _modifier) in t.values.iter() {
+            remote_formats.insert(*fmt);
         }
     }
-
-    /* Identify supported format/modifier pairs */
-    let mut modifier_table = BTreeMap::<u32, (&[u64], usize)>::new();
-    for f in remote_formats.iter() {
-        let mods = dmabuf_dev_modifier_list(dmabuf_dev, *f);
-        if !mods.is_empty() {
-            modifier_table.insert(*f, (mods, 0));
-        }
-    }
-
-    /* Update format table file */
-    let mut format_table_data = Vec::<u8>::new();
-    let mut format_table_parsed = Vec::<(u32, u64)>::new();
-    let mut ctr = 0;
-    for (f, ms) in modifier_table.iter_mut() {
-        ms.1 = ctr;
-        for m in ms.0.iter() {
-            format_table_data.extend_from_slice(&f.to_le_bytes());
-            format_table_data.extend_from_slice(&0u32.to_le_bytes());
-            format_table_data.extend_from_slice(&m.to_le_bytes());
-
-            format_table_parsed.push((*f, *m));
-        }
-        ctr += ms.0.len();
-    }
-
-    if format_table_parsed.is_empty() {
-        return Err(tag!(
-            "Failed to build new format table: no formats with common support"
-        ));
-    }
-
-    let mut b = sfd.borrow_mut();
-    let ShadowFdVariant::File(ref mut data) = b.data else {
-        panic!("expected file shadowfd");
-    };
-
-    let local_fd = memfd::memfd_create(
-        c"/waypipe",
-        memfd::MemFdCreateFlag::MFD_CLOEXEC | memfd::MemFdCreateFlag::MFD_ALLOW_SEALING,
-    )
-    .map_err(|x| tag!("Failed to create memfd: {:?}", x))?;
-    let sz = format_table_data.len();
-    assert!(sz > 0);
-
-    unistd::ftruncate(&local_fd, sz as libc::off_t)
-        .map_err(|x| tag!("Failed to resize memfd: {:?}", x))?;
-    let mapping: ExternalMapping = ExternalMapping::new(&local_fd, sz, false)
-        .map_err(|x| tag!("Failed to mmap fd when building new format table: {}", x))?;
-    copy_onto_mapping(&format_table_data[..], &mapping, 0);
-
-    let core = Some(Arc::new(ShadowFdFileCore {
-        mem_mirror: Mirror::new(0, false)?,
-        mapping,
-    }));
-
-    data.buffer_size = sz;
-    data.remote_bufsize = sz;
-    data.core = core;
-    data.fd = local_fd;
 
     /* Regenerate tranches, roughly matching original _format_ preferences */
     let mut new_tranches = Vec::<DmabufTranche>::new();
@@ -874,26 +851,21 @@ fn build_new_format_table(
         let mut n = DmabufTranche {
             device: feedback.main_device.unwrap(),
             flags: 0,
-            entries: Vec::new(),
+            values: Vec::new(),
+            indices: Vec::new(),
         };
 
-        for i in t.entries.iter() {
-            let format: (u32, u64) = *feedback
-                .format_table
-                .get(*i as usize)
-                .ok_or("Index error in format list")?;
-
+        for (fmt, _modifier) in t.values.iter() {
             /* Record each format in exactly one tranche, preferring earlier tranches;
              * all modifiers for a format are put in the same tranche. */
-            if remote_formats.remove(&format.0) {
-                if let Some((mods, start)) = modifier_table.get(&format.0) {
-                    for i in 0..mods.len() {
-                        n.entries.push((start + i).try_into().unwrap());
-                    }
-                };
+            if remote_formats.remove(fmt) {
+                let mods = dmabuf_dev_modifier_list(dmabuf_dev, *fmt);
+                for m in mods {
+                    n.values.push((*fmt, *m));
+                }
             }
         }
-        if !n.entries.is_empty() {
+        if !n.values.is_empty() {
             new_tranches.push(n);
         }
     }
@@ -902,11 +874,9 @@ fn build_new_format_table(
             "Failed to build new format tranches: no formats with common support"
         ));
     }
-
     feedback.tranches = new_tranches;
-    feedback.format_table = format_table_parsed;
 
-    Ok(sz)
+    Ok(())
 }
 
 /** Add new modifiers to the format-to-modifier-list table.
@@ -1135,15 +1105,29 @@ fn proc_unknown_way_msg(
     Ok(ProcMsg::Done)
 }
 
-/** Parse and return the entries of a zwp_linux_dmabuf_v1 format table. */
+/** Parse and return the entries of a zwp_linux_dmabuf_v1 format table. Any
+ * trailing bytes after the last multiple of 16 will be ignored */
 fn parse_format_table(data: &[u8]) -> Vec<(u32, u64)> {
     let mut t = Vec::new();
-    for i in 0..data.len() / 16 {
-        let format: u32 = u32::from_le_bytes(data[16 * i..16 * i + 4].try_into().unwrap());
-        let modifier: u64 = u64::from_le_bytes(data[16 * i + 8..16 * i + 16].try_into().unwrap());
+    for chunk in data.chunks_exact(16) {
+        let format: u32 = u32::from_le_bytes(chunk[..4].try_into().unwrap());
+        let modifier: u64 = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
         t.push((format, modifier));
     }
     t
+}
+
+/** Parse a `dev_t` array into a u64 */
+fn parse_dev_array(arr: &[u8]) -> Option<u64> {
+    /* dev_t may be smaller on some old systems, but detection of this is complicated, so
+     * accept both reasonable options */
+    if arr.len() == 4 {
+        Some(u32::from_le_bytes(arr.try_into().unwrap()) as u64)
+    } else if arr.len() == 8 {
+        Some(u64::from_le_bytes(arr.try_into().unwrap()))
+    } else {
+        None
+    }
 }
 
 /** Assuming the ShadowFd has file type, return whether has pending apply tasks? */
@@ -1283,6 +1267,7 @@ fn translate_or_wait_for_fixed_file(
                 &mut glob.max_local_id,
                 true,
                 true,
+                false,
             )?;
             y.push(v);
         }
@@ -1586,6 +1571,7 @@ pub fn process_way_msg(
                         pos_size,
                         &mut glob.map,
                         &mut glob.max_local_id,
+                        false,
                         false,
                         false,
                     )?;
@@ -2742,14 +2728,16 @@ pub fn process_way_msg(
                 WpObject {
                     obj_type: WaylandInterface::ZwpLinuxDmabufFeedbackV1,
                     extra: WpExtra::ZwpDmabufFeedback(Box::new(ObjZwpLinuxDmabufFeedback {
-                        table_fd: None,
-                        table_sfd: None,
+                        input_format_table: None,
+                        output_format_table: None,
                         main_device: None,
-                        format_table: Vec::new(),
                         tranches: Vec::new(),
+                        processed: false,
+                        queued_format_table: None,
                         current: DmabufTranche {
                             flags: 0,
-                            entries: Vec::new(),
+                            values: Vec::new(),
+                            indices: Vec::new(),
                             device: 0,
                         },
                     })),
@@ -2764,23 +2752,43 @@ pub fn process_way_msg(
             OPCODE_ZWP_LINUX_DMABUF_FEEDBACK_V1_FORMAT_TABLE,
         ) => {
             let table_size = parse_evt_zwp_linux_dmabuf_feedback_v1_format_table(msg)?;
-
             let WpExtra::ZwpDmabufFeedback(ref mut f) = &mut obj.extra else {
                 return Err(tag!("Expected object to have dmabuf_feedback data"));
             };
 
-            /* Store data from message, and drop it; will replay later */
+            /* Load the format table */
+            let mut table_data = vec![0; table_size as usize];
             match transl {
                 TranslationInfo::FromChannel((x, _)) => {
-                    let sfd = x.pop_front().ok_or_else(|| tag!("Missing sfd"))?;
-                    f.table_sfd = Some(sfd);
+                    let sfd = x.front().ok_or_else(|| tag!("Missing sfd"))?;
+                    if file_has_pending_apply_tasks(sfd)? {
+                        let b = sfd.borrow();
+                        return Ok(ProcMsg::WaitFor(b.remote_id));
+                    }
+                    let sfd = x.pop_front().unwrap();
+
+                    let b = sfd.borrow_mut();
+                    let ShadowFdVariant::File(ref f) = b.data else {
+                        return Err(tag!("Received non-File ShadowFd for format table"));
+                    };
+                    if table_size as usize != f.buffer_size {
+                        return Err(tag!(
+                            "Wrong buffer size for format table: got {}, expected {}",
+                            f.buffer_size,
+                            table_size
+                        ));
+                    }
+
+                    copy_from_mapping(&mut table_data, &f.core.as_ref().unwrap().mapping, 0);
                 }
                 TranslationInfo::FromWayland((x, _)) => {
-                    let fd = x.pop_front().unwrap();
-                    f.table_fd = Some((fd, table_size));
+                    let fd = x.pop_front().ok_or_else(|| tag!("Missing fd"))?;
+
+                    let mapping = ExternalMapping::new(&fd, table_size as usize, true)?;
+                    copy_from_mapping(&mut table_data, &mapping, 0);
                 }
             };
-
+            f.input_format_table = Some(parse_format_table(&table_data));
             Ok(ProcMsg::Done)
         }
 
@@ -2793,9 +2801,13 @@ pub fn process_way_msg(
             };
 
             let dev = parse_evt_zwp_linux_dmabuf_feedback_v1_main_device(msg)?;
-            assert!(dev.len() == 8);
+            let main_device = parse_dev_array(dev)
+                .ok_or_else(|| tag!("Unexpected size for dev_t: {}", dev.len()))?;
+            feedback.main_device = Some(main_device);
 
-            feedback.main_device = Some(u64::from_le_bytes(dev.try_into().unwrap()));
+            if glob.on_display_side && matches!(glob.dmabuf_device, DmabufDevice::VulkanSetup(_)) {
+                complete_dmabuf_setup(&glob.opts, Some(main_device), &mut glob.dmabuf_device)?;
+            }
 
             Ok(ProcMsg::Done)
         }
@@ -2821,8 +2833,8 @@ pub fn process_way_msg(
             };
 
             let dev = parse_evt_zwp_linux_dmabuf_feedback_v1_tranche_target_device(msg)?;
-            assert!(dev.len() == 8);
-            feedback.current.device = u64::from_le_bytes(dev.try_into().unwrap());
+            feedback.current.device = parse_dev_array(dev)
+                .ok_or_else(|| tag!("Unexpected size for dev_t: {}", dev.len()))?;
 
             Ok(ProcMsg::Done)
         }
@@ -2838,10 +2850,33 @@ pub fn process_way_msg(
             if fmts.len() % 2 != 0 {
                 return Err(tag!("Format array not of even length"));
             }
-            feedback.current.entries = fmts
-                .chunks(2)
-                .map(|x| u16::from_le_bytes(x.try_into().unwrap()))
-                .collect();
+            if fmts.is_empty() {
+                return Ok(ProcMsg::Done);
+            }
+            let Some(ref table) = feedback.input_format_table else {
+                return Err(tag!(
+                    "No format table provided before tranche_formats was received"
+                ));
+            };
+
+            for chunk in fmts.chunks_exact(2) {
+                let idx = u16::from_le_bytes(chunk.try_into().unwrap());
+
+                let Some(pair) = table.get(idx as usize) else {
+                    return Err(tag!(
+                        "Tranche format index {} out of range for format table of length {}",
+                        idx,
+                        table.len()
+                    ));
+                };
+                /* On display side, immediately filter out unsupported format-modifier pairs. */
+                if glob.on_display_side
+                    && !dmabuf_dev_supports_format(&glob.dmabuf_device, pair.0, pair.1)
+                {
+                    continue;
+                }
+                feedback.current.values.push(*pair);
+            }
 
             Ok(ProcMsg::Done)
         }
@@ -2855,7 +2890,8 @@ pub fn process_way_msg(
             };
             feedback.tranches.push(DmabufTranche {
                 flags: 0,
-                entries: Vec::new(),
+                values: Vec::new(),
+                indices: Vec::new(),
                 device: 0,
             });
             std::mem::swap(feedback.tranches.last_mut().unwrap(), &mut feedback.current);
@@ -2866,105 +2902,92 @@ pub fn process_way_msg(
                 return Err(tag!("Unexpected object extra type"));
             };
 
-            if glob.on_display_side && matches!(glob.dmabuf_device, DmabufDevice::VulkanSetup(_)) {
-                let Some(dev) = feedback.main_device else {
-                    return Err(tag!(
-                        "zwp_linux_dmabuf_feedback_v1 did not provide a device"
-                    ));
-                };
-                complete_dmabuf_setup(&glob.opts, Some(dev), &mut glob.dmabuf_device)?;
-            }
-
+            // todo: determine local dev_t len when !on_display_side;
+            // unfortunately libc::dev_t may be outdated on some platforms and cannot be relied on
             let dev_len = std::mem::size_of::<u64>();
 
-            /* This can be an overestimate */
+            if !feedback.processed {
+                /* Process feedback now, to determine how much space is needed for it. */
+                feedback.processed = true;
+
+                if !glob.on_display_side {
+                    rebuild_format_table(&glob.dmabuf_device, feedback)?;
+                }
+                let new_table = process_dmabuf_feedback(feedback)?;
+                if Some(&new_table) != feedback.output_format_table.as_ref() {
+                    // Table has changed; send new fd
+                    let local_fd = memfd::memfd_create(
+                        c"/waypipe",
+                        memfd::MemFdCreateFlag::MFD_CLOEXEC
+                            | memfd::MemFdCreateFlag::MFD_ALLOW_SEALING,
+                    )
+                    .map_err(|x| tag!("Failed to create memfd: {:?}", x))?;
+                    let sz: u32 = new_table.len().try_into().unwrap();
+                    assert!(sz > 0);
+
+                    unistd::ftruncate(&local_fd, sz as libc::off_t)
+                        .map_err(|x| tag!("Failed to resize memfd: {:?}", x))?;
+                    let mapping: ExternalMapping =
+                        ExternalMapping::new(&local_fd, sz as usize, false).map_err(|x| {
+                            tag!("Failed to mmap fd when building new format table: {}", x)
+                        })?;
+                    copy_onto_mapping(&new_table[..], &mapping, 0);
+
+                    let sfd = translate_shm_fd(
+                        local_fd,
+                        sz as usize,
+                        &mut glob.map,
+                        &mut glob.max_local_id,
+                        glob.on_display_side,
+                        true,
+                        !glob.on_display_side,
+                    )?;
+
+                    feedback.output_format_table = Some(new_table);
+                    feedback.queued_format_table = Some((sfd, sz));
+                }
+            }
+
             let mut space_est = 0;
-            if feedback.table_sfd.is_some() || feedback.table_fd.is_some() {
+            if feedback.queued_format_table.is_some() {
                 space_est += length_evt_zwp_linux_dmabuf_feedback_v1_format_table();
             }
             space_est += length_evt_zwp_linux_dmabuf_feedback_v1_main_device(dev_len);
             space_est += length_evt_zwp_linux_dmabuf_feedback_v1_done();
 
+            /* note: this is now using the _converted_ tranche lengths and counts */
             for t in feedback.tranches.iter() {
                 space_est += length_evt_zwp_linux_dmabuf_feedback_v1_tranche_done()
                     + length_evt_zwp_linux_dmabuf_feedback_v1_tranche_flags()
                     + length_evt_zwp_linux_dmabuf_feedback_v1_tranche_target_device(dev_len)
-                    + length_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(
-                        t.entries.len() * std::mem::size_of::<u16>(),
-                    );
+                    + length_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(t.indices.len());
             }
 
             check_space!(
                 space_est,
-                feedback.table_sfd.is_some() as usize,
+                if feedback.queued_format_table.is_some() {
+                    1
+                } else {
+                    0
+                },
                 remaining_space
             );
 
-            match transl {
-                TranslationInfo::FromChannel((_, y)) => {
-                    if let Some(sfd) = &feedback.table_sfd {
-                        if file_has_pending_apply_tasks(sfd)? {
-                            let b = sfd.borrow();
-                            return Ok(ProcMsg::WaitFor(b.remote_id));
-                        }
-                    }
-
-                    /* Read table into format_table, if one was sent. */
-                    let mut osfd = None;
-                    std::mem::swap(&mut feedback.table_sfd, &mut osfd);
-                    if let Some(sfd) = osfd {
-                        let b = sfd.borrow();
-                        let ShadowFdVariant::File(ref x) = &b.data else {
-                            panic!("Expected buffer shadowfd to be of file type");
-                        };
-
-                        let table_size = x.buffer_size;
-                        let mut data = vec![0; table_size];
-                        copy_from_mapping(&mut data, &x.core.as_ref().unwrap().mapping, 0);
-                        drop(b);
-                        feedback.format_table = parse_format_table(&data[..]);
-
-                        let new_size = build_new_format_table(&glob.dmabuf_device, &sfd, feedback)?;
-
-                        y.push_back(sfd);
-
+            let mut queued_table = None;
+            std::mem::swap(&mut queued_table, &mut feedback.queued_format_table);
+            if let Some((sfd, sz)) = queued_table {
+                match transl {
+                    TranslationInfo::FromChannel((_, y)) => {
                         write_evt_zwp_linux_dmabuf_feedback_v1_format_table(
-                            dst,
-                            object_id,
-                            false,
-                            new_size.try_into().unwrap(),
-                        )
-                    }
-                }
-                TranslationInfo::FromWayland((_, y)) => {
-                    /* Translate and read table into format_table, if one was sent. */
-                    let mut ofd = None;
-                    std::mem::swap(&mut feedback.table_fd, &mut ofd);
-                    if let Some((fd, table_size)) = ofd {
-                        let sfd = translate_shm_fd(
-                            fd,
-                            table_size as usize,
-                            &mut glob.map,
-                            &mut glob.max_local_id,
-                            true,
-                            true,
-                        )?;
-
-                        let b = sfd.borrow();
-                        let ShadowFdVariant::File(ref x) = &b.data else {
-                            panic!("Expected buffer shadowfd to be of file type");
-                        };
-                        let mut data = vec![0; table_size as usize];
-                        copy_from_mapping(&mut data, &x.core.as_ref().unwrap().mapping, 0);
-                        drop(b);
-
-                        y.push(sfd);
-
-                        write_evt_zwp_linux_dmabuf_feedback_v1_format_table(
-                            dst, object_id, true, table_size,
+                            dst, object_id, false, sz,
                         );
-
-                        feedback.format_table = parse_format_table(&data[..]);
+                        y.push_back(sfd);
+                    }
+                    TranslationInfo::FromWayland((_, y)) => {
+                        write_evt_zwp_linux_dmabuf_feedback_v1_format_table(
+                            dst, object_id, true, sz,
+                        );
+                        y.push(sfd);
                     }
                 }
             }
@@ -2977,45 +3000,34 @@ pub fn process_way_msg(
                 dev_id.to_le_bytes().as_slice(),
             );
             for t in feedback.tranches.iter() {
-                let mut evec = Vec::<u8>::new();
-                for i in t.entries.iter() {
-                    let format: (u32, u64) = *feedback
-                        .format_table
-                        .get(*i as usize)
-                        .ok_or("Index error in format list")?;
-                    /* This check is _technically_ redundant on application side, where
-                     * the format table is remade via build_new_format_table */
-                    if dmabuf_dev_supports_format(&glob.dmabuf_device, format.0, format.1) {
-                        let a = i.to_le_bytes();
-                        evec.push(a[0]);
-                        evec.push(a[1]);
-                        add_advertised_modifiers(
-                            &mut glob.advertised_modifiers,
-                            format.0,
-                            &[format.1],
-                        );
-                    }
+                for f in t.values.iter() {
+                    add_advertised_modifiers(&mut glob.advertised_modifiers, f.0, &[f.1]);
                 }
-                if !evec.is_empty() {
-                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_target_device(
-                        dst,
-                        object_id,
-                        dev_id.to_le_bytes().as_slice(),
-                    );
-                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_flags(dst, object_id, t.flags);
-                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(
-                        dst,
-                        object_id,
-                        &evec[..],
-                    );
-                    write_evt_zwp_linux_dmabuf_feedback_v1_tranche_done(dst, object_id);
-                }
+                write_evt_zwp_linux_dmabuf_feedback_v1_tranche_target_device(
+                    dst,
+                    object_id,
+                    dev_id.to_le_bytes().as_slice(),
+                );
+                write_evt_zwp_linux_dmabuf_feedback_v1_tranche_flags(dst, object_id, t.flags);
+                write_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(
+                    dst,
+                    object_id,
+                    &t.indices[..],
+                );
+                write_evt_zwp_linux_dmabuf_feedback_v1_tranche_done(dst, object_id);
             }
             write_evt_zwp_linux_dmabuf_feedback_v1_done(dst, object_id);
 
-            /* Cleanup */
+            /* Reset state for next batch */
+            feedback.processed = false;
             feedback.tranches = Vec::new();
-            feedback.current.entries = Vec::new();
+            // note: `feedback.current` _should_ already be reset in _tranche_done
+            feedback.current = DmabufTranche {
+                flags: 0,
+                values: Vec::new(),
+                indices: Vec::new(),
+                device: 0,
+            };
 
             Ok(ProcMsg::Done)
         }
@@ -3080,6 +3092,7 @@ pub fn process_way_msg(
                         &mut glob.max_local_id,
                         true,
                         true,
+                        false,
                     )?;
                     y.push(v);
                 }
