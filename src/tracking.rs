@@ -1321,13 +1321,13 @@ fn fmt_method(arg: &MethodArguments, f: &mut Formatter<'_>) -> Result<bool, &'st
             }
             WaylandArgument::Object(t) => {
                 let id = parse_u32(&mut tail)?;
-                if write!(f, "{}:obj({})", id, INTERFACE_TABLE[*t as usize].name).is_err() {
+                if write!(f, "{}#{}:obj", INTERFACE_TABLE[*t as usize].name, id).is_err() {
                     return Ok(true);
                 }
             }
             WaylandArgument::NewId(t) => {
                 let id = parse_u32(&mut tail)?;
-                if write!(f, "{}:new_id({})", id, INTERFACE_TABLE[*t as usize].name).is_err() {
+                if write!(f, "{}#{}:new_id", INTERFACE_TABLE[*t as usize].name, id).is_err() {
                     return Ok(true);
                 }
             }
@@ -1474,7 +1474,7 @@ pub fn process_way_msg(
     };
     if opt_meth.is_none() {
         debug!(
-            "Method out of range: {}@{}, opcode {}",
+            "Method out of range: {}#{}, opcode {}",
             INTERFACE_TABLE[obj.obj_type as usize].name, object_id, opcode
         );
         return proc_unknown_way_msg(msg, dst, transl);
@@ -1484,7 +1484,7 @@ pub fn process_way_msg(
     /* note: this may fail */
     if log::log_enabled!(log::Level::Debug) {
         debug!(
-            "Processing {}: {}@{}.{}({})",
+            "Processing {}: {}#{}.{}({})",
             if is_req { "request" } else { "event" },
             INTERFACE_TABLE[obj.obj_type as usize].name,
             object_id,
@@ -4060,7 +4060,7 @@ pub fn log_way_msg_output(
             continue;
         };
         debug!(
-            "Modified {}: {}@{}.{}({})",
+            "Modified {}: {}#{}.{}({})",
             if is_req { "request" } else { "event" },
             INTERFACE_TABLE[obj.obj_type as usize].name,
             object_id,
