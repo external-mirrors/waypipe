@@ -1140,6 +1140,32 @@ fn file_has_pending_apply_tasks(sfd: &RefCell<ShadowFd>) -> Result<bool, String>
     Ok(data.pending_apply_tasks > 0)
 }
 
+/** Compute the midpoint of two timestamps, rounding to -∞ */
+fn timespec_midpoint(stamp_1: libc::timespec, stamp_3: libc::timespec) -> libc::timespec {
+    let mut mid_nsec = if stamp_1.tv_nsec < stamp_3.tv_nsec {
+        stamp_1.tv_nsec + (stamp_3.tv_nsec - stamp_1.tv_nsec) / 2
+    } else {
+        stamp_3.tv_nsec + (stamp_1.tv_nsec - stamp_3.tv_nsec) / 2
+    };
+    let mut mid_sec = if stamp_1.tv_sec < stamp_3.tv_sec {
+        stamp_1.tv_sec + (stamp_3.tv_sec - stamp_1.tv_sec) / 2
+    } else {
+        stamp_3.tv_sec + (stamp_1.tv_sec - stamp_3.tv_sec) / 2
+    };
+    if stamp_3.tv_sec % 2 != stamp_1.tv_sec % 2 {
+        mid_nsec += 500_000_000;
+    }
+    if mid_nsec > 1_000_000_000 {
+        mid_sec += 1;
+        mid_nsec -= 1_000_000_000;
+    }
+
+    libc::timespec {
+        tv_sec: mid_sec,
+        tv_nsec: mid_nsec,
+    }
+}
+
 /** Estimate the time difference between two clocks.
  *
  * Return value is: (sec_diff, nsec_diff) where nsec_diff >= 0 */
@@ -1167,22 +1193,7 @@ fn clock_sub(clock_a: u32, clock_b: u32) -> Result<(i64, u32), String> {
         }
     }
 
-    /* Compute midpoint, rounding to -∞ */
-    let mid_sec = if stamp_1.tv_sec < stamp_3.tv_sec {
-        stamp_1.tv_sec + (stamp_3.tv_sec - stamp_1.tv_sec) / 2
-    } else {
-        stamp_3.tv_sec + (stamp_1.tv_sec - stamp_3.tv_sec) / 2
-    };
-    let mid_nsec = if stamp_1.tv_nsec < stamp_3.tv_nsec {
-        stamp_1.tv_nsec + (stamp_3.tv_nsec - stamp_1.tv_nsec) / 2
-    } else {
-        stamp_3.tv_nsec + (stamp_1.tv_nsec - stamp_3.tv_nsec) / 2
-    };
-
-    let stamp_avg = libc::timespec {
-        tv_sec: mid_sec,
-        tv_nsec: mid_nsec,
-    };
+    let stamp_avg = timespec_midpoint(stamp_1, stamp_3);
     /* tv_sec is i32 on pre-Y2K38 systems */
     #[allow(clippy::unnecessary_cast)]
     let mut tv_sec = stamp_avg

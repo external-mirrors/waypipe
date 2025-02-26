@@ -1853,9 +1853,8 @@ fn proto_commit_timing(info: TestInfo) -> TestResult {
             }));
 
             let init_time_ns = 11111111111111111111111u128;
-            let (tv_sec_hi, tv_sec_lo, tv_nsec) = (
-                ((init_time_ns / 1000000000) >> 32) as u32,
-                (init_time_ns / 1000000000) as u32,
+            let ((tv_sec_hi, tv_sec_lo), tv_nsec) = (
+                split_u64((init_time_ns / 1000000000) as u64),
                 (init_time_ns % 1000000000) as u32,
             );
             let data = build_msgs(|dst| {
