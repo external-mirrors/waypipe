@@ -379,6 +379,7 @@ struct DiffDmabufTask {
     mirror: Arc<Mirror>,
     view_row_stride: Option<u32>,
     acquires: Vec<(Arc<VulkanTimelineSemaphore>, u64)>,
+    implicit_semaphore: Option<VulkanBinarySemaphore>,
 }
 
 enum ReadDmabufResult {
@@ -413,6 +414,7 @@ struct FillDmabufTask {
     dst: Arc<VulkanDmabuf>,
     view_row_stride: Option<u32>,
     acquires: Vec<(Arc<VulkanTimelineSemaphore>, u64)>,
+    implicit_semaphore: Option<VulkanBinarySemaphore>,
 }
 
 /** Task to copy data for a DMABUF: final step to construct and compress message */
@@ -525,6 +527,13 @@ pub struct ShadowFdDmabuf {
     /* If not null, the data necessary for video decoding */
     video_decode: Option<Arc<VideoDecodeState>>,
     video_encode: Option<Arc<VideoEncodeState>>,
+
+    /** Set to true if the DMABUF was committed to a wl_surface which does
+     * _not_ have a wp_linux_drm_syncobj_surface_v1 attached. Reset to false
+     * after processing updates. Note: This variable is true when the
+     * wl_buffer is committed to both explicitly and implicitly
+     * synchronized surfaces. */
+    pub using_implicit_sync: bool,
 
     /* Must wait for these before processing buffer.*/
     pub acquires: Vec<(u64, Rc<RefCell<ShadowFd>>)>,
@@ -1146,6 +1155,7 @@ pub fn translate_dmabuf_fd(
             acquires: Vec::new(),
             releases: BTreeMap::new(),
             pending_apply_tasks: 0,
+            using_implicit_sync: false,
             /* Use the optimal (packed) stride for fill/diff operations */
             view_row_stride: None,
             debug_wayland_id: wayland_id,
@@ -1567,6 +1577,7 @@ fn process_sfd_msg(
                     export_planes: add_planes,
                     video_decode: None,
                     video_encode: None,
+                    using_implicit_sync: false,
                     acquires: Vec::new(),
                     releases: BTreeMap::new(),
                     pending_apply_tasks: 0,
@@ -1655,6 +1666,7 @@ fn process_sfd_msg(
                     export_planes: add_planes,
                     video_decode: Some(Arc::new(video_decode_state)),
                     video_encode: None,
+                    using_implicit_sync: false,
                     acquires: Vec::new(),
                     releases: BTreeMap::new(),
                     pending_apply_tasks: 0,
@@ -2243,6 +2255,19 @@ fn collect_updates(
                 acquires.push((timeline_data.timeline.clone(), pt));
             }
 
+            let implicit_sync_file: Option<VulkanSyncFile> = if data.using_implicit_sync {
+                data.using_implicit_sync = false;
+
+                /* Using implicit sync, so export a sync file to be waited on */
+                if let DmabufImpl::Vulkan(ref vulk_buf) = data.buf {
+                    vulk_buf.export_sync_file()?
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             let copied = if let DmabufImpl::Gbm(ref mut gbm_buf) = data.buf {
                 /* Copy out entire contents of buffer immediately and synchronously, do avoid
                  * running into possible threading issues with libgbm. */
@@ -2277,16 +2302,24 @@ fn collect_updates(
                     }
 
                     let t = match data.buf {
-                        DmabufImpl::Vulkan(ref vulk_buf) => WorkTask::FillDmabuf(FillDmabufTask {
-                            rid: sfd.remote_id,
-                            compression,
-                            region_start: start,
-                            region_end: end,
-                            mirror: data.mirror.clone(),
-                            dst: vulk_buf.clone(),
-                            view_row_stride: data.view_row_stride,
-                            acquires: acquires.clone(),
-                        }),
+                        DmabufImpl::Vulkan(ref vulk_buf) => {
+                            let implicit_semaphore = if let Some(ref s) = implicit_sync_file {
+                                Some(s.export_binary_semaphore()?)
+                            } else {
+                                None
+                            };
+                            WorkTask::FillDmabuf(FillDmabufTask {
+                                rid: sfd.remote_id,
+                                compression,
+                                region_start: start,
+                                region_end: end,
+                                mirror: data.mirror.clone(),
+                                dst: vulk_buf.clone(),
+                                view_row_stride: data.view_row_stride,
+                                acquires: acquires.clone(),
+                                implicit_semaphore,
+                            })
+                        }
                         DmabufImpl::Gbm(_) => WorkTask::FillDmabuf2(FillDmabufTask2 {
                             rid: sfd.remote_id,
                             compression,
@@ -2331,17 +2364,25 @@ fn collect_updates(
                     };
 
                     let t = match data.buf {
-                        DmabufImpl::Vulkan(ref vulk_buf) => WorkTask::DiffDmabuf(DiffDmabufTask {
-                            rid: sfd.remote_id,
-                            region,
-                            intervals: output,
-                            trailing,
-                            compression,
-                            mirror: data.mirror.as_ref().unwrap().clone(),
-                            img: vulk_buf.clone(),
-                            view_row_stride: data.view_row_stride,
-                            acquires: acquires.clone(),
-                        }),
+                        DmabufImpl::Vulkan(ref vulk_buf) => {
+                            let implicit_semaphore = if let Some(ref s) = implicit_sync_file {
+                                Some(s.export_binary_semaphore()?)
+                            } else {
+                                None
+                            };
+                            WorkTask::DiffDmabuf(DiffDmabufTask {
+                                rid: sfd.remote_id,
+                                region,
+                                intervals: output,
+                                trailing,
+                                compression,
+                                mirror: data.mirror.as_ref().unwrap().clone(),
+                                img: vulk_buf.clone(),
+                                view_row_stride: data.view_row_stride,
+                                acquires: acquires.clone(),
+                                implicit_semaphore,
+                            })
+                        }
                         DmabufImpl::Gbm(_) => todo!(),
                     };
                     way_msg_output.expected_recvd_msgs += 1;
@@ -2729,6 +2770,11 @@ fn run_diff_dmabuf_task(
     let buf_len = start + task.trailing;
     let read_buf = Arc::new(vulkan_get_buffer(&task.img.vulk, buf_len as usize, true)?);
 
+    let binary_semaphores = if let Some(ref f) = task.implicit_semaphore {
+        std::slice::from_ref(f)
+    } else {
+        &[]
+    };
     /* Extract data into staging buffer */
     let handle = start_copy_segments_from_dmabuf(
         &task.img,
@@ -2737,6 +2783,7 @@ fn run_diff_dmabuf_task(
         &segments[..],
         task.view_row_stride,
         &task.acquires[..],
+        binary_semaphores,
     )?;
     let pt = handle.get_timeline_point();
     cache.copy_ops.push(handle);
@@ -2879,6 +2926,11 @@ fn run_fill_dmabuf_task(
     let space = task.region_end - task.region_start;
     let read_buf = Arc::new(vulkan_get_buffer(&task.dst.vulk, space as usize, true)?);
 
+    let binary_semaphores = if let Some(ref f) = task.implicit_semaphore {
+        std::slice::from_ref(f)
+    } else {
+        &[]
+    };
     /* Extract data into staging buffer */
     let handle = start_copy_segments_from_dmabuf(
         &task.dst,
@@ -2887,6 +2939,7 @@ fn run_fill_dmabuf_task(
         &[(0, task.region_start, task.region_end)],
         task.view_row_stride,
         &task.acquires[..],
+        binary_semaphores,
     )?;
     let pt = handle.get_timeline_point();
     cache.copy_ops.push(handle);

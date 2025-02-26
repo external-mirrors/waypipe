@@ -2032,6 +2032,9 @@ pub fn process_way_msg(
                                         Damage::Intervals(union_damage(&old[..], &dmg[..], 128));
                                 }
                             }
+                            if acq_pt.is_none() {
+                                y.using_implicit_sync = true;
+                            }
 
                             /* todo: in theory these should still work with shm buffers */
                             if let Some((pt, timeline)) = acq_pt {
@@ -3600,6 +3603,8 @@ pub fn process_way_msg(
                     }
                 } else if let ShadowFdVariant::Dmabuf(ref mut y) = &mut sfd.data {
                     y.damage = Damage::Everything;
+
+                    y.using_implicit_sync = true;
                 } else {
                     return Err(tag!("Expected buffer shadowfd to be of file type"));
                 }
@@ -3682,6 +3687,7 @@ pub fn process_way_msg(
                         }
                     }
                 } else if let ShadowFdVariant::Dmabuf(ref mut y) = &mut sfd.data {
+                    y.using_implicit_sync = true;
                     y.damage = Damage::Everything;
                 } else {
                     return Err(tag!("Expected buffer shadowfd to be of file type"));

@@ -95,6 +95,18 @@ pub struct VulkanTimelineSemaphore {
     event_fd: OwnedFd,
 }
 
+/** A sync file (e.g.: exported from a DMABUF, for implicit sync) */
+pub struct VulkanSyncFile {
+    vulk: Arc<VulkanDevice>,
+    fd: OwnedFd,
+}
+
+/** A binary semaphore (e.g.: resulting from DMABUF's exported implicit sync file) */
+pub struct VulkanBinarySemaphore {
+    vulk: Arc<VulkanDevice>,
+    semaphore: vk::Semaphore,
+}
+
 pub struct VulkanCommandPool {
     pub vulk: Arc<VulkanDevice>,
     pub pool: Mutex<vk::CommandPool>,
@@ -122,6 +134,10 @@ pub struct VulkanDmabuf {
 
     // todo: use a <=4 vector size optimization without any heap allocation
     memory_planes: Vec<(vk::DeviceMemory, u32, u32)>, /* mem / offset / stride */
+
+    /** In order to extract sync files for implicit synchronization, store a copy of the
+     * DMABUF fd. (This may need to be changed to support disjoint multi-planar images.) */
+    main_fd: OwnedFd,
 
     pub inner: Mutex<VulkanDmabufInner>,
 }
@@ -223,6 +239,15 @@ impl Drop for VulkanTimelineSemaphore {
             self.vulk.dev.destroy_semaphore(self.semaphore, None);
 
             // event_fd cleanup is automatic
+        }
+    }
+}
+
+impl Drop for VulkanBinarySemaphore {
+    fn drop(&mut self) {
+        unsafe {
+            // SAFETY: only if semaphore is not being used
+            self.vulk.dev.destroy_semaphore(self.semaphore, None);
         }
     }
 }
@@ -426,17 +451,17 @@ pub fn drm_to_vulkan(drm_format: u32) -> Option<vk::Format> {
     })
 }
 
-/* Definitions from drm.h */
-const fn drm_iowr<T>(code: u8) -> u32 {
+/* Definitions from drm.h and linux/dma-buf.h */
+const fn drm_iowr<T>(typ: u32, code: u8) -> u32 {
     /* linux/ioctl.h */
-    let typ = 'd' as u32;
     let size = std::mem::size_of::<T>() as u32;
     let dir = 0x1 | 0x2;
     (code as u32) | (typ << 8) | (size << 16) | (dir << 30)
 }
-const DRM_IOCTL_SYNCOBJ_DESTROY: u32 = drm_iowr::<DrmSyncobjDestroy>(0xC0);
-const DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE: u32 = drm_iowr::<DrmSyncobjHandle>(0xC2);
-const DRM_IOCTL_SYNCOBJ_EVENTFD: u32 = drm_iowr::<DrmSyncobjEventFd>(0xCF);
+const DRM_IOCTL_SYNCOBJ_DESTROY: u32 = drm_iowr::<DrmSyncobjDestroy>('d' as u32, 0xC0);
+const DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE: u32 = drm_iowr::<DrmSyncobjHandle>('d' as u32, 0xC2);
+const DRM_IOCTL_SYNCOBJ_EVENTFD: u32 = drm_iowr::<DrmSyncobjEventFd>('d' as u32, 0xCF);
+const DMABUF_IOCTL_EXPORT_SYNC_FILE: u32 = drm_iowr::<DmabufExportSyncFile>('b' as u32, 0x02);
 
 #[repr(C)]
 struct DrmSyncobjDestroy {
@@ -458,9 +483,15 @@ struct DrmSyncobjEventFd {
     fd: i32,
     pad: u32,
 }
+#[repr(C)]
+struct DmabufExportSyncFile {
+    flags: u32,
+    fd: i32,
+}
+const DMA_BUF_SYNC_READ: u32 = 1 << 0;
 
-/* Requirements: for the specific ioctl used, arg must be properly
- * aligned, have the right type, and have the correct lifespan */
+/** Requirements: for the specific ioctl used, arg must be properly
+ * aligned, have the right type, and have the correct lifespan. */
 unsafe fn ioctl_loop(
     drm_fd: &OwnedFd,
     code: u32,
@@ -539,6 +570,52 @@ fn drm_syncobj_destroy(drm_fd: &OwnedFd, handle: u32) -> Result<(), String> {
             &mut x as *mut _ as *mut c_void,
             "handle destroy",
         )
+    }
+}
+
+/** Export the sync file holding read fences associated with the given dmabuf.
+ *
+ * Returns Some(fd) is successful, None if operation possibly not supported, Err
+ * on error.
+ */
+fn dmabuf_sync_file_export(dmabuf_fd: &OwnedFd) -> Result<Option<OwnedFd>, String> {
+    let mut x = DmabufExportSyncFile {
+        flags: DMA_BUF_SYNC_READ,
+        fd: -1,
+    };
+    // TODO: handle EINVAL specifically
+    unsafe {
+        // SAFETY: x is repr(C), x has proper type for the ioctl,
+        // and the ioctl does not use the pointer after the call
+
+        let code = DMABUF_IOCTL_EXPORT_SYNC_FILE;
+        let req = code as libc::c_ulong;
+        let arg: *mut c_void = &mut x as *mut _ as *mut c_void;
+        loop {
+            let ret = libc::ioctl(dmabuf_fd.as_raw_fd(), req, arg);
+            let errno = errno::Errno::last_raw();
+            if ret == 0 {
+                break;
+            } else if (errno == errno::Errno::EINTR as i32)
+                || (errno == errno::Errno::EAGAIN as i32)
+            {
+                continue;
+            } else if errno == errno::Errno::EINVAL as i32 {
+                // EINVAL: the request is not valid (= kernel might be old and may not support this)
+                return Ok(None);
+            } else {
+                return Err(tag!(
+                    "ioctl {:x} (sync file export) failed: {}",
+                    code,
+                    errno
+                ));
+            }
+        }
+    }
+    assert!(x.fd != -1);
+    unsafe {
+        // SAFETY: fd was just created, has been checked valid, and has no other references
+        Ok(Some(OwnedFd::from_raw_fd(x.fd)))
     }
 }
 
@@ -1668,6 +1745,13 @@ pub fn vulkan_import_dmabuf(
         });
     }
 
+    let main_fd = planes
+        .first()
+        .unwrap()
+        .fd
+        .try_clone()
+        .map_err(|x| tag!("Failed to clone dmabuf fd: {}", x))?;
+
     let mut modifier_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
         .plane_layouts(&layout)
         .drm_format_modifier(modifier);
@@ -1847,6 +1931,7 @@ pub fn vulkan_import_dmabuf(
             can_store_and_sample,
             width,
             height,
+            main_fd,
         }))
     }
 }
@@ -2075,6 +2160,17 @@ pub fn vulkan_create_dmabuf(
             mem_planes.push((bind_infos[i].memory, planes[i].offset, planes[i].stride));
         }
 
+        let main_fd = match planes[0].fd.try_clone() {
+            Err(x) => {
+                for b in bind_infos {
+                    vulk.dev.free_memory(b.memory, None);
+                }
+                vulk.dev.destroy_image(image, None);
+                return Err(tag!("Failed to clone dmabuf fd: {}", x));
+            }
+            Ok(f) => f,
+        };
+
         Ok((
             Arc::new(VulkanDmabuf {
                 vulk: vulk.clone(),
@@ -2087,6 +2183,7 @@ pub fn vulkan_create_dmabuf(
                 can_store_and_sample,
                 width,
                 height,
+                main_fd,
             }),
             planes,
         ))
@@ -2258,6 +2355,7 @@ pub fn start_copy_segments_from_dmabuf(
     segments: &[(u32, u32, u32)],
     view_row_length: Option<u32>,
     wait_semaphores: &[(Arc<VulkanTimelineSemaphore>, u64)],
+    wait_binary_semaphores: &[VulkanBinarySemaphore],
 ) -> Result<VulkanCopyHandle, String> {
     // TODO: validate that buffer/dmabuf regions affected are not being used by any other transfer
     // (otherwise callers risk unsoundness)
@@ -2364,9 +2462,14 @@ pub fn start_copy_segments_from_dmabuf(
 
         let cbs = &[cb];
 
-        let waitv_values: Vec<u64> = wait_semaphores.iter().map(|x| x.1).collect();
-        let waitv_semaphores: Vec<vk::Semaphore> =
+        let mut waitv_values: Vec<u64> = wait_semaphores.iter().map(|x| x.1).collect();
+        let mut waitv_semaphores: Vec<vk::Semaphore> =
             wait_semaphores.iter().map(|x| x.0.semaphore).collect();
+        for bs in wait_binary_semaphores {
+            /* Wait values for non-timeline semaphores are ignored */
+            waitv_values.push(u64::MAX);
+            waitv_semaphores.push(bs.semaphore);
+        }
         let mut waitv_stage_flags = Vec::new();
         waitv_stage_flags.resize(waitv_semaphores.len(), vk::PipelineStageFlags::ALL_COMMANDS);
 
@@ -2819,6 +2922,73 @@ impl VulkanDmabuf {
         let format_info = get_vulkan_info(self.vk_format);
         format_info.bpp
     }
+
+    /** Export the read sync file for the DMABUF, returning None
+     * if the operation is not supported (as may happen with old kernels). */
+    pub fn export_sync_file(&self) -> Result<Option<VulkanSyncFile>, String> {
+        let Some(sync_fd) = dmabuf_sync_file_export(&self.main_fd)? else {
+            debug!("Failed to export sync file from dmabuf, possible old kernel.");
+            return Ok(None);
+        };
+
+        Ok(Some(VulkanSyncFile {
+            vulk: self.vulk.clone(),
+            fd: sync_fd,
+        }))
+    }
+}
+
+impl VulkanSyncFile {
+    /** Export the sync file to a (single-use) binary semaphore. */
+    pub fn export_binary_semaphore(&self) -> Result<VulkanBinarySemaphore, String> {
+        let mut sem_exp_info = vk::ExportSemaphoreCreateInfo::default()
+            .handle_types(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD);
+        let mut sem_type = vk::SemaphoreTypeCreateInfoKHR::default()
+            .semaphore_type(vk::SemaphoreType::BINARY)
+            .initial_value(0);
+        let create_semaphore_info = vk::SemaphoreCreateInfo::default()
+            .flags(vk::SemaphoreCreateFlags::empty()) // VK_SEMAPHORE_IMPORT_TEMPORARY_BIT ?
+            .push_next(&mut sem_type)
+            .push_next(&mut sem_exp_info);
+
+        let vulk: &Arc<VulkanDevice> = &self.vulk;
+
+        let sync_fd = self
+            .fd
+            .try_clone()
+            .map_err(|x| tag!("Failed to clone sync file fd: {}", x))?;
+
+        unsafe {
+            let semaphore = match vulk.dev.create_semaphore(&create_semaphore_info, None) {
+                Ok(x) => x,
+                Err(x) => {
+                    return Err(tag!("Failed to create semaphore: {}", x));
+                }
+            };
+
+            let raw_fd = sync_fd.into_raw_fd();
+            let import = vk::ImportSemaphoreFdInfoKHR::default()
+                .fd(raw_fd)
+                .flags(vk::SemaphoreImportFlags::TEMPORARY)
+                .handle_type(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD)
+                .semaphore(semaphore);
+
+            match vulk.ext_semaphore_fd.import_semaphore_fd(&import) {
+                Ok(()) => (),
+                Err(x) => {
+                    /* Import failed, must clean up fd */
+                    nix::unistd::close(raw_fd).unwrap();
+                    vulk.dev.destroy_semaphore(semaphore, None);
+                    return Err(tag!("Failed to import semaphore: {}", x));
+                }
+            };
+
+            Ok(VulkanBinarySemaphore {
+                vulk: vulk.clone(),
+                semaphore,
+            })
+        }
+    }
 }
 
 impl VulkanTimelineSemaphore {
@@ -2934,6 +3104,7 @@ pub fn copy_from_dmabuf(
         &pool,
         &[(0, 0, buf.nominal_size(None) as u32)],
         None,
+        &[],
         &[],
     )?;
     handle.wait_until_done()?;

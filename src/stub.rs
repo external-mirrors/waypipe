@@ -14,6 +14,8 @@ mod dmabuf_stub {
     pub struct VulkanCommandPool {
         pub vulk: Arc<VulkanDevice>,
     }
+    pub struct VulkanSyncFile(());
+    pub struct VulkanBinarySemaphore(());
     pub struct VulkanTimelineSemaphore(());
     pub struct VulkanCopyHandle(());
     pub struct VulkanDmabuf {
@@ -58,6 +60,7 @@ mod dmabuf_stub {
         segments: &[(u32, u32, u32)],
         view_row_length: Option<u32>,
         wait_semaphores: &[(Arc<VulkanTimelineSemaphore>, u64)],
+        wait_binary_semaphores: &[VulkanBinarySemaphore],
     ) -> Result<VulkanCopyHandle, String> {
         unreachable!();
     }
@@ -183,8 +186,15 @@ mod dmabuf_stub {
         pub fn get_bpp(&self) -> u32 {
             unreachable!();
         }
+        pub fn export_sync_file(&self) -> Result<Option<VulkanSyncFile>, String> {
+            unreachable!();
+        }
     }
-
+    impl VulkanSyncFile {
+        pub fn export_binary_semaphore(&self) -> Result<VulkanBinarySemaphore, String> {
+            unreachable!();
+        }
+    }
     impl VulkanTimelineSemaphore {
         pub fn get_current_pt(self: &VulkanTimelineSemaphore) -> Result<u64, &'static str> {
             unreachable!();
