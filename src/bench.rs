@@ -503,12 +503,11 @@ pub fn run_benchmark(opts: &Options, fast_mode: bool) -> Result<(), String> {
         opts.threads as usize
     };
     println!(
-        "With {} threads, estimated time for a 32 MB (4k) image transfer:",
+        "With {} threads, estimated time for a 32 MB (4k) image transfer, assuming:",
         nthreads
     );
-    println!(
-        "(assuming: perfect utilization and pipelining; no buffering, transfer latency or jitter)"
-    );
+    println!("- perfect utilization and pipelining; no buffering, transfer latency or jitter");
+    println!("- equally fast local and remote computers");
     let mbps_opts = [
         1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0,
         20000.0,
