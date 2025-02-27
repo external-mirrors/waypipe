@@ -12,10 +12,7 @@ fn do_test(name: &str) -> ExitCode {
 
     let cross_runner = std::env::var_os("CROSS_TARGET_RUNNER");
     let mut args: Vec<&OsStr> = Vec::new();
-    let cx: &OsStr = cross_runner
-        .as_ref()
-        .map(|x| x.as_os_str())
-        .unwrap_or(OsStr::new(""));
+    let cx: &OsStr = cross_runner.as_deref().unwrap_or(OsStr::new(""));
     /* note: CROSS_TARGET_RUNNER is typically something like 'CROSS_TARGET_RUNNER=/linux-runner aarch64' */
     for chunk in cx.as_encoded_bytes().split(|x| *x == b' ') {
         if !chunk.is_empty() {

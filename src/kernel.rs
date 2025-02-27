@@ -783,28 +783,22 @@ fn test_buffer_replication() {
 
     nix::unistd::ftruncate(&local_fd, size as libc::off_t).unwrap();
 
-    let mapping: ExternalMapping = ExternalMapping::new(&local_fd, size as usize, false).unwrap();
+    let mapping: ExternalMapping = ExternalMapping::new(&local_fd, size, false).unwrap();
 
     let mut reference_arr = AlignedArray::new(size);
-    let mut reference = reference_arr.get_mut();
+    let reference = reference_arr.get_mut();
     /* keeping the mapping as all-zero, modify the reference. The exact
      * values aren't so important here */
-    for i in 123..789 {
-        reference[i] = 1u8;
-    }
-    for i in 1023..1889 {
-        reference[i] = 1u8;
-    }
-    for i in 1901..2000 {
-        reference[i] = 1u8;
-    }
+    reference[123..789].fill(1u8);
+    reference[1023..1889].fill(1u8);
+    reference[1901..2000].fill(1u8);
     reference[size - 1] = 1;
 
     let mut diff = vec![0; size + 16];
     let intvs = &[(0, size as u32)];
     let diff_len = construct_diff(&mut diff, &mapping, intvs, &mut reference[..], 0);
     println!("diff len (from fd): {}", diff_len);
-    apply_diff(&diff[..diff_len], 0, &mapping, 0, &mut reference).unwrap();
+    apply_diff(&diff[..diff_len], 0, &mapping, 0, reference).unwrap();
 
     assert!(reference.iter().all(|x| *x == 0));
 }
@@ -813,7 +807,7 @@ fn test_buffer_replication() {
 fn test_memory_replication() {
     use crate::util::AlignedArray;
 
-    fn test_pattern(name: &str, diff_start_pos: usize, fill: &dyn Fn(&mut [u8]) -> ()) {
+    fn test_pattern(name: &str, diff_start_pos: usize, fill: &dyn Fn(&mut [u8])) {
         let size = 4096;
         let mut mem_arr = AlignedArray::new(size);
         let mut reference_arr = AlignedArray::new(size);

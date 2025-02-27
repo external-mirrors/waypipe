@@ -380,8 +380,8 @@ pub fn lz4_decompress_to_slice(input: &[u8], dst: &mut [u8]) -> Option<()> {
 #[test]
 fn test_zstd_compression() {
     let mut x: Vec<u8> = vec![0; 1000];
-    for i in 0..x.len() {
-        x[i] = ((11 * i) % 256) as u8;
+    for (i, v) in x.iter_mut().enumerate() {
+        *v = ((11 * i) % 256) as u8;
     }
     let mut c = zstd_make_cctx().unwrap();
     let w = zstd_compress_to_vec(&mut c, &x[..], 0, 16, 4);
@@ -394,8 +394,8 @@ fn test_zstd_compression() {
 #[test]
 fn test_lz4_compression() {
     let mut x: Vec<u8> = vec![0; 1000];
-    for i in 0..x.len() {
-        x[i] = ((11 * i) % 256) as u8;
+    for (i, v) in x.iter_mut().enumerate() {
+        *v = ((11 * i) % 256) as u8;
     }
     let mut c = lz4_make_cctx().unwrap();
     let w = lz4_compress_to_vec(&mut c, &x[..], 0, 16, 4);

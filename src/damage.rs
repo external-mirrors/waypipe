@@ -340,9 +340,9 @@ fn test_union_damage() {
     let bad1: &[(usize, usize)] = &[(8, 10), (15, 20)];
     let bad2: &[(usize, usize)] = &[(8, 10), (12, 20)];
     let bad3: &[(usize, usize)] = &[(8, 10), (6, 20)];
-    assert!(!validate_output(bad1, align_bits, max_gap).is_ok());
-    assert!(!validate_output(bad2, align_bits, max_gap).is_ok());
-    assert!(!validate_output(bad3, align_bits, max_gap).is_ok());
+    assert!(validate_output(bad1, align_bits, max_gap).is_err());
+    assert!(validate_output(bad2, align_bits, max_gap).is_err());
+    assert!(validate_output(bad3, align_bits, max_gap).is_err());
 
     let output = union_damage(x, y, max_gap);
     println!("output: {:?}", output);
@@ -473,7 +473,7 @@ fn test_damage_computation() {
         let mut tmp = rects;
         let slices = compute_damaged_segments(&mut tmp, align_bits, min_gap, 0, stride, bpp);
 
-        let ncover = slices.iter().map(|(x, y)| (y - x) as usize).sum::<usize>();
+        let ncover = slices.iter().map(|(x, y)| y - x).sum::<usize>();
         println!(
             "test {}, {} rects, {} slices, {} filled, {} covered",
             i,

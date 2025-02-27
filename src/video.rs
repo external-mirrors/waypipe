@@ -3053,7 +3053,7 @@ fn fill_with_color(w: usize, h: usize, format: u32, color: (f32, f32, f32)) -> V
             .iter()
             .cycle()
             .take(pattern.len() * len)
-            .map(|x| *x)
+            .copied()
             .collect()
     }
 
@@ -3158,10 +3158,8 @@ fn test_video(try_hardware: bool) {
                         format_modifiers.push((*f, *m, first));
                         first = false;
                     }
-                } else {
-                    if let [m, ..] = vulk.get_supported_modifiers(*f) {
-                        format_modifiers.push((*f, *m, true));
-                    }
+                } else if let [m, ..] = vulk.get_supported_modifiers(*f) {
+                    format_modifiers.push((*f, *m, true));
                 }
             }
 
