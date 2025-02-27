@@ -352,6 +352,12 @@ struct FromWayland<'a> {
     output: TransferQueue<'a>,
 }
 
+/** Structure containing semaphores to wait on before reading from a DMABUF. */
+struct ExplicitSyncAcquires {
+    explicit: Vec<(Arc<VulkanTimelineSemaphore>, u64)>,
+    implicit: Option<VulkanBinarySemaphore>,
+}
+
 /** Task to compute the changes for a shared memory file */
 struct DiffTask {
     rid: Rid,
@@ -378,8 +384,7 @@ struct DiffDmabufTask {
     img: Arc<VulkanDmabuf>,
     mirror: Arc<Mirror>,
     view_row_stride: Option<u32>,
-    acquires: Vec<(Arc<VulkanTimelineSemaphore>, u64)>,
-    implicit_semaphore: Option<VulkanBinarySemaphore>,
+    acquires: ExplicitSyncAcquires,
 }
 
 enum ReadDmabufResult {
@@ -413,8 +418,7 @@ struct FillDmabufTask {
     mirror: Option<Arc<Mirror>>,
     dst: Arc<VulkanDmabuf>,
     view_row_stride: Option<u32>,
-    acquires: Vec<(Arc<VulkanTimelineSemaphore>, u64)>,
-    implicit_semaphore: Option<VulkanBinarySemaphore>,
+    acquires: ExplicitSyncAcquires,
 }
 
 /** Task to copy data for a DMABUF: final step to construct and compress message */
@@ -434,6 +438,7 @@ struct VideoEncodeTask {
     vulk: Arc<VulkanDevice>,
     state: Arc<VideoEncodeState>,
     remote_id: Rid,
+    acquires: ExplicitSyncAcquires,
 }
 /** Task to apply a video packet to a DMABUF */
 struct VideoDecodeTask {
@@ -2189,10 +2194,34 @@ fn collect_updates(
                 }
                 data.damage = Damage::Intervals(Vec::new());
 
+                let mut acquires = Vec::new();
+                for acq in data.acquires.drain(..) {
+                    let (pt, sfd) = acq;
+                    let b = sfd.borrow_mut();
+                    let ShadowFdVariant::Timeline(ref timeline_data) = &b.data else {
+                        panic!("Expected timeline sfd");
+                    };
+                    acquires.push((timeline_data.timeline.clone(), pt));
+                }
+                let mut implicit_semaphore = None;
+                if data.using_implicit_sync {
+                    data.using_implicit_sync = false;
+                    /* Using implicit sync, so export a sync file to be waited on */
+                    if let DmabufImpl::Vulkan(ref vulk_buf) = data.buf {
+                        if let Some(sync_file) = vulk_buf.export_sync_file()? {
+                            implicit_semaphore = Some(sync_file.export_binary_semaphore()?);
+                        }
+                    }
+                }
+
                 let task = VideoEncodeTask {
                     remote_id: sfd.remote_id,
                     vulk: buf.vulk.clone(),
                     state: vid_enc.clone(),
+                    acquires: ExplicitSyncAcquires {
+                        explicit: acquires,
+                        implicit: implicit_semaphore,
+                    },
                 };
                 tasksys
                     .tasks
@@ -2316,8 +2345,10 @@ fn collect_updates(
                                 mirror: data.mirror.clone(),
                                 dst: vulk_buf.clone(),
                                 view_row_stride: data.view_row_stride,
-                                acquires: acquires.clone(),
-                                implicit_semaphore,
+                                acquires: ExplicitSyncAcquires {
+                                    explicit: acquires.clone(),
+                                    implicit: implicit_semaphore,
+                                },
                             })
                         }
                         DmabufImpl::Gbm(_) => WorkTask::FillDmabuf2(FillDmabufTask2 {
@@ -2379,8 +2410,10 @@ fn collect_updates(
                                 mirror: data.mirror.as_ref().unwrap().clone(),
                                 img: vulk_buf.clone(),
                                 view_row_stride: data.view_row_stride,
-                                acquires: acquires.clone(),
-                                implicit_semaphore,
+                                acquires: ExplicitSyncAcquires {
+                                    explicit: acquires.clone(),
+                                    implicit: implicit_semaphore,
+                                },
                             })
                         }
                         DmabufImpl::Gbm(_) => todo!(),
@@ -2770,11 +2803,6 @@ fn run_diff_dmabuf_task(
     let buf_len = start + task.trailing;
     let read_buf = Arc::new(vulkan_get_buffer(&task.img.vulk, buf_len as usize, true)?);
 
-    let binary_semaphores = if let Some(ref f) = task.implicit_semaphore {
-        std::slice::from_ref(f)
-    } else {
-        &[]
-    };
     /* Extract data into staging buffer */
     let handle = start_copy_segments_from_dmabuf(
         &task.img,
@@ -2782,8 +2810,8 @@ fn run_diff_dmabuf_task(
         pool,
         &segments[..],
         task.view_row_stride,
-        &task.acquires[..],
-        binary_semaphores,
+        &task.acquires.explicit[..],
+        task.acquires.implicit.as_slice(),
     )?;
     let pt = handle.get_timeline_point();
     cache.copy_ops.push(handle);
@@ -2926,11 +2954,6 @@ fn run_fill_dmabuf_task(
     let space = task.region_end - task.region_start;
     let read_buf = Arc::new(vulkan_get_buffer(&task.dst.vulk, space as usize, true)?);
 
-    let binary_semaphores = if let Some(ref f) = task.implicit_semaphore {
-        std::slice::from_ref(f)
-    } else {
-        &[]
-    };
     /* Extract data into staging buffer */
     let handle = start_copy_segments_from_dmabuf(
         &task.dst,
@@ -2938,8 +2961,8 @@ fn run_fill_dmabuf_task(
         pool,
         &[(0, task.region_start, task.region_end)],
         task.view_row_stride,
-        &task.acquires[..],
-        binary_semaphores,
+        &task.acquires.explicit[..],
+        task.acquires.implicit.as_slice(),
     )?;
     let pt = handle.get_timeline_point();
     cache.copy_ops.push(handle);
@@ -3586,7 +3609,12 @@ fn run_apply_task(task: &ApplyTask, cache: &mut ThreadCache) -> TaskResult {
 /** Run a [VideoEncodeTask] */
 fn run_encode_task(task: VideoEncodeTask, cache: &mut ThreadCache) -> TaskResult {
     let pool: &Arc<VulkanCommandPool> = cache.get_cmd_pool(&task.vulk)?;
-    let packet = start_dmavid_encode(&task.state, pool)?;
+    let packet = start_dmavid_encode(
+        &task.state,
+        pool,
+        &task.acquires.explicit[..],
+        task.acquires.implicit.as_slice(),
+    )?;
 
     let npadding = align4(packet.len()) - packet.len();
     let update_header = cat2x4(

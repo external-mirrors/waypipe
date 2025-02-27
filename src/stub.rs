@@ -305,6 +305,8 @@ mod video_stub {
     pub fn start_dmavid_encode(
         state: &Arc<VideoEncodeState>,
         pool: &Arc<VulkanCommandPool>,
+        wait_semaphores: &[(Arc<VulkanTimelineSemaphore>, u64)],
+        wait_binary_semaphores: &[VulkanBinarySemaphore],
     ) -> Result<Vec<u8>, String> {
         unreachable!();
     }

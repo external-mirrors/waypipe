@@ -2261,6 +2261,8 @@ pub fn setup_video_encode(
 pub fn start_dmavid_encode_hw(
     state: &Arc<VideoEncodeState>,
     pool: &Arc<VulkanCommandPool>,
+    wait_semaphores: &[(Arc<VulkanTimelineSemaphore>, u64)],
+    wait_binary_semaphores: &[VulkanBinarySemaphore],
 ) -> Result<Vec<u8>, String> {
     let vulk: &VulkanDevice = &state.target.vulk;
     let video = vulk.video.as_ref().unwrap();
@@ -2304,8 +2306,12 @@ pub fn start_dmavid_encode_hw(
             .all(|x| vk::Image::from_raw(*x as _).is_null()));
 
         /* Blocking wait for semaphores; remove this later */
-        let wait_sems = &[vk::Semaphore::from_raw(vkframe.sem[0] as _)];
-        let wait_values = &[vkframe.sem_value[0]];
+        let mut wait_sems = vec![vk::Semaphore::from_raw(vkframe.sem[0] as _)];
+        let mut wait_values = vec![vkframe.sem_value[0]];
+        wait_sems.extend(wait_semaphores.iter().map(|x| x.0.semaphore));
+        wait_values.extend(wait_semaphores.iter().map(|x| x.1));
+        wait_sems.extend(wait_binary_semaphores.iter().map(|x| x.semaphore));
+        wait_values.extend(wait_binary_semaphores.iter().map(|_| u64::MAX));
 
         let init_layout = vkframe.layout[0];
         let dst_img = vk::Image::from_raw(vkframe.img[0] as _);
@@ -2582,7 +2588,7 @@ pub fn start_dmavid_encode_hw(
 
         /* Wait for _everything_ to complete -- do not know if graphics/compute/decode is last */
         // vkframe.access not used?
-        let waitv_stage_flags = &[vk::PipelineStageFlags::ALL_COMMANDS];
+        let waitv_stage_flags = vec![vk::PipelineStageFlags::ALL_COMMANDS; wait_values.len()];
         let cbs = &[cb];
 
         vkframe.sem_value[0] += 1;
@@ -2592,12 +2598,12 @@ pub fn start_dmavid_encode_hw(
         let signal_semaphores = &[wait_sems[0]];
 
         let mut wait_timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-            .wait_semaphore_values(wait_values)
+            .wait_semaphore_values(&wait_values)
             .signal_semaphore_values(signal_values);
         let submits = &[vk::SubmitInfo::default()
             .command_buffers(cbs)
-            .wait_semaphores(wait_sems)
-            .wait_dst_stage_mask(waitv_stage_flags)
+            .wait_semaphores(&wait_sems)
+            .wait_dst_stage_mask(&waitv_stage_flags)
             .signal_semaphores(signal_semaphores)
             .push_next(&mut wait_timeline_info)];
 
@@ -2642,6 +2648,8 @@ pub fn start_dmavid_encode_hw(
 pub fn start_dmavid_encode_sw(
     state: &Arc<VideoEncodeState>,
     pool: &Arc<VulkanCommandPool>,
+    wait_semaphores: &[(Arc<VulkanTimelineSemaphore>, u64)],
+    wait_binary_semaphores: &[VulkanBinarySemaphore],
 ) -> Result<Vec<u8>, String> {
     let vulk: &VulkanDevice = &state.target.vulk;
     let video = vulk.video.as_ref().unwrap();
@@ -2918,13 +2926,24 @@ pub fn start_dmavid_encode_sw(
         /* Wait for _everything_ to complete -- do not know if graphics/compute/decode is last */
         let cbs = &[cb];
 
+        // todo: deduplicate with `start_copy_segments_from_dmabuf`, and structure to reduce allocations
+        let mut waitv_values: Vec<u64> = wait_semaphores.iter().map(|x| x.1).collect();
+        let mut waitv_semaphores: Vec<vk::Semaphore> =
+            wait_semaphores.iter().map(|x| x.0.semaphore).collect();
+        for bs in wait_binary_semaphores {
+            waitv_values.push(u64::MAX);
+            waitv_semaphores.push(bs.semaphore);
+        }
+        let mut waitv_stage_flags = Vec::new();
+        waitv_stage_flags.resize(waitv_semaphores.len(), vk::PipelineStageFlags::ALL_COMMANDS);
+
         let mut wait_timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-            .wait_semaphore_values(&[])
+            .wait_semaphore_values(&waitv_values)
             .signal_semaphore_values(&[]);
         let submits = &[vk::SubmitInfo::default()
             .command_buffers(cbs)
-            .wait_semaphores(&[])
-            .wait_dst_stage_mask(&[])
+            .wait_semaphores(&waitv_semaphores)
+            .wait_dst_stage_mask(&waitv_stage_flags)
             .signal_semaphores(&[])
             .push_next(&mut wait_timeline_info)];
 
@@ -3004,11 +3023,13 @@ pub fn start_dmavid_encode_sw(
 pub fn start_dmavid_encode(
     state: &Arc<VideoEncodeState>,
     pool: &Arc<VulkanCommandPool>,
+    wait_semaphores: &[(Arc<VulkanTimelineSemaphore>, u64)],
+    wait_binary_semaphores: &[VulkanBinarySemaphore],
 ) -> Result<Vec<u8>, String> {
     if matches!(state.data, VideoEncodeStateData::SW) {
-        start_dmavid_encode_sw(state, pool)
+        start_dmavid_encode_sw(state, pool, wait_semaphores, wait_binary_semaphores)
     } else {
-        start_dmavid_encode_hw(state, pool)
+        start_dmavid_encode_hw(state, pool, wait_semaphores, wait_binary_semaphores)
     }
 }
 
@@ -3210,7 +3231,7 @@ fn test_video(try_hardware: bool) {
 
                         copy_onto_dmabuf(&dmabuf1, &copy1, &data).unwrap();
 
-                        let packet = start_dmavid_encode(&enc_state, &pool).unwrap();
+                        let packet = start_dmavid_encode(&enc_state, &pool, &[], &[]).unwrap();
 
                         let vid_op = start_dmavid_apply(&dec_state, &pool, &packet).unwrap();
                         vid_op.wait_until_done().unwrap();

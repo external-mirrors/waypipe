@@ -104,7 +104,7 @@ pub struct VulkanSyncFile {
 /** A binary semaphore (e.g.: resulting from DMABUF's exported implicit sync file) */
 pub struct VulkanBinarySemaphore {
     vulk: Arc<VulkanDevice>,
-    semaphore: vk::Semaphore,
+    pub semaphore: vk::Semaphore,
 }
 
 pub struct VulkanCommandPool {
