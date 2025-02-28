@@ -3314,10 +3314,8 @@ pub fn process_way_msg(
             };
 
             let dev = parse_evt_ext_image_copy_capture_session_v1_dmabuf_device(msg)?;
-            let Ok(dev_bytes): Result<[u8; 8], _> = dev.try_into() else {
-                return Err(tag!("Invalid dev_t length"));
-            };
-            let main_device = u64::from_le_bytes(dev_bytes);
+            let main_device = parse_dev_array(dev)
+                .ok_or_else(|| tag!("Unexpected size for dev_t: {}", dev.len()))?;
             session.dmabuf_device = Some(main_device);
 
             /* Drop message; will be recreated when ::done arrives */
