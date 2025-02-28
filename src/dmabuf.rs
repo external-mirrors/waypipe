@@ -2806,7 +2806,8 @@ impl VulkanCopyHandle {
 
 pub fn get_dev_for_drm_node_path(path: &PathBuf) -> Result<u64, String> {
     let r = nix::sys::stat::stat(path).map_err(|_| "Failed to get device for drm node path")?;
-    Ok(r.st_rdev)
+    #[allow(clippy::useless_conversion)]
+    Ok(r.st_rdev.into())
 }
 
 impl VulkanDevice {

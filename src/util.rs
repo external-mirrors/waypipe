@@ -609,8 +609,8 @@ pub fn list_render_device_ids() -> Vec<u64> {
             continue;
         };
         /* st_rdev size varies by platform, is <= 8 and typically =8 */
-        #[allow(clippy::unnecessary_cast)]
-        dev_ids.push(result.st_rdev as u64);
+        #[allow(clippy::useless_conversion)]
+        dev_ids.push(result.st_rdev.into());
     }
     dev_ids
 }

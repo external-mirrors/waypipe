@@ -977,10 +977,10 @@ pub fn list_vulkan_device_ids() -> Vec<(String, u64)> {
             continue;
         };
         /* st_rdev may be u32 on old architectures */
-        #[allow(clippy::unnecessary_cast)]
+        #[allow(clippy::useless_conversion)]
         dev_ids.push((
             entry.file_name().into_string().unwrap(),
-            result.st_rdev as u64,
+            result.st_rdev.into(),
         ));
     }
     dev_ids
