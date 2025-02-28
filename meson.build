@@ -103,12 +103,12 @@ if get_option('build_rs')
     )
     libavutil = dependency(
         'libavutil',
-        version: '>=59.39.100',
+        version: '>=58.11.100',
         required: get_option('with_video'),
     )
     libavcodec = dependency(
         'libavcodec',
-        version: '>=61.19.100',
+        version: '>=59.0.100',
         required: get_option('with_video'),
     )
     if bindgen.found() and libavcodec.found() and libavutil.found() and glslc.found()
