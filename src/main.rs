@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+/*! Main executable for Waypipe, handles all subcommands. */
 use clap::{value_parser, Arg, ArgAction, Command};
 use log::{debug, error, Log, Record};
 use nix::errno::Errno;
@@ -1488,6 +1489,7 @@ const VERSION_STRING_CARGO: &str = concat!(
     "\n  video: ",
     cfg!(feature = "video"),
 );
+/** String providing Waypipe's version and which features it has */
 pub const VERSION_STRING: &str = match option_env!("WAYPIPE_VERSION") {
     Some(x) => x,
     None => VERSION_STRING_CARGO,

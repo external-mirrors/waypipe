@@ -28,15 +28,19 @@ struct VulkanComputePipeline {
     pipeline: vk::Pipeline,
 }
 
+/** The preferred hardware and software decoders and encoders for a format.
+ * Entries may be null if the codec is not available, and the same AVCodec may
+ * be used for both software and hardware video.
+ */
 struct CodecSet {
-    /* preferred hardware and software decoders; may be null if not available,
-     * and values may repeat if the same AVCodec works for both hardware + software video */
     decoder: *const AVCodec,
     sw_decoder: *const AVCodec,
     encoder: *const AVCodec,
     sw_encoder: *const AVCodec,
 }
 
+/** Structure holding all video-related state (ffmpeg bindings, devices, pipelines, etc.)
+ * linked to a specific Vulkan logical device. */
 pub struct VulkanVideo {
     bindings: ffmpeg,
     av_hwdevice: *mut AVBufferRef, // to AVHWDeviceContext
@@ -285,6 +289,7 @@ impl VulkanDecodeOpHandle {
     }
 }
 
+/** Return the length (excluding trailing 0) of a 0-terminated string. */
 unsafe fn strlen(s: *const c_char) -> usize {
     for i in 0.. {
         if s.add(i).read() == 0 {

@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+/** Properties of a specific format+modifier combination */
 #[derive(Debug)]
 pub struct ModifierData {
     pub plane_count: u32,
@@ -33,18 +34,23 @@ pub struct FormatData {
     modifier_data: Vec<ModifierData>,
 }
 
+/** Structure holding a queue and associated mutable metadata */
 pub struct VulkanQueue {
-    /* mutable globals for which access must be externally synchronized */
+    /** Queue object, for which access must be externally synchronized */
     pub queue: vk::Queue,
-    /* The last semaphore value planned to be signalled by a submission to the queue */
+    /** The last semaphore value planned to be signalled by a submission to the queue */
     pub last_semaphore_value: u64,
 }
 
+/** MutexGuard for a VulkanQueue.
+ *
+ * Unlocks the ffmpeg lock for the queue when dropped. */
 pub struct VulkanQueueGuard<'a> {
     pub inner: MutexGuard<'a, VulkanQueue>,
     vulk: &'a VulkanDevice,
 }
 
+/** A Vulkan entrypoint, instance, and associated information. */
 pub struct VulkanInstance {
     entry: Entry,
     instance: Instance,
@@ -52,6 +58,8 @@ pub struct VulkanInstance {
     physdevs: Vec<DeviceInfo>,
 }
 
+/** A Vulkan logical device, with its associated state, main queue and timeline semaphore,
+ * extensions, and cached properties. */
 pub struct VulkanDevice {
     _instance: Arc<VulkanInstance>,
 
@@ -88,6 +96,7 @@ pub struct VulkanDevice {
     memory_properties: vk::PhysicalDeviceMemoryProperties,
 }
 
+/** A Vulkan timeline semaphore and the eventfd used to wait for updates on it */
 pub struct VulkanTimelineSemaphore {
     pub vulk: Arc<VulkanDevice>,
     pub semaphore: vk::Semaphore,
@@ -107,16 +116,19 @@ pub struct VulkanBinarySemaphore {
     pub semaphore: vk::Semaphore,
 }
 
+/** A Vulkan command pool */
 pub struct VulkanCommandPool {
     pub vulk: Arc<VulkanDevice>,
     pub pool: Mutex<vk::CommandPool>,
 }
 
+/** Mutable state for a [VulkanDmabuf] */
 pub struct VulkanDmabufInner {
     // TODO: need to store metadata about all pending operations to the dmabuf
     pub image_layout: vk::ImageLayout,
 }
 
+/** Structure for a Vulkan image imported from/exported to a DMABUF */
 pub struct VulkanDmabuf {
     // No RefCell -- unsafe is used throughout anyway, exclusivity is not needed, and no recursion should be done
     pub vulk: Arc<VulkanDevice>,
@@ -142,13 +154,14 @@ pub struct VulkanDmabuf {
     pub inner: Mutex<VulkanDmabufInner>,
 }
 
+/** Data for a [VulkanBuffer] which is mutable or requires exclusive access. */
 struct VulkanBufferInner {
     data: *mut c_void,
     reader_count: usize,
     has_writer: bool,
 }
 
-/* A mapped staging buffer, either for use when reading or writing data */
+/** A mapped staging buffer, either for use when reading or writing data */
 pub struct VulkanBuffer {
     pub vulk: Arc<VulkanDevice>,
 
@@ -165,7 +178,7 @@ pub struct VulkanBuffer {
 unsafe impl Send for VulkanBuffer {}
 unsafe impl Sync for VulkanBuffer {}
 
-// TODO: VulkanCopyHandle must live at least as long as the originating VulkanCopy and VulkanDmabuf
+/** Handle storing (and keeping alive) command buffer for a transfer between a [VulkanBuffer] and a [VulkanDmabuf] */
 pub struct VulkanCopyHandle {
     vulk: Arc<VulkanDevice>,
     /* Copy operation is between these two objects */
@@ -285,6 +298,8 @@ impl Drop for VulkanCopyHandle {
     }
 }
 
+/** Function to use to lock the main queue; will ensure queue is also locked
+ * for ffmpeg, if video encoding/decoding is enabled. */
 pub fn vulkan_lock_queue(vulk: &VulkanDevice) -> VulkanQueueGuard<'_> {
     /* Lock order: vulk.queue before video lock */
     let inner = vulk.queue.lock().unwrap();
@@ -313,7 +328,7 @@ fn exts_has_prop(exts: &[vk::ExtensionProperties], name: &CStr, version: u32) ->
         .any(|x| x.extension_name_as_c_str().unwrap() == name && x.spec_version >= version)
 }
 
-// Additional information for vulkan formats
+/** Additional information for Vulkan formats */
 pub struct FormatLayoutInfo {
     pub bpp: u32,
     pub planes: usize,
@@ -327,6 +342,10 @@ pub struct FormatLayoutInfo {
 
 // TODO: determine if it is worth it to deduplicate shm and dmabuf format information.
 // (the code pathways will probably become very different.)
+/** List of Vulkan formats which Waypipe supports.
+ *
+ * Since channel interpretations do not affect processing, multiple DRM formats may
+ * be mapped onto a single Vulkan format. */
 const SUPPORTED_FORMAT_LIST: &[vk::Format] = &[
     vk::Format::R4G4B4A4_UNORM_PACK16,
     vk::Format::R5G6B5_UNORM_PACK16,
@@ -342,6 +361,7 @@ const SUPPORTED_FORMAT_LIST: &[vk::Format] = &[
     vk::Format::G8_B8_R8_3PLANE_444_UNORM,
 ];
 
+/** Get properties of a [vk::Format] */
 pub fn get_vulkan_info(f: vk::Format) -> FormatLayoutInfo {
     match f {
         vk::Format::R4G4B4A4_UNORM_PACK16 => FormatLayoutInfo { bpp: 2, planes: 1 },
@@ -368,7 +388,9 @@ pub fn get_vulkan_info(f: vk::Format) -> FormatLayoutInfo {
     }
 }
 
-/* Wayland and DRM differ in encodings for Argb8888 and Xrgb8888 only */
+/** Convert a DRM fourcc format code to a Wayland format code.
+ *
+ * Wayland and DRM differ in encodings for Argb8888 and Xrgb8888 only */
 pub fn drm_to_wayland(drm_format: u32) -> u32 {
     if drm_format == fourcc('A', 'R', '2', '4') {
         WlShmFormat::Argb8888 as u32
@@ -379,6 +401,9 @@ pub fn drm_to_wayland(drm_format: u32) -> u32 {
     }
 }
 
+/** Convert a Wayland fourcc format code to a DRM format code.
+ *
+ * Wayland and DRM differ in encodings for Argb8888 and Xrgb8888 only */
 #[allow(dead_code)]
 #[cfg(any(test, feature = "test_proto"))]
 pub const fn wayland_to_drm(wl_format: WlShmFormat) -> u32 {
@@ -389,8 +414,11 @@ pub const fn wayland_to_drm(wl_format: WlShmFormat) -> u32 {
     }
 }
 
-/* Convert a DRM fourcc format to a canonical Vulkan format with an equivalent layout
- * (but possibly different channel names -- those can be either ignored or fixed by swizzling.) The other direction should _never_ be necessary. */
+/** Convert a DRM fourcc format to a canonical Vulkan format with an equivalent layout
+ * (but possibly different channel names -- those can be either ignored or fixed by swizzling.)
+ *
+ * (The other direction is not well defined, because _multiple_ DRM formats may map
+ * onto a Vulkan format.) */
 pub fn drm_to_vulkan(drm_format: u32) -> Option<vk::Format> {
     use WlShmFormat::*;
     if drm_format == 0 || drm_format == 1 {
@@ -452,6 +480,8 @@ pub fn drm_to_vulkan(drm_format: u32) -> Option<vk::Format> {
 }
 
 /* Definitions from drm.h and linux/dma-buf.h */
+
+/** Construct IOCTL request parameter. */
 const fn drm_iowr<T>(typ: u32, code: u8) -> u32 {
     /* linux/ioctl.h */
     let size = std::mem::size_of::<T>() as u32;
@@ -512,6 +542,7 @@ unsafe fn ioctl_loop(
     }
 }
 
+/** Link a drm syncobj handle and time point to an eventfd */
 fn drm_syncobj_eventfd(
     drm_fd: &OwnedFd,
     event_fd: &OwnedFd,
@@ -536,6 +567,7 @@ fn drm_syncobj_eventfd(
         )
     }
 }
+/** Convert a DRM syncobj fd to a handle */
 fn drm_syncobj_fd_to_handle(drm_fd: &OwnedFd, syncobj_fd: &OwnedFd) -> Result<u32, String> {
     let mut x = DrmSyncobjHandle {
         handle: 0,
@@ -556,7 +588,9 @@ fn drm_syncobj_fd_to_handle(drm_fd: &OwnedFd, syncobj_fd: &OwnedFd) -> Result<u3
     }
 }
 
-/* To get full IO-safety for DRM handles, would need an OwnedDrmHandle
+/** Destroy a drm syncobj handle.
+ *
+ * To get full IO-safety for DRM handles, would need an OwnedDrmHandle
  * wrapper. As-is, the caller should only call this on syncobj handles
  * it exclusively controls. */
 fn drm_syncobj_destroy(drm_fd: &OwnedFd, handle: u32) -> Result<(), String> {
@@ -619,6 +653,7 @@ fn dmabuf_sync_file_export(dmabuf_fd: &OwnedFd) -> Result<Option<OwnedFd>, Strin
     }
 }
 
+/** Identify the maximum supported image extents for a given format-modifier pair */
 fn get_max_external_image_size(
     instance: &Instance,
     physdev: vk::PhysicalDevice,
@@ -657,7 +692,9 @@ fn get_max_external_image_size(
     }
 }
 
-/* Lower values are assumed better */
+/** Rank physical devices by performance and video enc/decoding capabilities.
+ *
+ * Lower values are assumed better */
 fn device_rank(info: &DeviceInfo) -> u8 {
     let base_score = match info.typ {
         vk::PhysicalDeviceType::DISCRETE_GPU => 0,
@@ -673,6 +710,7 @@ fn device_rank(info: &DeviceInfo) -> u8 {
     base_score * 4 + ((!hw_enc) as u8) + 2 * ((!hw_dec) as u8)
 }
 
+/** Basic information about a [vk::PhysicalDevice] */
 #[derive(Copy, Clone)]
 pub struct DeviceInfo {
     physdev: vk::PhysicalDevice,
@@ -684,12 +722,14 @@ pub struct DeviceInfo {
     pub hw_dec_av1: bool,
 }
 
+/** List of instance extensions that Waypipe requires */
 const INSTANCE_EXTS: &[*const c_char] = &[
     vk::KHR_GET_PHYSICAL_DEVICE_PROPERTIES2_NAME.as_ptr(), // needed to link device and DRM node
     vk::KHR_EXTERNAL_MEMORY_CAPABILITIES_NAME.as_ptr(),    // needed for buffer import/export
     vk::KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_NAME.as_ptr(), // needed to export/poll on timeline semaphores
 ];
 
+/** List of device extensions that Waypipe requires */
 const EXT_LIST: &[(&CStr, u32)] = &[
     (
         /* Needed to get drm node details */
@@ -724,29 +764,38 @@ const EXT_LIST: &[(&CStr, u32)] = &[
     /* Needed by external_semaphore_fd */
     (vk::KHR_EXTERNAL_SEMAPHORE_NAME, 1),
 ];
-/* Require the latest known version for video related extensions,
- * to be safe, because AVVulkanDeviceContext is only given extension
- * names and not their versions. */
+
+/** List of device extensions required to support hardware video encoding. */
 const EXT_LIST_VIDEO_ENC_BASE: &[(&CStr, u32)] = &[(
     vk::KHR_VIDEO_ENCODE_QUEUE_NAME,
     vk::KHR_VIDEO_ENCODE_QUEUE_SPEC_VERSION,
 )];
+/** List of device extensions required for hardware video encoding with H.264 */
 const EXT_VIDEO_ENC_H264: (&CStr, u32) = (
     vk::KHR_VIDEO_ENCODE_H264_NAME,
     vk::KHR_VIDEO_ENCODE_H264_SPEC_VERSION,
 );
+/** List of device extensions required to support hardware video decoding. */
 const EXT_LIST_VIDEO_DEC_BASE: &[(&CStr, u32)] = &[(
     vk::KHR_VIDEO_DECODE_QUEUE_NAME,
     vk::KHR_VIDEO_DECODE_QUEUE_SPEC_VERSION,
 )];
+/** List of device extensions required for hardware video decoding with H.264 */
 const EXT_VIDEO_DEC_H264: (&CStr, u32) = (
     vk::KHR_VIDEO_DECODE_H264_NAME,
     vk::KHR_VIDEO_DECODE_H264_SPEC_VERSION,
 );
+/** List of device extensions required for hardware video decoding with AV1 */
 const EXT_VIDEO_DEC_AV1: (&CStr, u32) = (
     vk::KHR_VIDEO_DECODE_AV1_NAME,
     vk::KHR_VIDEO_DECODE_AV1_SPEC_VERSION,
 );
+/** List of device extensions required at minimum for hardware video
+ * encoding or decoding.
+ *
+ * Require the latest known version for video related extensions,
+ * to be safe, because AVVulkanDeviceContext is only given extension
+ * names and not their versions.*/
 const EXT_LIST_VIDEO_BASE: &[(&CStr, u32)] = &[
     (vk::KHR_VIDEO_QUEUE_NAME, vk::KHR_VIDEO_QUEUE_SPEC_VERSION),
     /* Also required, for ffmpeg's vkQueueSubmit2 */
@@ -1020,6 +1069,9 @@ impl VulkanInstance {
     pub fn has_device(&self, main_device: Option<u64>) -> bool {
         self.pick_device(main_device).is_some()
     }
+    /** If `main_device` is None, provide device info for the "best" available
+     * device; otherwise, for the device with the specified ID, if available.
+     */
     fn pick_device(&self, main_device: Option<u64>) -> Option<&DeviceInfo> {
         if let Some(d) = main_device {
             for x in &self.physdevs {
@@ -1044,6 +1096,8 @@ impl VulkanInstance {
     }
 }
 
+/** Return a vector listing all extensions that should be enabled for
+ * the device. (Pointers are constants / from &'static CStr.) */
 fn get_enabled_exts(dev_info: &DeviceInfo) -> Vec<*const c_char> {
     let mut enabled_exts: Vec<*const c_char> = Vec::new();
     // TODO: use a static (stack) array instead, since max number of extensions is small
@@ -1488,6 +1542,7 @@ pub fn qfot_release_image_memory_barrier(
         .subresource_range(standard_access_range)
 }
 
+/** Image aspect flags for the `x`th memory plane. */
 fn memory_plane(x: usize) -> vk::ImageAspectFlags {
     match x {
         0 => vk::ImageAspectFlags::MEMORY_PLANE_0_EXT,
@@ -1498,6 +1553,10 @@ fn memory_plane(x: usize) -> vk::ImageAspectFlags {
     }
 }
 
+/** Create a CPU-visible buffer.
+ *
+ * If `read_optimized` is true, the buffer _may_ be allocated in a fashion allowing
+ * for more efficient reads than otherwise. */
 fn create_cpu_visible_buffer(
     vulk: &VulkanDevice,
     size: usize,
@@ -1567,6 +1626,10 @@ fn create_cpu_visible_buffer(
     }
 }
 
+/** Get a CPU-visible buffer of at least the specified length.
+ *
+ * If `read_optimized` is true, the buffer _may_ be allocated in a fashion allowing
+ * for more efficient reads than otherwise. */
 pub fn vulkan_get_buffer(
     vulk: &Arc<VulkanDevice>,
     nom_len: usize,
@@ -1596,6 +1659,7 @@ pub fn vulkan_get_buffer(
     }
 }
 
+/** Create a new command pool. */
 pub fn vulkan_get_cmd_pool(vulk: &Arc<VulkanDevice>) -> Result<Arc<VulkanCommandPool>, String> {
     let pool_info = vk::CommandPoolCreateInfo::default()
         .queue_family_index(vulk.queue_family)
@@ -1612,11 +1676,13 @@ pub fn vulkan_get_cmd_pool(vulk: &Arc<VulkanDevice>) -> Result<Arc<VulkanCommand
     }))
 }
 
+/** A & view of a [VulkanBuffer]'s mapped contents. */
 pub struct VulkanBufferReadView<'a> {
     buffer: &'a VulkanBuffer,
     pub data: &'a [u8],
 }
 
+/** A &mut view of a [VulkanBuffer]'s mapped contents. */
 pub struct VulkanBufferWriteView<'a> {
     buffer: &'a VulkanBuffer,
     pub data: &'a mut [u8],
@@ -1693,6 +1759,9 @@ impl Drop for VulkanBufferWriteView<'_> {
     }
 }
 
+/** Import a [VulkanDmabuf] with specified dimensions and format
+ * from the given list of planes.
+ */
 pub fn vulkan_import_dmabuf(
     vulk: &Arc<VulkanDevice>,
     planes: Vec<AddDmabufPlane>, // takes ownership, consumes fd. TODO: proper cleanup if this fails early
@@ -1936,7 +2005,10 @@ pub fn vulkan_import_dmabuf(
     }
 }
 
-/* Note: the planes do _not_ need to match the original's dimensions */
+/** Create a [VulkanDmabuf] and the the planes exported from it.
+ *
+ * (Note: plane parameters may not exactly match image dimensions.)
+ */
 pub fn vulkan_create_dmabuf(
     vulk: &Arc<VulkanDevice>,
     width: u32,
@@ -2190,6 +2262,7 @@ pub fn vulkan_create_dmabuf(
     }
 }
 
+/** Create a (nonblocking) eventfd. */
 fn make_evt_fd() -> Result<OwnedFd, String> {
     unsafe {
         let event_init: c_uint = 0;
@@ -2205,6 +2278,7 @@ fn make_evt_fd() -> Result<OwnedFd, String> {
     }
 }
 
+/** Import a Vulkan timeline semaphore from the given file descriptor. */
 pub fn vulkan_import_timeline(
     vulk: &Arc<VulkanDevice>,
     fd: OwnedFd,
@@ -2266,7 +2340,8 @@ pub fn vulkan_import_timeline(
         }))
     }
 }
-/* Pass in individual structures, since these may be created on setup */
+/** Helper function to create a timeline semaphore and matching drm syncobj,
+ * event_fd, and fd for export. */
 unsafe fn vulkan_create_timeline_parts(
     dev: &Device,
     ext_semaphore_fd: &khr::external_semaphore_fd::Device,
@@ -2323,6 +2398,8 @@ unsafe fn vulkan_create_timeline_parts(
     Ok((semaphore, semaphore_drm_handle, semaphore_fd, event_fd))
 }
 
+/** Create a new Vulkan timeline semaphore and matching exported file
+ * descriptor to share with another process */
 pub fn vulkan_create_timeline(
     vulk: &Arc<VulkanDevice>,
     start_pt: u64,
@@ -2348,6 +2425,10 @@ pub fn vulkan_create_timeline(
     }
 }
 
+/** Start a copy operation from the given dmabuf to a buffer.
+ *
+ * Related: [start_copy_segments_onto_dmabuf]
+ */
 pub fn start_copy_segments_from_dmabuf(
     img: &Arc<VulkanDmabuf>,
     copy: &Arc<VulkanBuffer>,
@@ -2640,11 +2721,15 @@ fn make_copy_regions(
     regions
 }
 
-/* Segment structure: src_start, dst_start, dst_end
+/** Start a copy operation from the given buffer to a dmabuf.
  *
- * Cost estimate: 100 segments once took 0.5msec to create and queue, while 1 took 0.1msec
+ * `segments` is a list of (src_start, dst_start, dst_end) tuples
  *
- * Releases: imported timeline semaphores to wait for until buffer is safe to modify
+ * This may be moderately slow; 100 segments once took 0.5msec to
+ * create and queue, while 1 took 0.1msec
+ *
+ * `wait_semaphores`: timeline semaphores and associated points to
+ * to wait for until buffer is safe to modify
  */
 pub fn start_copy_segments_onto_dmabuf(
     img: &Arc<VulkanDmabuf>,
@@ -2792,18 +2877,23 @@ pub fn start_copy_segments_onto_dmabuf(
 }
 
 impl VulkanCopyHandle {
-    /* Not recommended in general -- blocks the thread. Returns true if point reached. */
+    /** Blocks the thread until the copy operation has completed.
+     *
+     * (Should not be used except for test code, because it blocks.) */
     #[cfg(any(test, feature = "test_proto"))]
     pub fn wait_until_done(self: &VulkanCopyHandle) -> Result<(), String> {
         self.vulk
             .wait_for_timeline_pt(self.completion_time_point, u64::MAX)
             .map(|_| ())
     }
+    /** Get the point on the main timeline which will signaled once the copy
+     * operation has completed.*/
     pub fn get_timeline_point(self: &VulkanCopyHandle) -> u64 {
         self.completion_time_point
     }
 }
 
+/** Get the device id for the special file at `path`, cast to a u64. */
 pub fn get_dev_for_drm_node_path(path: &PathBuf) -> Result<u64, String> {
     let r = nix::sys::stat::stat(path).map_err(|_| "Failed to get device for drm node path")?;
     #[allow(clippy::useless_conversion)]
@@ -2811,9 +2901,12 @@ pub fn get_dev_for_drm_node_path(path: &PathBuf) -> Result<u64, String> {
 }
 
 impl VulkanDevice {
-    /* For indefinite delay, use u64::MAX ~585 years.
-     * Returns `true` if wait successful.
-     */
+    /** Wait until the main timeline semaphore has reached the given point,
+     * or `max_wait` nanoseconds have elapsed. (Note: u64::MAX corresponds to
+     * ~585 years and provides an effectively indefinite delay, assuming the
+     * clock does not jump very far forward.)
+     *
+     * Returns `true` if wait successful. */
     pub fn wait_for_timeline_pt(&self, pt: u64, max_wait: u64) -> Result<bool, String> {
         unsafe {
             let sem = &[self.semaphore];
@@ -2833,9 +2926,11 @@ impl VulkanDevice {
         }
     }
 
+    /** Return the device ID */
     pub fn get_device(&self) -> u64 {
         self.device_id
     }
+    /** Get the event_fd associated with the main timeline semaphore. */
     pub fn get_event_fd(&self, timeline_point: u64) -> Result<BorrowedFd, String> {
         drm_syncobj_eventfd(
             &self.drm_fd,
@@ -2846,6 +2941,7 @@ impl VulkanDevice {
         Ok(self.event_fd.as_fd())
     }
 
+    /** Return the timeline point for the main timeline semaphore for this device */
     pub fn get_current_timeline_pt(&self) -> Result<u64, String> {
         unsafe {
             self.timeline_semaphore
@@ -2854,12 +2950,13 @@ impl VulkanDevice {
         }
     }
 
+    /** Return whether a DMABUF with specified parameters can be imported. */
     pub fn can_import_image(
         &self,
         drm_format: u32,
         width: u32,
         height: u32,
-        planes: &[AddDmabufPlane],
+        planes: &[AddDmabufPlane], // todo: move modifier extraction out of the function
         can_store_and_sample: bool,
     ) -> bool {
         /* post linux-dmabuf version 5, all planes must have same modifier */
@@ -2884,6 +2981,7 @@ impl VulkanDevice {
         width as usize <= max_size.0 && height as usize <= max_size.1
     }
 
+    /** Return whether the device supports the given format */
     pub fn supports_format(&self, drm_format: u32, drm_modifier: u64) -> bool {
         let Some(vk_fmt) = drm_to_vulkan(drm_format) else {
             return false;
@@ -2894,7 +2992,7 @@ impl VulkanDevice {
         data.modifiers.contains(&drm_modifier)
     }
 
-    /* Returns empty vector if format is not supported; otherwise a list of permissible modifiers */
+    /** Returns empty vector if format is not supported; otherwise a list of permissible modifiers */
     pub fn get_supported_modifiers(&self, drm_format: u32) -> &[u64] {
         let Some(vk_fmt) = drm_to_vulkan(drm_format) else {
             return &[];
@@ -2907,8 +3005,10 @@ impl VulkanDevice {
 }
 
 impl VulkanDmabuf {
-    /* The total length of the canonical representation of the format */
-    /* If 'view_row_length' is not None, it specifies the row stride to use */
+    /** The total length of the canonical representation of the format
+     *
+     * If 'view_row_length' is not None, it specifies the row stride to use.
+     */
     pub fn nominal_size(self: &VulkanDmabuf, view_row_length: Option<u32>) -> usize {
         let format_info = get_vulkan_info(self.vk_format);
         // TODO: handle multiplanar formats
@@ -2918,8 +3018,9 @@ impl VulkanDmabuf {
             (self.width as usize) * (self.height as usize) * (format_info.bpp as usize)
         }
     }
-    // todo: will need modification for multi-planar support
+    /** Get the number of bytes per pixel (assuming DMABUF has a single-plane format) */
     pub fn get_bpp(&self) -> u32 {
+        // todo: will need modification for multi-planar support
         let format_info = get_vulkan_info(self.vk_format);
         format_info.bpp
     }
@@ -2993,6 +3094,8 @@ impl VulkanSyncFile {
 }
 
 impl VulkanTimelineSemaphore {
+    /** Block for up to `timeout_ns` for the timeline semaphore to
+     * reach the given point (or for some error to occur). */
     #[allow(dead_code)]
     #[cfg(any(test, feature = "test_proto"))]
     pub fn wait_for_timeline_pt(
@@ -3014,6 +3117,7 @@ impl VulkanTimelineSemaphore {
         }
         Ok(())
     }
+    /** Get the current value of the semaphore. */
     pub fn get_current_pt(self: &VulkanTimelineSemaphore) -> Result<u64, String> {
         unsafe {
             self.vulk
@@ -3023,9 +3127,12 @@ impl VulkanTimelineSemaphore {
         }
     }
 
+    /** Get the eventfd used with this timeline semaphore. */
     pub fn get_event_fd(self: &VulkanTimelineSemaphore) -> BorrowedFd {
         self.event_fd.as_fd()
     }
+    /** Configure the eventfd to be ready when the
+     * semaphore has reached the timeline point. */
     pub fn link_event_fd(
         self: &VulkanTimelineSemaphore,
         timeline_point: u64,
@@ -3038,6 +3145,7 @@ impl VulkanTimelineSemaphore {
         )?;
         Ok(self.event_fd.as_fd())
     }
+    /** Signal the timeline semaphore with the given timeline point. */
     pub fn signal_timeline_pt(self: &VulkanTimelineSemaphore, pt: u64) -> Result<(), String> {
         unsafe {
             let signal_info = vk::SemaphoreSignalInfo::default()
@@ -3052,6 +3160,9 @@ impl VulkanTimelineSemaphore {
     }
 }
 
+/** Copy the entire contents of the buffer onto the dmabuf.
+ *
+ * The buffer length must match the packed linear dmabuf size. */
 #[allow(dead_code)]
 #[cfg(any(test, feature = "test_proto"))]
 pub fn copy_onto_dmabuf(
@@ -3092,6 +3203,9 @@ pub fn copy_onto_dmabuf(
     Ok(())
 }
 
+/** Copy the entire contents of the dmabuf onto the buffer.
+ *
+ * The buffer length must match the packed linear dmabuf size. */
 #[allow(dead_code)]
 #[cfg(any(test, feature = "test_proto"))]
 pub fn copy_from_dmabuf(
@@ -3134,6 +3248,7 @@ pub fn copy_from_dmabuf(
     Ok(output)
 }
 
+/** A list of DRM formats, used to test that operations on each supported format work. */
 #[cfg(test)]
 pub const DRM_FORMATS: &[u32] = &[
     fourcc('A', 'R', '2', '4'),
