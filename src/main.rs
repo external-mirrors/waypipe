@@ -27,6 +27,7 @@ mod gbm;
 mod kernel;
 mod mainloop;
 mod mirror;
+mod platform;
 mod read;
 mod secctx;
 mod stub;

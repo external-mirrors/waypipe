@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*! Support for DMABUFs and timeline semaphores (using Vulkan) */
 #![cfg(feature = "dmabuf")]
+use crate::platform::*;
 use crate::tag;
 use crate::util::*;
 #[cfg(feature = "video")]
@@ -12,7 +13,7 @@ use nix::{errno, libc};
 use std::collections::BTreeMap;
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
-use std::path::PathBuf;
+use std::path::Path;
 use std::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -2894,10 +2895,9 @@ impl VulkanCopyHandle {
 }
 
 /** Get the device id for the special file at `path`, cast to a u64. */
-pub fn get_dev_for_drm_node_path(path: &PathBuf) -> Result<u64, String> {
-    let r = nix::sys::stat::stat(path).map_err(|_| "Failed to get device for drm node path")?;
-    #[allow(clippy::useless_conversion)]
-    Ok(r.st_rdev.into())
+pub fn get_dev_for_drm_node_path(path: &Path) -> Result<u64, String> {
+    get_rdev_for_file(path)
+        .ok_or_else(|| tag!("Failed to get st_rdev for drm node at {}", path.display()))
 }
 
 impl VulkanDevice {

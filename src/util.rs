@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*! Misc utilities and types */
+use crate::platform::*;
 use nix::fcntl;
 use std::ffi::OsString;
 use std::fmt;
@@ -589,7 +590,6 @@ pub const fn fourcc(a: char, b: char, c: char, d: char) -> u32 {
 }
 
 pub fn list_render_device_ids() -> Vec<u64> {
-    use nix::sys::stat;
     use std::os::unix::ffi::OsStrExt;
 
     let mut dev_ids = Vec::new();
@@ -605,12 +605,10 @@ pub fn list_render_device_ids() -> Vec<u64> {
         if !entry.file_name().as_bytes().starts_with(b"renderD") {
             continue;
         }
-        let Ok(result) = stat::stat(&entry.path()) else {
+        let Some(rdev) = get_rdev_for_file(&entry.path()) else {
             continue;
         };
-        /* st_rdev size varies by platform, is <= 8 and typically =8 */
-        #[allow(clippy::useless_conversion)]
-        dev_ids.push(result.st_rdev.into());
+        dev_ids.push(rdev);
     }
     dev_ids
 }

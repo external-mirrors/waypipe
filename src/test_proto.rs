@@ -31,6 +31,8 @@ mod dmabuf;
 #[allow(dead_code)]
 mod kernel;
 #[allow(dead_code)]
+mod platform;
+#[allow(dead_code)]
 mod util;
 #[allow(dead_code)]
 mod video; /* Only included because it is required by 'video' */
@@ -41,6 +43,7 @@ mod wayland_gen;
 #[cfg(feature = "dmabuf")]
 use dmabuf::*;
 use kernel::*;
+use platform::*;
 use util::*;
 use wayland::*;
 use wayland_gen::*;
@@ -957,7 +960,6 @@ struct RenderDevice<'a> {
 /** List all render devices on this system. This just checks file properties
  * and does not test that they are actually usable. */
 pub fn list_vulkan_device_ids() -> Vec<(String, u64)> {
-    use nix::sys::stat;
     use std::os::unix::ffi::OsStrExt;
 
     let mut dev_ids = Vec::new();
@@ -973,15 +975,10 @@ pub fn list_vulkan_device_ids() -> Vec<(String, u64)> {
         if !entry.file_name().as_bytes().starts_with(b"renderD") {
             continue;
         }
-        let Ok(result) = stat::stat(&entry.path()) else {
+        let Some(rdev) = get_rdev_for_file(&entry.path()) else {
             continue;
         };
-        /* st_rdev may be u32 on old architectures */
-        #[allow(clippy::useless_conversion)]
-        dev_ids.push((
-            entry.file_name().into_string().unwrap(),
-            result.st_rdev.into(),
-        ));
+        dev_ids.push((entry.file_name().into_string().unwrap(), rdev));
     }
     dev_ids
 }
