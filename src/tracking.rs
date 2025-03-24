@@ -7,6 +7,7 @@ use crate::dmabuf::*;
 use crate::gbm::*;
 use crate::kernel::*;
 use crate::mainloop::*;
+use crate::platform::*;
 #[cfg(any(not(feature = "video"), not(feature = "gbmfallback")))]
 use crate::stub::*;
 use crate::tag;
@@ -1128,6 +1129,15 @@ fn parse_dev_array(arr: &[u8]) -> Option<u64> {
     } else {
         None
     }
+}
+
+/** Convert a `u64` into an array of size `dev_t`. On systems where dev_t
+ * is u32, the high bits are expected to be zero. */
+fn write_dev_array(dev: u64) -> [u8; SIZEOF_DEV_T] {
+    let b = dev.to_le_bytes();
+    let (dev, leftover) = b.split_at(SIZEOF_DEV_T);
+    assert!(leftover.iter().all(|x| *x == 0));
+    dev.try_into().unwrap()
 }
 
 /** Assuming the ShadowFd has file type, return whether has pending apply tasks? */
@@ -2916,9 +2926,7 @@ pub fn process_way_msg(
                 return Err(tag!("Unexpected object extra type"));
             };
 
-            // todo: determine local dev_t len when !on_display_side;
-            // unfortunately libc::dev_t may be outdated on some platforms and cannot be relied on
-            let dev_len = std::mem::size_of::<u64>();
+            let dev_len = write_dev_array(0).len();
 
             if !feedback.processed {
                 /* Process feedback now, to determine how much space is needed for it. */
@@ -3011,7 +3019,7 @@ pub fn process_way_msg(
             write_evt_zwp_linux_dmabuf_feedback_v1_main_device(
                 dst,
                 object_id,
-                dev_id.to_le_bytes().as_slice(),
+                write_dev_array(dev_id).as_slice(),
             );
             for t in feedback.tranches.iter() {
                 for f in t.values.iter() {
@@ -3020,7 +3028,7 @@ pub fn process_way_msg(
                 write_evt_zwp_linux_dmabuf_feedback_v1_tranche_target_device(
                     dst,
                     object_id,
-                    dev_id.to_le_bytes().as_slice(),
+                    write_dev_array(dev_id).as_slice(),
                 );
                 write_evt_zwp_linux_dmabuf_feedback_v1_tranche_flags(dst, object_id, t.flags);
                 write_evt_zwp_linux_dmabuf_feedback_v1_tranche_formats(
@@ -3392,7 +3400,7 @@ pub fn process_way_msg(
                 }
 
                 space_needed += length_evt_ext_image_copy_capture_session_v1_dmabuf_device(
-                    std::mem::size_of::<u64>(),
+                    write_dev_array(current_device_id).len(),
                 );
                 for (fmt, mod_list) in session.dmabuf_formats.iter() {
                     let new_list_len = if glob.on_display_side {
@@ -3419,7 +3427,7 @@ pub fn process_way_msg(
                 write_evt_ext_image_copy_capture_session_v1_dmabuf_device(
                     dst,
                     object_id,
-                    &u64::to_le_bytes(current_device_id),
+                    write_dev_array(current_device_id).as_slice(),
                 );
 
                 for (fmt, mod_list) in session.dmabuf_formats.iter() {

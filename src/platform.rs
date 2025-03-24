@@ -27,7 +27,6 @@ use std::path::Path;
 
 #[cfg(target_os = "freebsd")]
 pub const SIZEOF_DEV_T: usize = 8;
-#[allow(unused)]
 #[cfg(not(target_os = "freebsd"))]
 pub const SIZEOF_DEV_T: usize = std::mem::size_of::<nix::libc::dev_t>();
 
