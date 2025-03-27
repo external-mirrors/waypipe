@@ -822,8 +822,8 @@ pub fn setup_vulkan_instance(
     video: &VideoSetting,
 ) -> Result<Arc<VulkanInstance>, String> {
     let app_name = CString::new(env!("CARGO_PKG_NAME")).unwrap();
-    let version: u32 = env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap() << 24
-        | env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap() << 16;
+    let version: u32 = (env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap() << 24)
+        | (env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap() << 16);
 
     let info = vk::ApplicationInfo::default()
         .application_name(&app_name)

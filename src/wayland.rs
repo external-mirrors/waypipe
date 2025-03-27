@@ -150,7 +150,8 @@ pub fn write_header(
 ) {
     let id = u32::to_le_bytes(obj_id.0);
     assert!(length < (1 << 16) && ntagfds < (1 << 5) && opcode < (1 << 8));
-    let p = u32::to_le_bytes((length as u32) << 16 | (ntagfds << 11) | (opcode as u32) & 0x00ff);
+    let p =
+        u32::to_le_bytes(((length as u32) << 16) | (ntagfds << 11) | ((opcode as u32) & 0x00ff));
     tail[..4].copy_from_slice(&id);
     tail[4..8].copy_from_slice(&p);
     *tail = &mut std::mem::take(tail)[8..];
