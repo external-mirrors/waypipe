@@ -112,6 +112,8 @@ mod proto {
     define_test! {dmabuf_damage}
     #[cfg(feature = "dmabuf")]
     define_test! {dmabuf_feedback_table}
+    #[cfg(feature = "dmabuf")]
+    define_test! {dmabuf_pre_v4}
     #[cfg(feature = "video")]
     define_test! {dmavid_h264}
     #[cfg(feature = "video")]

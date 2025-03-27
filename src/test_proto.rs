@@ -17,7 +17,7 @@ use nix::libc;
 use nix::sys::wait::WaitStatus;
 use nix::sys::{memfd, signal, socket, time, wait};
 use nix::{errno::Errno, fcntl, poll, unistd};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::io::{IoSlice, IoSliceMut, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
@@ -2641,6 +2641,142 @@ fn proto_dmabuf_feedback_table(info: TestInfo, device: RenderDevice) -> TestResu
     Ok(StatusOk::Pass)
 }
 
+/** Test that Waypipe correctly processes linux-dmabuf format and modifier
+ * advertisements for linux-dmabuf version ≤ 3 */
+#[cfg(feature = "dmabuf")]
+fn proto_dmabuf_pre_v4(info: TestInfo, device: RenderDevice) -> TestResult {
+    let Ok(vulk) = setup_vulkan(device.id) else {
+        return Ok(StatusOk::Skipped);
+    };
+
+    let supported_modifier: u64 = 0x0;
+    let unsupported_modifier: u64 = 0x1;
+    let unsupported_format: u32 = 0x0;
+    let formats: [u32; 5] = [
+        wayland_to_drm(WlShmFormat::R8),
+        wayland_to_drm(WlShmFormat::Rgb565),
+        wayland_to_drm(WlShmFormat::Argb8888),
+        wayland_to_drm(WlShmFormat::Xrgb8888),
+        unsupported_format, /* unsupported */
+    ];
+
+    let mut ext_mods = Vec::from(vulk.get_supported_modifiers(formats[2]));
+    assert!(ext_mods.contains(&supported_modifier));
+    ext_mods.insert(0, unsupported_modifier);
+
+    let modifiers: [&[u64]; 5] = [
+        &[supported_modifier],
+        &[supported_modifier, unsupported_modifier],
+        &ext_mods,
+        &[unsupported_modifier],
+        &[supported_modifier],
+    ];
+
+    println!("Initial formats: {:?}", formats);
+    println!("Initial modifiers: {:?}", modifiers);
+
+    run_protocol_test_with_drm_node(&info, &device, &|mut ctx: ProtocolTestContext| {
+        /* version 3 introduced zwp_linux_dmabuf_v1::modifier */
+        let [display, registry, dmabuf_v1, dmabuf_v3, ..] = ID_SEQUENCE;
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, registry);
+        }));
+
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, registry, 1, ZWP_LINUX_DMABUF_V1, 1);
+            write_evt_wl_registry_global(dst, registry, 2, ZWP_LINUX_DMABUF_V1, 3);
+        }));
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, registry, 1, ZWP_LINUX_DMABUF_V1, 1, dmabuf_v1);
+            write_req_wl_registry_bind(dst, registry, 2, ZWP_LINUX_DMABUF_V1, 3, dmabuf_v3);
+        }));
+
+        let msgs_v1 = build_msgs(|dst| {
+            for f in formats.iter() {
+                write_evt_zwp_linux_dmabuf_v1_format(dst, dmabuf_v1, *f);
+            }
+        });
+        let (rmsgs_v1, rfds_v1) = ctx.comp_write(&msgs_v1, &[]).unwrap();
+        assert!(rfds_v1.is_empty());
+        let mut recvd_fmts_v1 = BTreeSet::<u32>::new();
+        for msg in rmsgs_v1 {
+            assert!(
+                parse_wl_header(&msg)
+                    == (
+                        dmabuf_v1,
+                        length_evt_zwp_linux_dmabuf_v1_format(),
+                        OPCODE_ZWP_LINUX_DMABUF_V1_FORMAT.code()
+                    )
+            );
+            let fmt = parse_evt_zwp_linux_dmabuf_v1_format(&msg).unwrap();
+            recvd_fmts_v1.insert(fmt);
+        }
+        println!("Received formats for v1: {:?}", recvd_fmts_v1);
+        for f in formats.iter() {
+            assert!(recvd_fmts_v1.contains(f) == (*f != unsupported_format));
+        }
+
+        let msgs_v3 = build_msgs(|dst| {
+            for (f, mods) in formats.iter().zip(modifiers.iter()) {
+                write_evt_zwp_linux_dmabuf_v1_format(dst, dmabuf_v3, *f);
+                for m in mods.iter() {
+                    let (m_hi, m_lo) = split_u64(*m);
+                    write_evt_zwp_linux_dmabuf_v1_modifier(dst, dmabuf_v3, *f, m_hi, m_lo);
+                }
+            }
+        });
+        let (rmsgs_v3, rfds_v3) = ctx.comp_write(&msgs_v3, &[]).unwrap();
+        assert!(rfds_v3.is_empty());
+        let mut recvd_fmts_v3 = BTreeSet::<u32>::new();
+        let mut recvd_mods_v3 = BTreeMap::<u32, Vec<u64>>::new();
+        for msg in rmsgs_v3 {
+            if parse_wl_header(&msg).2 == OPCODE_ZWP_LINUX_DMABUF_V1_FORMAT.code() {
+                assert!(
+                    parse_wl_header(&msg)
+                        == (
+                            dmabuf_v3,
+                            length_evt_zwp_linux_dmabuf_v1_format(),
+                            OPCODE_ZWP_LINUX_DMABUF_V1_FORMAT.code()
+                        )
+                );
+                let fmt = parse_evt_zwp_linux_dmabuf_v1_format(&msg).unwrap();
+                recvd_fmts_v3.insert(fmt);
+            } else {
+                assert!(
+                    parse_wl_header(&msg)
+                        == (
+                            dmabuf_v3,
+                            length_evt_zwp_linux_dmabuf_v1_modifier(),
+                            OPCODE_ZWP_LINUX_DMABUF_V1_MODIFIER.code()
+                        )
+                );
+                let (fmt, mod_hi, mod_lo) = parse_evt_zwp_linux_dmabuf_v1_modifier(&msg).unwrap();
+                recvd_mods_v3
+                    .entry(fmt)
+                    .or_default()
+                    .push(join_u64(mod_hi, mod_lo));
+            }
+        }
+        println!("Received formats for v3: {:?}", recvd_fmts_v1);
+        println!("Received modifiers for v3: {:?}", recvd_mods_v3);
+        for (i, f) in formats.iter().enumerate() {
+            assert!(recvd_fmts_v3.contains(f) == (*f != unsupported_format));
+
+            if i < 3 {
+                let mod_list = recvd_mods_v3.get(f);
+                /* Modifiers returned depend on what Waypipe supports, which should at least
+                 * include the linear modifier */
+                assert!(mod_list.is_some() && mod_list.unwrap().contains(&supported_modifier));
+            } else {
+                assert!(!recvd_mods_v3.contains_key(f));
+            }
+        }
+    })?;
+    Ok(StatusOk::Pass)
+}
+
 /** Helper function to return data for a test image split into four quadrants with
  * different colors */
 #[cfg(feature = "video")]
@@ -4980,6 +5116,7 @@ fn main() -> ExitCode {
             "dmabuf_feedback_table",
             proto_dmabuf_feedback_table,
         );
+        register_per_device(t, &f, &vk_device_ids, "dmabuf_pre_v4", proto_dmabuf_pre_v4);
         register_per_device(t, &f, &vk_device_ids, "explicit_sync", proto_explicit_sync);
         register_per_device(
             t,
