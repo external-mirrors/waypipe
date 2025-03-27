@@ -2,11 +2,11 @@
 /*! Misc utilities and types */
 use crate::platform::*;
 use nix::fcntl;
-use std::ffi::OsString;
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::fs::ReadDir;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::path::Path;
+use std::os::unix::ffi::OsStrExt;
 use std::str::FromStr;
 
 /** Like `format!`, but prepends file and line number.
@@ -615,20 +615,39 @@ pub fn list_render_device_ids() -> Vec<u64> {
 
 /** Open the render node with specified minor value */
 pub fn drm_open_render(minor: u32, rdrw: bool) -> Result<OwnedFd, String> {
-    let mut path = OsString::new();
-    path.push("/dev/dri/renderD");
-    path.push(OsString::from(minor.to_string()));
-    let p = Path::new(&path);
-    let mut flags = fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NOCTTY;
-    if rdrw {
-        flags |= fcntl::OFlag::O_RDWR;
+    /* On Linux, the render node is usually /dev/dri/renderD$X where $X
+     * is the minor value, but this may not be the case on all platforms */
+    let rd: ReadDir =
+        std::fs::read_dir("/dev/dri").map_err(|x| tag!("Failed to read /dev/dri/: {}", x))?;
+    for entry in rd {
+        let e = entry.map_err(|x| tag!("Failed to read entry in /dev/dri: {}", x))?;
+
+        /* Restrict to render nodes */
+        if e.file_name().as_bytes().starts_with(b"renderD") {
+            let path = e.path();
+            let Some(rdev) = get_rdev_for_file(&path) else {
+                continue;
+            };
+            /* Note: technically there is a check-vs-open race condition here, but
+             * render nodes rarely change. It could be avoided using `fstat`. */
+            if (rdev & 0xFF) as u32 == minor {
+                let mut flags = fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NOCTTY;
+                if rdrw {
+                    flags |= fcntl::OFlag::O_RDWR;
+                }
+                let raw_fd = fcntl::open(&path, flags, nix::sys::stat::Mode::empty())
+                    .map_err(|x| tag!("Failed to open drm node fd at '{:?}': {}", path, x))?;
+                return Ok(unsafe {
+                    // SAFETY: fd was just created, was checked valid, and is recorded nowhere else
+                    OwnedFd::from_raw_fd(raw_fd)
+                });
+            }
+        }
     }
-    let raw_fd = fcntl::open(p, flags, nix::sys::stat::Mode::empty())
-        .map_err(|x| tag!("Failed to open drm node fd at '{:?}': {}", p, x))?;
-    Ok(unsafe {
-        // SAFETY: fd was just created, was checked valid, and is recorded nowhere else
-        OwnedFd::from_raw_fd(raw_fd)
-    })
+    Err(tag!(
+        "Failed to find render node with minor value {}",
+        minor
+    ))
 }
 
 /** Provide contents of dmabuf_slice_data, pretending the buffer has a linear modifier
