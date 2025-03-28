@@ -174,7 +174,7 @@ pub fn setup_gbm_device(device: Option<u64>) -> Result<Option<Rc<GBMDevice>>, St
 
         for id in id_list {
             debug!("Trying to set up gbm device at id: {:x}", id);
-            let render_fd = match drm_open_render((id & 0xff) as u32, true) {
+            let render_fd = match drm_open_render(id, true) {
                 Ok(x) => x,
                 Err(_) => continue,
             };

@@ -1398,7 +1398,7 @@ pub fn setup_vulkan_device_base(
         }
 
         let init_sem_value = 0;
-        let drm_fd = drm_open_render((dev_info.device_id & 0xff) as u32, false)?;
+        let drm_fd = drm_open_render(dev_info.device_id, false)?;
         let (semaphore, semaphore_drm_handle, semaphore_fd, semaphore_event_fd) =
             vulkan_create_timeline_parts(&dev, &ext_semaphore_fd, &drm_fd, init_sem_value)?;
 

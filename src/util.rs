@@ -613,10 +613,10 @@ pub fn list_render_device_ids() -> Vec<u64> {
     dev_ids
 }
 
-/** Open the render node with specified minor value */
-pub fn drm_open_render(minor: u32, rdrw: bool) -> Result<OwnedFd, String> {
-    /* On Linux, the render node is usually /dev/dri/renderD$X where $X
-     * is the minor value, but this may not be the case on all platforms */
+/** Open the render node with specified device id*/
+pub fn drm_open_render(dev_id: u64, rdrw: bool) -> Result<OwnedFd, String> {
+    /* On Linux, the render node is usually /dev/dri/renderD$X where $X is the
+     * minor value/lowest 8 bits, but this may not be the case on all platforms */
     let rd: ReadDir =
         std::fs::read_dir("/dev/dri").map_err(|x| tag!("Failed to read /dev/dri/: {}", x))?;
     for entry in rd {
@@ -630,7 +630,7 @@ pub fn drm_open_render(minor: u32, rdrw: bool) -> Result<OwnedFd, String> {
             };
             /* Note: technically there is a check-vs-open race condition here, but
              * render nodes rarely change. It could be avoided using `fstat`. */
-            if (rdev & 0xFF) as u32 == minor {
+            if rdev == dev_id {
                 let mut flags = fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NOCTTY;
                 if rdrw {
                     flags |= fcntl::OFlag::O_RDWR;
@@ -645,8 +645,8 @@ pub fn drm_open_render(minor: u32, rdrw: bool) -> Result<OwnedFd, String> {
         }
     }
     Err(tag!(
-        "Failed to find render node with minor value {}",
-        minor
+        "Failed to find render node with device id 0x{:x}",
+        dev_id,
     ))
 }
 
