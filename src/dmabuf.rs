@@ -820,7 +820,21 @@ const EXT_LIST_VIDEO_BASE: &[(&CStr, u32)] = &[
 pub fn setup_vulkan_instance(
     debug: bool,
     video: &VideoSetting,
-) -> Result<Arc<VulkanInstance>, String> {
+) -> Result<Option<Arc<VulkanInstance>>, String> {
+    if cfg!(target_os = "freebsd") {
+        /* FreeBSD does not currently support the EXPORT_SYNC_FILE ioctl, needed for
+         * the Vulkan backend to interoperate with implicitly synchronized applications.
+         *
+         * TODO: introduce a runtime check -- old Linux kernels also do not support
+         * the ioctl.
+         *
+         * Note: alternatively, could stop compiling the Vulkan backend, but the added
+         * build complexity may not be worth it since which platforms work may change with time.
+         */
+        debug!("Vulkan backend not supported, no EXPORT_SYNC_FILE");
+        return Ok(None);
+    }
+
     let app_name = CString::new(env!("CARGO_PKG_NAME")).unwrap();
     let version: u32 = (env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap() << 24)
         | (env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap() << 16);
@@ -865,9 +879,18 @@ pub fn setup_vulkan_instance(
             }
         }
 
-        let instance: Instance = entry
-            .create_instance(&create, None)
-            .map_err(|x| tag!("Failed to create Vulkan instance: {}", x))?;
+        let instance: Instance = match entry.create_instance(&create, None) {
+            Err(x) => {
+                /* The set of available extensions and layers can (in theory) change at runtime,
+                 * so delay extension checks until now. */
+                if x == vk::Result::ERROR_EXTENSION_NOT_PRESENT {
+                    debug!("Vulkan instance does not support all required instance extensions");
+                    return Ok(None);
+                }
+                return Err(tag!("Failed to create Vulkan instance: {}", x));
+            }
+            Ok(i) => i,
+        };
 
         /* Note: initial enumeration can be expensive since some details may be loaded
          * even for devices that are not needed */
@@ -1057,11 +1080,11 @@ pub fn setup_vulkan_instance(
             })
         }
 
-        Ok(Arc::new(VulkanInstance {
+        Ok(Some(Arc::new(VulkanInstance {
             entry,
             instance,
             physdevs,
-        }))
+        })))
     }
 }
 
@@ -3387,7 +3410,7 @@ pub static VULKAN_MUTEX: Mutex<()> = Mutex::new(());
 fn test_dmabuf() {
     let _serialize_test = VULKAN_MUTEX.lock().unwrap();
 
-    let Ok(instance) = setup_vulkan_instance(true, &VideoSetting::default()) else {
+    let Ok(Some(instance)) = setup_vulkan_instance(true, &VideoSetting::default()) else {
         return;
     };
     for dev_id in list_render_device_ids() {

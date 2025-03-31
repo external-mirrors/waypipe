@@ -944,9 +944,10 @@ pub fn try_setup_dmabuf_instance_light(
     device: Option<u64>,
 ) -> Result<DmabufDevice, String> {
     if !opts.test_skip_vulkan {
-        let instance = setup_vulkan_instance(opts.debug, &opts.video)?;
-        if instance.has_device(device) {
-            return Ok(DmabufDevice::VulkanSetup(instance));
+        if let Some(instance) = setup_vulkan_instance(opts.debug, &opts.video)? {
+            if instance.has_device(device) {
+                return Ok(DmabufDevice::VulkanSetup(instance));
+            }
         }
     }
     /* Fallback path if Vulkan is not available */
@@ -962,10 +963,11 @@ pub fn try_setup_dmabuf_instance_full(
     device: Option<u64>,
 ) -> Result<DmabufDevice, String> {
     if !opts.test_skip_vulkan {
-        let instance = setup_vulkan_instance(opts.debug, &opts.video)?;
-        if let Some(device) = setup_vulkan_device(&instance, device, &opts.video, opts.debug)? {
-            return Ok(DmabufDevice::Vulkan((instance, device)));
-        }
+        if let Some(instance) = setup_vulkan_instance(opts.debug, &opts.video)? {
+            if let Some(device) = setup_vulkan_device(&instance, device, &opts.video, opts.debug)? {
+                return Ok(DmabufDevice::Vulkan((instance, device)));
+            }
+        };
     }
     /* Fallback path if Vulkan is not available */
     if let Some(dev) = setup_gbm_device(device)? {

@@ -34,7 +34,7 @@ mod dmabuf_stub {
     pub fn setup_vulkan_instance(
         debug: bool,
         video: &VideoSetting,
-    ) -> Result<Arc<VulkanInstance>, String> {
+    ) -> Result<Option<Arc<VulkanInstance>>, String> {
         unreachable!();
     }
     pub fn setup_vulkan_device_base(

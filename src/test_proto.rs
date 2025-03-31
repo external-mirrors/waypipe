@@ -841,7 +841,8 @@ fn run_protocol_test(
 /** Try to setup a Vulkan instance and device for the given `device_id`. */
 #[cfg(feature = "dmabuf")]
 fn setup_vulkan(device_id: u64) -> Result<Arc<VulkanDevice>, String> {
-    let instance = setup_vulkan_instance(true, &VideoSetting::default())?;
+    let instance = setup_vulkan_instance(true, &VideoSetting::default())?
+        .ok_or_else(|| tag!("Vulkan instance not available"))?;
     Ok(Arc::new(
         setup_vulkan_device_base(&instance, Some(device_id), false)?
             .ok_or_else(|| tag!("Vulkan device {} not available", device_id))?,
