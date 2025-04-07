@@ -373,7 +373,7 @@ fn test_write_msgs(socket: &OwnedFd, data: &[u8], fds: &[&OwnedFd]) {
     let net_len = data.len() + end_msg.len();
 
     let raw_fds: Vec<i32> = fds.iter().map(|x| x.as_raw_fd()).collect();
-    assert!(data.len() >= (fds.len() + 31) / 32);
+    assert!(data.len() >= fds.len().div_ceil(32));
 
     let start = Instant::now();
     let timeout = Duration::from_secs(1);

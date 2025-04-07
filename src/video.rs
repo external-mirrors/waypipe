@@ -1588,8 +1588,8 @@ pub fn start_dmavid_decode_hw(
             bind_descs,
             &[],
         );
-        let xgroups = (state.target.width + 7) / 8;
-        let ygroups = (state.target.height + 7) / 8;
+        let xgroups = state.target.width.div_ceil(8);
+        let ygroups = state.target.height.div_ceil(8);
         vulk.dev.cmd_dispatch(cb, xgroups, ygroups, 1);
 
         // Only for main image; other barriers are
@@ -1934,8 +1934,8 @@ pub fn start_dmavid_decode_sw(
             bind_descs,
             &[],
         );
-        let xgroups = (state.target.width + 7) / 8;
-        let ygroups = (state.target.height + 7) / 8;
+        let xgroups = state.target.width.div_ceil(8);
+        let ygroups = state.target.height.div_ceil(8);
         vulk.dev.cmd_dispatch(cb, xgroups, ygroups, 1);
 
         // Only for main image; other barriers are
