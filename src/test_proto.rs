@@ -3276,6 +3276,92 @@ fn proto_shm_damage(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test to check that damage calculations do not severely overestimate the damaged region;
+ * in particular, that even the entire buffer contents are changed, but only a small region
+ * is damaged, Waypipe will act as if the stated damage is correct and only update a small
+ * region.
+ */
+fn proto_damage_efficiency(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
+        let [display, registry, shm, comp, surface, pool, buffer, ..] = ID_SEQUENCE;
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, registry);
+        }));
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, registry, 1, WL_SHM, 2);
+            write_evt_wl_registry_global(dst, registry, 2, WL_COMPOSITOR, 6);
+        }));
+
+        let format = WlShmFormat::Argb8888;
+        let bpp = 4;
+        let (w, h): (u32, u32) = (128, 32);
+        let stride = w * bpp;
+
+        let file_sz = h * stride;
+        let mut base = vec![0; file_sz as usize];
+        for (i, x) in base.iter_mut().enumerate() {
+            *x = 0xf0 + ((i as u32).wrapping_mul(0x01234567) >> 28) as u8;
+        }
+        let buffer_fd = make_file_with_contents(&base).unwrap();
+
+        let setup_msgs = build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, registry, 1, WL_SHM, 2, shm);
+            write_req_wl_registry_bind(dst, registry, 2, WL_COMPOSITOR, 6, comp);
+            write_req_wl_compositor_create_surface(dst, comp, surface);
+            write_req_wl_shm_create_pool(dst, shm, false, pool, file_sz as i32);
+            write_req_wl_shm_pool_create_buffer(
+                dst,
+                pool,
+                buffer,
+                0,
+                w as i32,
+                h as i32,
+                stride as i32,
+                format as u32,
+            );
+            write_req_wl_shm_pool_destroy(dst, pool);
+            write_req_wl_surface_attach(dst, surface, buffer, 0, 0);
+            /* The initial attachment effectively damages everything */
+            write_req_wl_surface_damage_buffer(dst, surface, 0, 0, i32::MAX, i32::MAX);
+            write_req_wl_surface_commit(dst, surface);
+        });
+
+        let (rmsgs, mut rfds) = ctx.prog_write(&setup_msgs, &[&buffer_fd]).unwrap();
+        assert!(rmsgs.concat() == setup_msgs);
+        assert!(rfds.len() == 1);
+        let output_fd = rfds.pop().unwrap();
+        assert!(get_file_contents(&output_fd, file_sz as usize).unwrap() == base);
+
+        for x in base.iter_mut() {
+            *x = 0xff - *x;
+        }
+        update_file_contents(&buffer_fd, &base).unwrap();
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            /* Update just the opposite corners. */
+            write_req_wl_surface_damage_buffer(dst, surface, 0, 0, 1, 1);
+            write_req_wl_surface_damage_buffer(dst, surface, w as i32 - 1, h as i32 - 1, 1, 1);
+            write_req_wl_surface_commit(dst, surface);
+        }));
+
+        let mut n_updated = 0;
+        let updated = get_file_contents(&output_fd, file_sz as usize).unwrap();
+        for (u, b) in updated.iter().zip(base.iter()) {
+            if u == b {
+                n_updated += 1;
+            }
+        }
+        println!(
+            "Updated bytes: {} of ideal {}/{}",
+            n_updated,
+            2 * bpp,
+            file_sz
+        );
+        assert!(n_updated <= file_sz / 8);
+    })?;
+    Ok(StatusOk::Pass)
+}
+
 /** Test to check that damaged regions of DMABUF-type `wl_buffer`s are replicated. */
 #[cfg(feature = "dmabuf")]
 fn proto_dmabuf_damage(info: TestInfo, device: RenderDevice) -> TestResult {
@@ -5087,6 +5173,7 @@ fn main() -> ExitCode {
     register_single(t, &f, "basic", proto_basic);
     register_single(t, &f, "base_wire", proto_base_wire);
     register_single(t, &f, "commit_timing", proto_commit_timing);
+    register_single(t, &f, "damage_efficiency", proto_damage_efficiency);
     register_single(t, &f, "flip_damage", proto_flip_damage);
     register_single(t, &f, "gamma_control", proto_gamma_control);
     register_single(t, &f, "keymap", proto_keymap);
