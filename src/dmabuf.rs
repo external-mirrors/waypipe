@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 #[derive(Debug)]
 pub struct ModifierData {
     pub plane_count: u32,
-    pub max_size_transfer: (usize, usize),
-    pub max_size_store_and_sample: Option<(usize, usize)>,
+    pub max_size_transfer: (u32, u32),
+    pub max_size_store_and_sample: Option<(u32, u32)>,
 }
 
 /** A list of modifiers and associated metadata. */
@@ -662,7 +662,7 @@ fn get_max_external_image_size(
     format: vk::Format,
     modifier: u64,
     flags: vk::ImageUsageFlags,
-) -> Result<(usize, usize), String> {
+) -> Result<(u32, u32), String> {
     let mut ext_create_info = vk::PhysicalDeviceExternalImageFormatInfo::default()
         .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
     let img_qfis = &[queue_family];
@@ -687,8 +687,8 @@ fn get_max_external_image_size(
             .map_err(|x| tag!("Failed to get image format properities: {:?}", x))?;
 
         Ok((
-            image_prop.image_format_properties.max_extent.width as usize,
-            image_prop.image_format_properties.max_extent.height as usize,
+            image_prop.image_format_properties.max_extent.width,
+            image_prop.image_format_properties.max_extent.height,
         ))
     }
 }
@@ -1825,7 +1825,7 @@ pub fn vulkan_import_dmabuf(
     } else {
         mod_data.max_size_transfer
     };
-    assert!(width as usize <= max_size.0 && height as usize <= max_size.1);
+    assert!(width <= max_size.0 && height <= max_size.1);
 
     // todo: invert?
     for j in plane_perm.iter() {
@@ -2066,7 +2066,7 @@ pub fn vulkan_create_dmabuf(
         } else {
             data.max_size_transfer
         };
-        if width as usize > max_size.0 || height as usize > max_size.1 {
+        if width > max_size.0 || height > max_size.1 {
             continue;
         }
         mod_options.push(*v);
@@ -2145,6 +2145,18 @@ pub fn vulkan_create_dmabuf(
             .position(|x| *x == props.drm_format_modifier)
             .unwrap()];
         let nmemoryplanes = mod_info.plane_count as usize;
+        let import_size_limit = if can_store_and_sample {
+            mod_info.max_size_store_and_sample.unwrap()
+        } else {
+            mod_info.max_size_transfer
+        };
+        if width > import_size_limit.0 || height > import_size_limit.1 {
+            /* In theory, Vulkan could export images at a given size with a modifier
+             * that Vulkan cannot import at that size. Only weird implementations would
+             * do this in practice, so warn if this happens. */
+            debug!("Warning: created dmabuf with format={:08x}, modifier={:016x} has size {}x{} larger than the {}x{} allowed for import",
+                drm_format, props.drm_format_modifier, width, height, import_size_limit.0, import_size_limit.1);
+        }
 
         let mut bind_infos: Vec<vk::BindImageMemoryInfoKHR<'_>> = Vec::new(); // todo: fixed size array
         let mut planes = Vec::<AddDmabufPlane>::new();
@@ -3001,7 +3013,7 @@ impl VulkanDevice {
         } else {
             mod_data.max_size_transfer
         };
-        width as usize <= max_size.0 && height as usize <= max_size.1
+        width <= max_size.0 && height <= max_size.1
     }
 
     /** Return whether the device supports the given format */
