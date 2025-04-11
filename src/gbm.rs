@@ -70,10 +70,13 @@ const MAX_DIMENSION: u32 = 16384;
 
 /** List of formats GBM can support which are RGB, single-plane, and have a possible linear layout. */
 const GBM_SUPPORTED_FORMATS: &[u32] = &[
-    fourcc('A', 'R', '2', '4'),
-    fourcc('X', 'R', '2', '4'),
-    WlShmFormat::Argb8888 as u32,
-    WlShmFormat::Xrgb8888 as u32,
+    /* Note: GBM also accepts 0=GBM_BO_FORMAT_XRGB8888 and 1=GBM_BO_FORMAT_ARGB8888,
+     * but these are not valid DRM format codes. (Note: in an unfortunate coincidence,
+     * wl_shm::format::argb8888 is 0 and wl_shm::format::xrgb8888 is 1; but this should
+     * not matter because wl_shm format codes should never be passed to libgbm.)
+     */
+    fourcc('A', 'R', '2', '4'), // Argb8888
+    fourcc('X', 'R', '2', '4'), // Xrgb8888
     WlShmFormat::Rgb332 as u32,
     WlShmFormat::Bgr233 as u32,
     WlShmFormat::Xrgb4444 as u32,

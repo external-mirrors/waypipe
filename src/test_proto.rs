@@ -675,6 +675,7 @@ impl ProtocolTestContext {
 struct WaypipeOptions<'a> {
     wire_version: Option<u32>,
     drm_node: Option<u64>,
+    device_type: RenderDeviceType,
     video: VideoSetting,
     title_prefix: &'a str,
     compression: Compression,
@@ -704,6 +705,9 @@ fn build_arguments(waypipe_bin: &OsStr, opts: &WaypipeOptions, is_client: bool) 
         v.push(format!("--drm-node=/dev/dri/renderD{}", (device_id & 0xff)));
     } else {
         v.push("--no-gpu".into());
+    }
+    if matches!(opts.device_type, RenderDeviceType::Gbm) {
+        v.push("--test-skip-vulkan".into());
     }
     if opts.video.format.is_some() {
         v.push(format!("--video={}", opts.video));
@@ -816,6 +820,7 @@ fn run_protocol_test_with_drm_node(
     let options = WaypipeOptions {
         wire_version: None,
         drm_node: Some(device.id),
+        device_type: device.device_type,
         compression: Compression::None,
         title_prefix: "",
         video: VideoSetting::default(),
@@ -831,6 +836,7 @@ fn run_protocol_test(
     let options = WaypipeOptions {
         wire_version: None,
         drm_node: None,
+        device_type: RenderDeviceType::Vulkan,
         compression: Compression::None,
         title_prefix: "",
         video: VideoSetting::default(),
@@ -932,23 +938,39 @@ fn register_per_device<'a>(
     func: fn(TestInfo, RenderDevice) -> TestResult,
 ) {
     for (dev_name, dev_id) in devices {
-        let ext_name = format!("proto::{}::{}", name, dev_name);
-        if !test_is_included(&ext_name, filter) {
-            continue;
+        for (tp, tpname) in [
+            (RenderDeviceType::Vulkan, "vk"),
+            (RenderDeviceType::Gbm, "gbm"),
+        ] {
+            if !cfg!(feature = "gbmfallback") && matches!(tp, RenderDeviceType::Gbm) {
+                continue;
+            }
+
+            let ext_name = format!("proto::{}::{}::{}", name, dev_name, tpname);
+            if !test_is_included(&ext_name, filter) {
+                continue;
+            }
+            let m: (String, u64) = (dev_name.clone(), *dev_id);
+            tests.push((
+                ext_name,
+                Box::new(move |info| {
+                    let s = &m;
+                    let dev = RenderDevice {
+                        name: &s.0,
+                        id: s.1,
+                        device_type: tp,
+                    };
+                    func(info, dev)
+                }),
+            ));
         }
-        let m: (String, u64) = (dev_name.clone(), *dev_id);
-        tests.push((
-            ext_name,
-            Box::new(move |info| {
-                let s = &m;
-                let dev = RenderDevice {
-                    name: &s.0,
-                    id: s.1,
-                };
-                func(info, dev)
-            }),
-        ));
     }
+}
+
+#[derive(Clone, Copy)]
+enum RenderDeviceType {
+    Gbm,
+    Vulkan,
 }
 
 /** Information about a render device. */
@@ -956,6 +978,9 @@ struct RenderDevice<'a> {
     #[allow(unused)]
     name: &'a str,
     id: u64,
+    /** The device type for the _instances under test_ to use; test_proto itself,
+     * for now, uses Vulkan to handle buffers. */
+    device_type: RenderDeviceType,
 }
 
 /** List all render devices on this system. This just checks file properties
@@ -1012,6 +1037,7 @@ fn proto_base_wire(info: TestInfo) -> TestResult {
     let opts = WaypipeOptions {
         wire_version: Some(MIN_PROTOCOL_VERSION),
         drm_node: None,
+        device_type: RenderDeviceType::Vulkan,
         title_prefix: "",
         compression: Compression::None,
         video: VideoSetting::default(),
@@ -3031,7 +3057,7 @@ fn proto_dmavid(
     accurate_video_replication: bool,
 ) -> TestResult {
     let Ok(vulk) = setup_vulkan(device.id) else {
-        return Ok(StatusOk::Pass);
+        return Ok(StatusOk::Skipped);
     };
 
     let opts = WaypipeOptions {
@@ -3052,6 +3078,7 @@ fn proto_dmavid(
         },
         title_prefix: "",
         drm_node: Some(device.id),
+        device_type: device.device_type,
         wire_version: None,
     };
     println!(
@@ -3366,7 +3393,7 @@ fn proto_damage_efficiency(info: TestInfo) -> TestResult {
 #[cfg(feature = "dmabuf")]
 fn proto_dmabuf_damage(info: TestInfo, device: RenderDevice) -> TestResult {
     let Ok(vulk) = setup_vulkan(device.id) else {
-        return Ok(StatusOk::Pass);
+        return Ok(StatusOk::Skipped);
     };
 
     run_protocol_test_with_drm_node(&info, &device, &|mut ctx: ProtocolTestContext| {
@@ -4093,8 +4120,11 @@ fn proto_rotating_damage(info: TestInfo) -> TestResult {
 /** Test that timeline semaphores for the linux-drm-syncobj-v1 protocol are correctly handled. */
 #[cfg(feature = "dmabuf")]
 fn proto_explicit_sync(info: TestInfo, device: RenderDevice) -> TestResult {
+    if matches!(device.device_type, RenderDeviceType::Gbm) {
+        return Ok(StatusOk::Skipped);
+    }
     let Ok(vulk) = setup_vulkan(device.id) else {
-        return Ok(StatusOk::Pass);
+        return Ok(StatusOk::Skipped);
     };
 
     run_protocol_test_with_drm_node(&info, &device, &|mut ctx: ProtocolTestContext| {
@@ -4327,6 +4357,7 @@ fn proto_title_prefix(info: TestInfo) -> TestResult {
         let options = WaypipeOptions {
             wire_version: None,
             drm_node: None,
+            device_type: RenderDeviceType::Vulkan,
             video: VideoSetting::default(),
             title_prefix: &prefix,
             compression: Compression::None,
@@ -5003,6 +5034,8 @@ fn register_video_tests<'a>(
                     let dev = RenderDevice {
                         name: &s.0,
                         id: s.1,
+                        /* Video encoding/decoding only works with Vulkan right now */
+                        device_type: RenderDeviceType::Vulkan,
                     };
                     proto_dmavid(info, dev, format, try_hwdec, try_hwenc, expect_accurate)
                 }),

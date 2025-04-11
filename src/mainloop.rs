@@ -1407,10 +1407,14 @@ fn process_sfd_msg(
                         }
                         DmabufImpl::Gbm(ref buf) => {
                             data.pending_apply_tasks += 1;
+                            let nominal_size = buf.nominal_size(data.view_row_stride);
+                            if data.mirror.is_none() {
+                                data.mirror = Some(Arc::new(Mirror::new(nominal_size, false)?));
+                            }
                             let t = DecompTask {
                                 sequence: None,
                                 msg_view,
-                                file_size: buf.nominal_size(data.view_row_stride),
+                                file_size: nominal_size,
                                 compression: glob.opts.compression,
                                 target: DecompTarget::MirrorOnly(DecompTaskMirror {
                                     mirror: data.mirror.as_ref().unwrap().clone(),
@@ -1473,11 +1477,15 @@ fn process_sfd_msg(
                         }
                         DmabufImpl::Gbm(ref buf) => {
                             data.pending_apply_tasks += 1;
+                            let nominal_size = buf.nominal_size(data.view_row_stride);
+                            if data.mirror.is_none() {
+                                data.mirror = Some(Arc::new(Mirror::new(nominal_size, false)?));
+                            }
                             let t = DecompTask {
                                 sequence: None,
                                 msg_view,
                                 compression: glob.opts.compression,
-                                file_size: buf.nominal_size(data.view_row_stride),
+                                file_size: nominal_size,
                                 target: DecompTarget::MirrorOnly(DecompTaskMirror {
                                     mirror: data.mirror.as_ref().unwrap().clone(),
                                     notify_on_completion: true,
