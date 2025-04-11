@@ -158,11 +158,13 @@ fn get_bpp_if_rgb_planar(fmt: u32) -> Option<u32> {
 
 /** Create a GBMDevice, if one with the specified device id exists */
 pub fn setup_gbm_device(device: Option<u64>) -> Result<Option<Rc<GBMDevice>>, String> {
-    let id_list = if let Some(d) = device {
+    let mut id_list = if let Some(d) = device {
         vec![d]
     } else {
         list_render_device_ids()
     };
+    id_list.sort_unstable();
+    debug!("Candidate device ids for gbm backend: 0x{:x?}", id_list);
     if id_list.is_empty() {
         return Ok(None);
     }
@@ -176,7 +178,6 @@ pub fn setup_gbm_device(device: Option<u64>) -> Result<Option<Rc<GBMDevice>>, St
         };
 
         for id in id_list {
-            debug!("Trying to set up gbm device at id: {:x}", id);
             let render_fd = match drm_open_render(id, true) {
                 Ok(x) => x,
                 Err(_) => continue,
@@ -186,6 +187,7 @@ pub fn setup_gbm_device(device: Option<u64>) -> Result<Option<Rc<GBMDevice>>, St
             if dev.is_null() {
                 continue;
             }
+            debug!("Created gbm device at id: 0x{:x}", id);
 
             return Ok(Some(Rc::new(GBMDevice {
                 bindings,
