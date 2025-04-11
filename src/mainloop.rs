@@ -319,6 +319,28 @@ struct ThreadCache {
     comp: ThreadCacheComp,
 }
 
+/** State for [VulkanWaitThread] */
+struct VulkanWaitThreadInner {
+    pipe_w: OwnedFd,
+    /* If true, have written 8 bytes to the pipe, but main loop has not read them */
+    pending_read: bool,
+    target_sequence_point: Option<u64>,
+    stop: bool,
+    /* If there was an error on the thread, store it here to be forwarded to the main loop */
+    error: Option<String>,
+}
+
+/** Data for a thread that notifies the main loop whenever the main vulkan timeline semaphore updates */
+struct VulkanWaitThread {
+    notify: Condvar,
+    inner: Mutex<VulkanWaitThreadInner>,
+}
+
+/** Struct which on Drop notifies Vulkan semaphore wait thread to stop */
+struct VulkanWaitThreadShutdown {
+    state: Arc<VulkanWaitThread>,
+}
+
 /** Messages to be written through the channel (and associated metadata.) */
 struct TransferQueue<'a> {
     // protocol data: translated wayland messages
@@ -964,7 +986,13 @@ pub fn try_setup_dmabuf_instance_full(
 ) -> Result<DmabufDevice, String> {
     if !opts.test_skip_vulkan {
         if let Some(instance) = setup_vulkan_instance(opts.debug, &opts.video)? {
-            if let Some(device) = setup_vulkan_device(&instance, device, &opts.video, opts.debug)? {
+            if let Some(device) = setup_vulkan_device(
+                &instance,
+                device,
+                &opts.video,
+                opts.debug,
+                opts.test_no_timeline_export,
+            )? {
                 return Ok(DmabufDevice::Vulkan((instance, device)));
             }
         };
@@ -987,8 +1015,14 @@ pub fn complete_dmabuf_setup(
         let DmabufDevice::VulkanSetup(instance) = tmp else {
             unreachable!();
         };
-        let device = setup_vulkan_device(&instance, device, &opts.video, opts.debug)?
-            .expect("Vulkan device existence should already have been checked");
+        let device = setup_vulkan_device(
+            &instance,
+            device,
+            &opts.video,
+            opts.debug,
+            opts.test_no_timeline_export,
+        )?
+        .expect("Vulkan device existence should already have been checked");
         *dmabuf_dev = DmabufDevice::Vulkan((instance, device));
     }
     Ok(())
@@ -4183,11 +4217,11 @@ fn has_from_chan_output(from_chan_output: &TransferWayland) -> bool {
     from_chan_output.len > 0
 }
 
-/** Write a message to the file descriptor to wake up the thread that polls `poll()` it */
-fn wakeup_fd(fd: &OwnedFd) -> Result<(), ()> {
-    let zero = [0];
+/** Write a message to the file descriptor to wake up the thread that polls `poll()` it.
+ */
+fn wakeup_fd(fd: &OwnedFd, val: &[u8]) -> Result<(), ()> {
     loop {
-        match unistd::write(fd, &zero) {
+        match unistd::write(fd, val) {
             Ok(_) => return Ok(()),
             Err(nix::errno::Errno::EINTR) => continue,
             Err(nix::errno::Errno::EAGAIN) => {
@@ -4199,6 +4233,8 @@ fn wakeup_fd(fd: &OwnedFd) -> Result<(), ()> {
                 return Err(());
             }
             Err(e) => {
+                // TODO: ENOBUFS is theoretically possible, so errors here
+                // should probably be propagated to the main loop
                 panic!("Pipe wakeup failed {:?}", e);
             }
         }
@@ -4405,7 +4441,8 @@ fn work_thread(tasksys: &TaskSystem, output: Sender<TaskResult>) {
         // available tasks.
         // TODO: better notification mechanism for apply tasks being done
         // is atomic_bool enough?
-        if wakeup_fd(&tasksys.wake_fd).is_err() {
+        let zero = [0];
+        if wakeup_fd(&tasksys.wake_fd, &zero).is_err() {
             /* Remote end shut down */
             break;
         }
@@ -4458,11 +4495,94 @@ fn work_thread(tasksys: &TaskSystem, output: Sender<TaskResult>) {
     );
 }
 
+/** Main loop for the thread waiting on the main Vulkan timeline semaphore, if it cannot
+ * be exported to a file descriptor. */
+fn vulkan_wait_thread(state: Arc<VulkanWaitThread>, vulk: Arc<VulkanDevice>) {
+    let notify: &Condvar = &state.notify;
+    let mtx: &Mutex<_> = &state.inner;
+
+    debug!(
+        "Vulkan waiting thread {} started",
+        std::thread::current().name().unwrap_or("unknown")
+    );
+
+    let mut guard = mtx.lock().unwrap();
+    while !guard.stop {
+        let Some(pt) = guard.target_sequence_point else {
+            /* No Vulkan timeline point to wait for, so wait until a new timeline point is
+             * requested */
+            guard = match notify.wait(guard) {
+                Ok(g) => g,
+                Err(_) => {
+                    error!("Mutex poisoned, stopping Vulkan waiter thread");
+                    break;
+                }
+            };
+            continue;
+        };
+
+        drop(guard);
+        /* Note: setting a short timeout (even 1ms) should be acceptable since (barring
+         * client deadlock) either the client should be actively rendering a frame or
+         * Waypipe should be actively processing one. */
+        let res = vulk.wait_for_timeline_pt(pt, u64::MAX);
+        guard = mtx.lock().unwrap();
+
+        /* In any case, wake up main loop; spurious wakeups are acceptable and rare. */
+        if !guard.pending_read {
+            /* Try to wake up main loop */
+            let long_zero = [0u8; 8];
+            if wakeup_fd(&guard.pipe_w, &long_zero).is_err() {
+                /* Failed to write to pipe because read end must have dropped or there is
+                 * a system error. In either case, exit silently. */
+                break;
+            }
+            guard.pending_read = true;
+        }
+
+        match res {
+            Err(e) => {
+                guard.error = Some(e);
+                break;
+            }
+            Ok(true) => {
+                /* Have reached the target point, do not need to wait again if there was a
+                 * spurious wakeup */
+                guard.target_sequence_point = None;
+            }
+            /* This case is theoretically possible; for example, if the monotonic clock may
+             * have jumped ahead by u64::MAX nanoseconds. In that case, keep the current state
+             * and wait again */
+            Ok(false) => (),
+        }
+    }
+
+    debug!(
+        "Vulkan waiting thread {} complete",
+        std::thread::current().name().unwrap_or("unknown")
+    );
+}
+
+impl Drop for VulkanWaitThreadShutdown {
+    fn drop(&mut self) {
+        match self.state.inner.lock() {
+            Ok(mut guard) => {
+                guard.stop = true;
+            }
+            Err(_) => {
+                error!("Mutex poisoned, Vulkan wait thread expected to shut down");
+            }
+        }
+        self.state.notify.notify_all();
+    }
+}
+
 /** Inner loop of Waypipe's proxy logic, which reads and writes Wayland messages for
  * the Wayland application or compositor, and Waypipe messages for the matching Waypipe instance.
  *
  * Returns: if unsuccessful, an error message to print and send to the Wayland application */
-fn loop_inner(
+fn loop_inner<'a>(
+    scope: &'a std::thread::Scope<'a, '_>,
     glob: &mut Globals,
     from_chan: &mut FromChannel,
     from_way: &mut FromWayland,
@@ -4473,6 +4593,10 @@ fn loop_inner(
     pollmask: &signal::SigSet,
     sigint_received: &AtomicBool,
 ) -> Result<(), String> {
+    let mut vulkan_wait_state: Option<Arc<VulkanWaitThread>> = None;
+    let mut _vulkan_wait_thread_shutdown: Option<VulkanWaitThreadShutdown> = None;
+    let mut vulkan_wait_pipe_r: Option<OwnedFd> = None;
+
     while from_chan.state != DirectionState::Off || from_way.state != DirectionState::Off {
         let has_chan_output =
             has_from_way_output(&from_way.output) && from_way.state != DirectionState::Off;
@@ -4572,9 +4696,67 @@ fn loop_inner(
                      * progress can be made */
                     let mut flags = PollFlags::empty();
                     flags.set(PollFlags::POLLIN, true);
-                    let bfd = vulk.get_event_fd(first_pt).unwrap();
-                    pfds.push(PollFd::new(bfd, flags));
-                    (Some(pfds.len() - 1), Some(bfd))
+                    let obfd = vulk.get_event_fd(first_pt).unwrap();
+                    if let Some(bfd) = obfd {
+                        pfds.push(PollFd::new(bfd, flags));
+                        (Some(pfds.len() - 1), Some(bfd))
+                    } else {
+                        /* Emulate the eventfd using a thread that waits on the Vulkan main semaphore */
+                        if let Some(ref w) = vulkan_wait_state {
+                            /* Update target sequence point. Note: it is possible `first_pt` may be _smaller_
+                             * than the current target sequence point value depending on the precise task execution
+                             * order. There is no mechanism to immediately cancel currently running wait operations
+                             * without e.g. polling, so the wait thread will wait somewhat longer than necessary.
+                             * This will probably not cause a deadlock since (assuming sane clients) all submitted
+                             * Vulkan command buffers should make progress eventually if the main thread does
+                             * nothing, and is unlikely to be significant in practice. Insane clients can of
+                             * course never signal the acquire semaphore they provided.
+                             */
+                            w.inner.lock().unwrap().target_sequence_point = Some(first_pt);
+                            w.notify.notify_all();
+                        } else {
+                            let (wake_r, wake_w) =
+                                unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK)
+                                    .map_err(|x| tag!("Failed to create pipe: {}", x))?;
+
+                            let wait_state = Arc::new(VulkanWaitThread {
+                                inner: Mutex::new(VulkanWaitThreadInner {
+                                    pipe_w: wake_w,
+                                    pending_read: false,
+                                    target_sequence_point: Some(first_pt),
+                                    stop: false,
+                                    error: None,
+                                }),
+                                notify: Condvar::new(),
+                            });
+                            let shutdown = VulkanWaitThreadShutdown {
+                                state: wait_state.clone(),
+                            };
+                            _vulkan_wait_thread_shutdown = Some(shutdown);
+
+                            let vkclone = vulk.clone();
+                            let waitclone = wait_state.clone();
+                            let thread = std::thread::Builder::new()
+                                .name(format!(
+                                    "{}-vulkan-wait",
+                                    if glob.on_display_side { "c" } else { "s" },
+                                ))
+                                .spawn_scoped(scope, move || vulkan_wait_thread(waitclone, vkclone))
+                                .map_err(|x| tag!("Failed to spawn thread: {:?}", x))?;
+
+                            /* Thread will automatically join on scope end, and will be asked to shut
+                             * down when vulkan_wait_thread_shutdown drops. (The shutdown itself may
+                             * be delayed until all in-progress Vulkan operations complete.) */
+                            drop(thread);
+
+                            vulkan_wait_state = Some(wait_state);
+                            vulkan_wait_pipe_r = Some(wake_r);
+                        }
+
+                        let bfd = vulkan_wait_pipe_r.as_ref().unwrap().as_fd();
+                        pfds.push(PollFd::new(bfd, flags));
+                        (Some(pfds.len() - 1), Some(bfd))
+                    }
                 } else {
                     (None, None)
                 }
@@ -4788,10 +4970,24 @@ fn loop_inner(
                 let r = nix::unistd::read(borrowed_fd.unwrap().as_raw_fd(), &mut data);
                 match r {
                     Ok(s) => {
+                        /* Reads from an eventfd should always return 8 bytes; and short
+                         * 8-byte reads from a pipe should be atomic in practice */
                         assert!(s == 8);
                         /* The u64 counter returned by data indicates the number of times
                          * drmSyncObjEventfd was called since last read, and is not important. */
                         timeline_update = true;
+
+                        if let Some(ref w) = vulkan_wait_state {
+                            let mut m = w.inner.lock().unwrap();
+                            m.pending_read = false;
+                            let mut tmp = None;
+                            std::mem::swap(&mut tmp, &mut m.error);
+                            if let Some(e) = tmp {
+                                /* Propagate errors from the wait thread */
+                                error!("Vulkan timeline waiting thread failed: {}", e);
+                                return Err(e);
+                            }
+                        }
                     }
                     Err(nix::errno::Errno::EINTR) | Err(nix::errno::Errno::EAGAIN) => {
                         /* no action */
@@ -5003,7 +5199,7 @@ fn loop_inner(
                     }
                     Err(e) => {
                         error!("worker failed: {}", e);
-                        return Err(e.to_string());
+                        return Err(e);
                     }
                 }
 
@@ -5291,6 +5487,8 @@ pub struct Options {
     pub debug_store_video: Option<PathBuf>,
     /** If true, make vulkan initialization fail so that gbm fallback will be tried if available */
     pub test_skip_vulkan: bool,
+    /** If true, assume the platform does not support timeline semaphore importing/exporting */
+    pub test_no_timeline_export: bool,
 }
 
 /** The main entrypoint for Wayland protocol proxying; should be given already opened and connected sockets
@@ -5424,6 +5622,7 @@ pub fn main_interface_loop(
         }
 
         let ret = loop_inner(
+            scope,
             &mut glob,
             &mut from_chan,
             &mut from_way,

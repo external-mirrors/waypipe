@@ -41,6 +41,7 @@ mod dmabuf_stub {
         instance: &Arc<VulkanInstance>,
         main_device: Option<u64>,
         format_filter_for_video: bool,
+        test_no_timeline_export: bool,
     ) -> Result<Option<VulkanDevice>, String> {
         unreachable!();
     }
@@ -49,6 +50,7 @@ mod dmabuf_stub {
         main_device: Option<u64>,
         video: &VideoSetting,
         debug: bool,
+        test_no_timeline_export: bool,
     ) -> Result<Option<Arc<VulkanDevice>>, String> {
         unreachable!();
     }
@@ -149,16 +151,16 @@ mod dmabuf_stub {
         }
     }
     impl VulkanDevice {
-        pub fn wait_for_timeline_pt(&self, pt: u64, max_wait: u64) -> Result<bool, &'static str> {
+        pub fn wait_for_timeline_pt(&self, pt: u64, max_wait: u64) -> Result<bool, String> {
             unreachable!();
         }
         pub fn get_device(&self) -> u64 {
             unreachable!();
         }
-        pub fn get_event_fd(&self, timeline_point: u64) -> Result<BorrowedFd, String> {
+        pub fn get_event_fd(&self, timeline_point: u64) -> Result<Option<BorrowedFd>, String> {
             unreachable!();
         }
-        pub fn get_current_timeline_pt(&self) -> Result<u64, &'static str> {
+        pub fn get_current_timeline_pt(&self) -> Result<u64, String> {
             unreachable!();
         }
         pub fn supports_format(&self, drm_format: u32, drm_modifier: u64) -> bool {
@@ -196,7 +198,7 @@ mod dmabuf_stub {
         }
     }
     impl VulkanTimelineSemaphore {
-        pub fn get_current_pt(self: &VulkanTimelineSemaphore) -> Result<u64, &'static str> {
+        pub fn get_current_pt(self: &VulkanTimelineSemaphore) -> Result<u64, String> {
             unreachable!();
         }
 
@@ -206,7 +208,7 @@ mod dmabuf_stub {
         pub fn link_event_fd(
             self: &VulkanTimelineSemaphore,
             timeline_point: u64,
-        ) -> Result<BorrowedFd, &'static str> {
+        ) -> Result<BorrowedFd, String> {
             unreachable!();
         }
         pub fn signal_timeline_pt(self: &VulkanTimelineSemaphore, pt: u64) -> Result<(), String> {

@@ -850,7 +850,7 @@ fn setup_vulkan(device_id: u64) -> Result<Arc<VulkanDevice>, String> {
     let instance = setup_vulkan_instance(true, &VideoSetting::default())?
         .ok_or_else(|| tag!("Vulkan instance not available"))?;
     Ok(Arc::new(
-        setup_vulkan_device_base(&instance, Some(device_id), false)?
+        setup_vulkan_device_base(&instance, Some(device_id), false, false)?
             .ok_or_else(|| tag!("Vulkan device {} not available", device_id))?,
     ))
 }

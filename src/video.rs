@@ -3137,7 +3137,8 @@ fn test_video(try_hardware: bool) {
         let Ok(Some(instance)) = setup_vulkan_instance(debug, &vid_setting) else {
             continue;
         };
-        let Ok(Some(vulk)) = setup_vulkan_device(&instance, Some(dev_id), &vid_setting, debug)
+        let Ok(Some(vulk)) =
+            setup_vulkan_device(&instance, Some(dev_id), &vid_setting, debug, false)
         else {
             continue;
         };

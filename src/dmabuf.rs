@@ -71,11 +71,9 @@ pub struct VulkanDevice {
     /** Timeline semaphore; when it reaches 'queue.last_semaphore_value', all preceding work using
      * the semaphore is done */
     pub semaphore: vk::Semaphore,
-    _semaphore_fd: OwnedFd,
-    semaphore_drm_handle: u32,
+    /** DRM handle and event_fd exported from [VulkanDevice::semaphore], for easy access from main loop */
+    semaphore_external: Option<VulkanExternalTimelineSemaphore>,
     drm_fd: OwnedFd,
-    event_fd: OwnedFd,
-
     #[cfg(feature = "video")]
     pub video: Option<VulkanVideo>,
 
@@ -97,12 +95,21 @@ pub struct VulkanDevice {
     memory_properties: vk::PhysicalDeviceMemoryProperties,
 }
 
+/** The associated drm handle/eventfd associated with a timeline semaphore, which can be
+ * used to wait for updates on it.
+ *
+ * [Drop] has not been implemented for this type; it must be destroyed by the containing struct.
+ */
+struct VulkanExternalTimelineSemaphore {
+    drm_handle: u32,
+    event_fd: OwnedFd,
+}
+
 /** A Vulkan timeline semaphore and the eventfd used to wait for updates on it */
 pub struct VulkanTimelineSemaphore {
     pub vulk: Arc<VulkanDevice>,
     pub semaphore: vk::Semaphore,
-    semaphore_drm_handle: u32,
-    event_fd: OwnedFd,
+    external: VulkanExternalTimelineSemaphore,
 }
 
 /** A sync file (e.g.: exported from a DMABUF, for implicit sync) */
@@ -248,7 +255,7 @@ impl Drop for VulkanDmabuf {
 impl Drop for VulkanTimelineSemaphore {
     fn drop(&mut self) {
         unsafe {
-            drm_syncobj_destroy(&self.vulk.drm_fd, self.semaphore_drm_handle).unwrap();
+            drm_syncobj_destroy(&self.vulk.drm_fd, self.external.drm_handle).unwrap();
             // SAFETY: only if semaphore is not being used
             self.vulk.dev.destroy_semaphore(self.semaphore, None);
 
@@ -721,6 +728,8 @@ pub struct DeviceInfo {
     pub hw_enc_h264: bool,
     pub hw_dec_h264: bool,
     pub hw_dec_av1: bool,
+    /** Iff true, device supports import and export of timeline semaphores to sync files */
+    supports_timeline_import_export: bool,
 }
 
 /** List of instance extensions that Waypipe requires */
@@ -1044,10 +1053,15 @@ pub fn setup_vulkan_instance(
                 &ext_semaphore_req,
                 &mut ext_semaphore_info,
             );
-            if !ext_semaphore_info.external_semaphore_features.contains(
-                vk::ExternalSemaphoreFeatureFlags::IMPORTABLE_KHR
-                    | vk::ExternalSemaphoreFeatureFlags::EXPORTABLE_KHR,
-            ) {
+
+            // TODO: add debug option to override/disable this, once implicit sync interop using poll()
+            // is implemented
+            let supports_timeline_import_export =
+                ext_semaphore_info.external_semaphore_features.contains(
+                    vk::ExternalSemaphoreFeatureFlags::IMPORTABLE_KHR
+                        | vk::ExternalSemaphoreFeatureFlags::EXPORTABLE_KHR,
+                );
+            if !supports_timeline_import_export {
                 debug!(
                     "Physical device does not support importing or exporting timeline semaphores"
                 );
@@ -1077,6 +1091,7 @@ pub fn setup_vulkan_instance(
                 hw_enc_h264,
                 hw_dec_h264,
                 hw_dec_av1,
+                supports_timeline_import_export,
             })
         }
 
@@ -1161,6 +1176,7 @@ pub fn setup_vulkan_device_base(
     instance: &Arc<VulkanInstance>,
     main_device: Option<u64>,
     format_filter_for_video: bool,
+    test_no_timeline_export: bool,
 ) -> Result<Option<VulkanDevice>, String> {
     let Some(dev_info) = instance.pick_device(main_device) else {
         if let Some(d) = main_device {
@@ -1422,8 +1438,22 @@ pub fn setup_vulkan_device_base(
 
         let init_sem_value = 0;
         let drm_fd = drm_open_render(dev_info.device_id, false)?;
-        let (semaphore, semaphore_drm_handle, semaphore_fd, semaphore_event_fd) =
-            vulkan_create_timeline_parts(&dev, &ext_semaphore_fd, &drm_fd, init_sem_value)?;
+        let (semaphore, semaphore_external) =
+            if dev_info.supports_timeline_import_export && !test_no_timeline_export {
+                let (semaphore, semaphore_drm_handle, semaphore_fd, semaphore_event_fd) =
+                    vulkan_create_timeline_parts(&dev, &ext_semaphore_fd, &drm_fd, init_sem_value)?;
+                drop(semaphore_fd);
+                (
+                    semaphore,
+                    Some(VulkanExternalTimelineSemaphore {
+                        drm_handle: semaphore_drm_handle,
+                        event_fd: semaphore_event_fd,
+                    }),
+                )
+            } else {
+                let semaphore = vulkan_create_simple_timeline(&dev, init_sem_value)?;
+                (semaphore, None)
+            };
 
         Ok(Some(VulkanDevice {
             _instance: instance.clone(),
@@ -1439,9 +1469,7 @@ pub fn setup_vulkan_device_base(
             dev,
             drm_fd,
             semaphore,
-            _semaphore_fd: semaphore_fd,
-            semaphore_drm_handle,
-            event_fd: semaphore_event_fd,
+            semaphore_external,
             get_modifier,
             get_mem_reqs2,
             bind_mem2,
@@ -1462,8 +1490,14 @@ pub fn setup_vulkan_device(
     main_device: Option<u64>,
     video: &VideoSetting,
     debug: bool,
+    test_no_timeline_export: bool,
 ) -> Result<Option<Arc<VulkanDevice>>, String> {
-    let Some(mut dev) = setup_vulkan_device_base(instance, main_device, video.format.is_some())?
+    let Some(mut dev) = setup_vulkan_device_base(
+        instance,
+        main_device,
+        video.format.is_some(),
+        test_no_timeline_export,
+    )?
     else {
         return Ok(None);
     };
@@ -2371,11 +2405,33 @@ pub fn vulkan_import_timeline(
         Ok(Arc::new(VulkanTimelineSemaphore {
             vulk: vulk.clone(),
             semaphore,
-            semaphore_drm_handle,
-            event_fd,
+            external: VulkanExternalTimelineSemaphore {
+                drm_handle: semaphore_drm_handle,
+                event_fd,
+            },
         }))
     }
 }
+
+/** Helper function to create a timeline semaphore for internal use only */
+unsafe fn vulkan_create_simple_timeline(
+    dev: &Device,
+    start_pt: u64,
+) -> Result<vk::Semaphore, String> {
+    let mut sem_type = vk::SemaphoreTypeCreateInfoKHR::default()
+        .semaphore_type(vk::SemaphoreType::TIMELINE_KHR)
+        .initial_value(start_pt);
+    let create_semaphore_info = vk::SemaphoreCreateInfo::default()
+        .flags(vk::SemaphoreCreateFlags::empty())
+        .push_next(&mut sem_type);
+
+    let semaphore = dev
+        .create_semaphore(&create_semaphore_info, None)
+        .map_err(|x| tag!("Failed to create semaphore: {:?}", x))?;
+
+    Ok(semaphore)
+}
+
 /** Helper function to create a timeline semaphore and matching drm syncobj,
  * event_fd, and fd for export. */
 unsafe fn vulkan_create_timeline_parts(
@@ -2396,7 +2452,7 @@ unsafe fn vulkan_create_timeline_parts(
 
     let semaphore = dev
         .create_semaphore(&create_semaphore_info, None)
-        .map_err(|_| "Failed to create semaphore")?;
+        .map_err(|x| tag!("Failed to create semaphore: {:?}", x))?;
 
     let sem_fd_info = vk::SemaphoreGetFdInfoKHR::default()
         .semaphore(semaphore)
@@ -2407,9 +2463,9 @@ unsafe fn vulkan_create_timeline_parts(
             // SAFETY: fd only captured here, vkGetSemaphoreFdKHR transfers ownership
             OwnedFd::from_raw_fd(x)
         }
-        Err(_) => {
+        Err(x) => {
             dev.destroy_semaphore(semaphore, None);
-            return Err(tag!("Failed to export semaphore"));
+            return Err(tag!("Failed to export semaphore: {:?}", x));
         }
     };
 
@@ -2441,20 +2497,21 @@ pub fn vulkan_create_timeline(
     start_pt: u64,
 ) -> Result<(Arc<VulkanTimelineSemaphore>, OwnedFd), String> {
     unsafe {
-        let (semaphore, semaphore_drm_handle, semaphore_fd, event_fd) =
-            vulkan_create_timeline_parts(
-                &vulk.dev,
-                &vulk.ext_semaphore_fd,
-                &vulk.drm_fd,
-                start_pt,
-            )?;
+        let (semaphore, drm_handle, semaphore_fd, event_fd) = vulkan_create_timeline_parts(
+            &vulk.dev,
+            &vulk.ext_semaphore_fd,
+            &vulk.drm_fd,
+            start_pt,
+        )?;
 
         Ok((
             Arc::new(VulkanTimelineSemaphore {
                 vulk: vulk.clone(),
                 semaphore,
-                semaphore_drm_handle,
-                event_fd,
+                external: VulkanExternalTimelineSemaphore {
+                    drm_handle,
+                    event_fd,
+                },
             }),
             semaphore_fd,
         ))
@@ -2965,15 +3022,15 @@ impl VulkanDevice {
     pub fn get_device(&self) -> u64 {
         self.device_id
     }
-    /** Get the event_fd associated with the main timeline semaphore. */
-    pub fn get_event_fd(&self, timeline_point: u64) -> Result<BorrowedFd, String> {
-        drm_syncobj_eventfd(
-            &self.drm_fd,
-            &self.event_fd,
-            self.semaphore_drm_handle,
-            timeline_point,
-        )?;
-        Ok(self.event_fd.as_fd())
+    /** Get the event_fd associated with the main timeline semaphore, if semaphore import/export is supported
+     * and there is one. */
+    pub fn get_event_fd(&self, timeline_point: u64) -> Result<Option<BorrowedFd>, String> {
+        if let Some(ref ext) = self.semaphore_external {
+            drm_syncobj_eventfd(&self.drm_fd, &ext.event_fd, ext.drm_handle, timeline_point)?;
+            Ok(Some(ext.event_fd.as_fd()))
+        } else {
+            Ok(None)
+        }
     }
 
     /** Return the timeline point for the main timeline semaphore for this device */
@@ -3162,23 +3219,23 @@ impl VulkanTimelineSemaphore {
         }
     }
 
-    /** Get the eventfd used with this timeline semaphore. */
+    /** Get the eventfd used with this timeline semaphore */
     pub fn get_event_fd(self: &VulkanTimelineSemaphore) -> BorrowedFd {
-        self.event_fd.as_fd()
+        self.external.event_fd.as_fd()
     }
-    /** Configure the eventfd to be ready when the
-     * semaphore has reached the timeline point. */
+    /** Configure the eventfd to be ready when the semaphore has reached the
+     * timeline point */
     pub fn link_event_fd(
         self: &VulkanTimelineSemaphore,
         timeline_point: u64,
     ) -> Result<BorrowedFd, String> {
         drm_syncobj_eventfd(
             &self.vulk.drm_fd,
-            &self.event_fd,
-            self.semaphore_drm_handle,
+            &self.external.event_fd,
+            self.external.drm_handle,
             timeline_point,
         )?;
-        Ok(self.event_fd.as_fd())
+        Ok(self.external.event_fd.as_fd())
     }
     /** Signal the timeline semaphore with the given timeline point. */
     pub fn signal_timeline_pt(self: &VulkanTimelineSemaphore, pt: u64) -> Result<(), String> {
@@ -3426,9 +3483,13 @@ fn test_dmabuf() {
         return;
     };
     for dev_id in list_render_device_ids() {
-        let Ok(Some(vulk)) =
-            setup_vulkan_device(&instance, Some(dev_id), &VideoSetting::default(), true)
-        else {
+        let Ok(Some(vulk)) = setup_vulkan_device(
+            &instance,
+            Some(dev_id),
+            &VideoSetting::default(),
+            true,
+            false,
+        ) else {
             continue;
         };
 

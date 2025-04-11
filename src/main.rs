@@ -335,6 +335,9 @@ fn build_connection_command<'a>(
     if options.test_skip_vulkan {
         args.push(OsStr::new("--test-skip-vulkan"));
     }
+    if options.test_no_timeline_export {
+        args.push(OsStr::new("--test-no-timeline-export"));
+    }
     if client {
         args.push(OsStr::new("client-conn"));
     } else {
@@ -1703,6 +1706,13 @@ fn main() -> Result<(), String> {
             .action(ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("test-no-timeline-export")
+            .long("test-no-timeline-export")
+            .hide(true)
+            .help("Test option: assume Vulkan timeline semaphore import/export is not available")
+            .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("test-fast-bench")
                 .long("test-fast-bench")
                 .hide(true)
@@ -1776,6 +1786,8 @@ fn main() -> Result<(), String> {
     let test_wire_version: Option<u32> = matches.get_one::<u32>("test-wire-version").copied();
     let test_store_video: Option<PathBuf> = matches.get_one::<PathBuf>("test-store-video").cloned();
     let test_skip_vulkan: bool = *matches.get_one::<bool>("test-skip-vulkan").unwrap();
+    let test_no_timeline_export: bool =
+        *matches.get_one::<bool>("test-no-timeline-export").unwrap();
     let secctx = matches.get_one::<String>("secctx");
     let vsock = *matches.get_one::<bool>("vsock").unwrap();
 
@@ -1832,6 +1844,7 @@ fn main() -> Result<(), String> {
         drm_node: drm_node.cloned(),
         debug_store_video: test_store_video,
         test_skip_vulkan,
+        test_no_timeline_export,
     };
 
     /* Needed to revert back to original cwdir after
@@ -1970,6 +1983,9 @@ fn main() -> Result<(), String> {
             }
             if opts.test_skip_vulkan {
                 ssh_cmd.push(OsStr::new("--test-skip-vulkan"));
+            }
+            if opts.test_no_timeline_export {
+                ssh_cmd.push(OsStr::new("--test-no-timeline-export"));
             }
             ssh_cmd.push(OsStr::new("server"));
             ssh_cmd.extend_from_slice(&ssh_args[destination_idx + 1..]);
