@@ -3134,11 +3134,10 @@ fn test_video(try_hardware: bool) {
             enc_pref: pref,
             dec_pref: pref,
         };
-        let Ok(Some(instance)) = setup_vulkan_instance(debug, &vid_setting) else {
+        let Ok(Some(instance)) = setup_vulkan_instance(debug, &vid_setting, false, false) else {
             continue;
         };
-        let Ok(Some(vulk)) =
-            setup_vulkan_device(&instance, Some(dev_id), &vid_setting, debug, false)
+        let Ok(Some(vulk)) = setup_vulkan_device(&instance, Some(dev_id), &vid_setting, debug)
         else {
             continue;
         };

@@ -267,6 +267,10 @@ struct TaskSet {
      * be created, once per protocol segment being delivered, inside
      * `collect_updates()`. */
     construct: VecDeque<WorkTask>,
+    /** Construction tasks (see [TaskSet::construct]) which are waiting for their DMABUF
+     * to be safely readable; this is only used if the system does not support importing
+     * a sync file from the DMABUF. */
+    waiting_for_implicit_acquire: BTreeMap<Rid, Vec<WorkTask>>,
     /* Decompress messages to apply a diff. */
     last_seqno: u64,
     decompress: VecDeque<DecompTask>,
@@ -966,7 +970,12 @@ pub fn try_setup_dmabuf_instance_light(
     device: Option<u64>,
 ) -> Result<DmabufDevice, String> {
     if !opts.test_skip_vulkan {
-        if let Some(instance) = setup_vulkan_instance(opts.debug, &opts.video)? {
+        if let Some(instance) = setup_vulkan_instance(
+            opts.debug,
+            &opts.video,
+            opts.test_no_timeline_export,
+            opts.test_no_binary_semaphore_import,
+        )? {
             if instance.has_device(device) {
                 return Ok(DmabufDevice::VulkanSetup(instance));
             }
@@ -985,14 +994,13 @@ pub fn try_setup_dmabuf_instance_full(
     device: Option<u64>,
 ) -> Result<DmabufDevice, String> {
     if !opts.test_skip_vulkan {
-        if let Some(instance) = setup_vulkan_instance(opts.debug, &opts.video)? {
-            if let Some(device) = setup_vulkan_device(
-                &instance,
-                device,
-                &opts.video,
-                opts.debug,
-                opts.test_no_timeline_export,
-            )? {
+        if let Some(instance) = setup_vulkan_instance(
+            opts.debug,
+            &opts.video,
+            opts.test_no_timeline_export,
+            opts.test_no_binary_semaphore_import,
+        )? {
+            if let Some(device) = setup_vulkan_device(&instance, device, &opts.video, opts.debug)? {
                 return Ok(DmabufDevice::Vulkan((instance, device)));
             }
         };
@@ -1015,14 +1023,8 @@ pub fn complete_dmabuf_setup(
         let DmabufDevice::VulkanSetup(instance) = tmp else {
             unreachable!();
         };
-        let device = setup_vulkan_device(
-            &instance,
-            device,
-            &opts.video,
-            opts.debug,
-            opts.test_no_timeline_export,
-        )?
-        .expect("Vulkan device existence should already have been checked");
+        let device = setup_vulkan_device(&instance, device, &opts.video, opts.debug)?
+            .expect("Vulkan device existence should already have been checked");
         *dmabuf_dev = DmabufDevice::Vulkan((instance, device));
     }
     Ok(())
@@ -1072,6 +1074,31 @@ pub fn dmabuf_post_apply_task_operations(data: &mut ShadowFdDmabuf) -> Result<()
         buf.copy_onto_dmabuf(data.view_row_stride, src.data)?;
     }
     Ok(())
+}
+
+/** For a DMABUF:
+ * - If required and supported, return a [VulkanSyncFile] from which to derive binary acquire semaphores
+ * - If required, return true to indicate that the DMABUF should be polled to determine when it is safe to read
+ */
+pub fn dmabuf_setup_implicit_sync(
+    data: &ShadowFdDmabuf,
+) -> Result<(Option<VulkanSyncFile>, bool), String> {
+    if data.using_implicit_sync {
+        /* Using implicit sync, so export a sync file to be waited on */
+        if let DmabufImpl::Vulkan(ref vulk_buf) = data.buf {
+            if !vulk_buf.vulk.supports_binary_semaphore_import() {
+                Ok((None, true))
+            } else if let Some(f) = vulk_buf.export_sync_file()? {
+                Ok((Some(f), false))
+            } else {
+                Ok((None, true))
+            }
+        } else {
+            Ok((None, false))
+        }
+    } else {
+        Ok((None, false))
+    }
 }
 
 /** Construct a ShadowFd for a shared memory file descriptor
@@ -1157,6 +1184,7 @@ pub fn translate_dmabuf_fd(
                     return Err(tag!("Cannot import DMABUF, unsupported format/size/modifier combination: {:x}, {}x{}, {:x}", drm_format, width, height, planes[0].modifier));
                 }
             }
+
             let buf = vulkan_import_dmabuf(vulk, planes, width, height, drm_format, use_video)?;
 
             let video_encode = if use_video {
@@ -2236,7 +2264,6 @@ fn collect_updates(
                     /* Nothing to do here */
                     return Ok(true);
                 }
-                data.damage = Damage::Intervals(Vec::new());
 
                 let mut acquires = Vec::new();
                 for acq in data.acquires.drain(..) {
@@ -2247,16 +2274,16 @@ fn collect_updates(
                     };
                     acquires.push((timeline_data.timeline.clone(), pt));
                 }
+
                 let mut implicit_semaphore = None;
-                if data.using_implicit_sync {
-                    data.using_implicit_sync = false;
+                let (implicit_sync_file, must_poll) = dmabuf_setup_implicit_sync(data)?;
+                data.using_implicit_sync = false;
+                if let Some(sync_file) = implicit_sync_file {
                     /* Using implicit sync, so export a sync file to be waited on */
-                    if let DmabufImpl::Vulkan(ref vulk_buf) = data.buf {
-                        if let Some(sync_file) = vulk_buf.export_sync_file()? {
-                            implicit_semaphore = Some(sync_file.export_binary_semaphore()?);
-                        }
-                    }
+                    implicit_semaphore = Some(sync_file.export_binary_semaphore()?);
                 }
+
+                data.damage = Damage::Intervals(Vec::new());
 
                 let task = VideoEncodeTask {
                     remote_id: sfd.remote_id,
@@ -2267,13 +2294,19 @@ fn collect_updates(
                         implicit: implicit_semaphore,
                     },
                 };
-                tasksys
-                    .tasks
-                    .lock()
-                    .unwrap()
-                    .construct
-                    .push_back(WorkTask::VideoEncode(task));
-                tasksys.task_notify.notify_one();
+
+                let mut g = tasksys.tasks.lock().unwrap();
+                if must_poll {
+                    g.waiting_for_implicit_acquire
+                        .entry(sfd.remote_id)
+                        .or_default()
+                        .push(WorkTask::VideoEncode(task));
+                    drop(g);
+                } else {
+                    g.construct.push_back(WorkTask::VideoEncode(task));
+                    drop(g);
+                    tasksys.task_notify.notify_one();
+                };
 
                 way_msg_output.expected_recvd_msgs += 1;
 
@@ -2318,6 +2351,7 @@ fn collect_updates(
                 return Ok(true);
             }
 
+            // TODO: is it possible to extract all acquires unconditionally, in case there is no damage?
             let mut acquires = Vec::new();
             for acq in data.acquires.drain(..) {
                 let (pt, sfd) = acq;
@@ -2328,18 +2362,8 @@ fn collect_updates(
                 acquires.push((timeline_data.timeline.clone(), pt));
             }
 
-            let implicit_sync_file: Option<VulkanSyncFile> = if data.using_implicit_sync {
-                data.using_implicit_sync = false;
-
-                /* Using implicit sync, so export a sync file to be waited on */
-                if let DmabufImpl::Vulkan(ref vulk_buf) = data.buf {
-                    vulk_buf.export_sync_file()?
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let (implicit_sync_file, must_poll) = dmabuf_setup_implicit_sync(data)?;
+            data.using_implicit_sync = false;
 
             let copied = if let DmabufImpl::Gbm(ref mut gbm_buf) = data.buf {
                 /* Copy out entire contents of buffer immediately and synchronously, do avoid
@@ -2409,8 +2433,19 @@ fn collect_updates(
                     };
 
                     way_msg_output.expected_recvd_msgs += 1;
-                    tasksys.tasks.lock().unwrap().construct.push_back(t);
-                    tasksys.task_notify.notify_one();
+
+                    let mut g = tasksys.tasks.lock().unwrap();
+                    if must_poll {
+                        g.waiting_for_implicit_acquire
+                            .entry(sfd.remote_id)
+                            .or_default()
+                            .push(t);
+                        drop(g);
+                    } else {
+                        g.construct.push_back(t);
+                        drop(g);
+                        tasksys.task_notify.notify_one();
+                    };
                 }
             } else {
                 // Then make diff tasks that copy the _bound_ of the slice ,
@@ -2463,7 +2498,17 @@ fn collect_updates(
                         DmabufImpl::Gbm(_) => todo!(),
                     };
                     way_msg_output.expected_recvd_msgs += 1;
-                    tasksys.tasks.lock().unwrap().construct.push_back(t);
+
+                    let mut g = tasksys.tasks.lock().unwrap();
+                    if must_poll {
+                        g.waiting_for_implicit_acquire
+                            .entry(sfd.remote_id)
+                            .or_default()
+                            .push(t);
+                    } else {
+                        g.construct.push_back(t);
+                    };
+                    drop(g);
                     tasksys.task_notify.notify_one();
                 }
             }
@@ -4821,6 +4866,46 @@ fn loop_inner<'a>(
             pfds.push(PollFd::new(evfd, PollFlags::POLLIN));
         }
 
+        /* Add DMABUFs that need to be polled to get implicit fence state */
+        let ndmabufbase_fds = pfds.len();
+        let mut dmabufs = Vec::new();
+        {
+            let g = tasksys.tasks.lock().unwrap();
+
+            let mut dmabuf_rids: Vec<Rid> = Vec::new();
+            dmabuf_rids.extend(g.waiting_for_implicit_acquire.keys().copied());
+            for rid in dmabuf_rids {
+                let Some(wsfd) = glob.map.get(&rid) else {
+                    error!(
+                        "ShadowFd with RID={} for dmabuf destroyed before task completion",
+                        rid
+                    );
+                    continue;
+                };
+                let Some(sfd) = wsfd.upgrade() else {
+                    error!(
+                        "ShadowFd with RID={} for dmabuf destroyed before task completion",
+                        rid
+                    );
+                    continue;
+                };
+                dmabufs.push(sfd);
+            }
+        }
+        let dmabuf_refs: Vec<std::cell::Ref<'_, ShadowFd>> =
+            dmabufs.iter().map(|v| v.borrow()).collect();
+        for d in dmabuf_refs.iter() {
+            let ShadowFdVariant::Dmabuf(ref data) = d.data else {
+                unreachable!();
+            };
+            let DmabufImpl::Vulkan(ref v) = data.buf else {
+                /* Only DMABUFs handled with Vulkan should have tasks put in TaskSet::waiting_for_implicit_acquire */
+                unreachable!();
+            };
+            let dfd = v.main_fd.as_fd();
+            pfds.push(PollFd::new(dfd, PollFlags::POLLIN));
+        }
+
         let zero_timeout = time::TimeSpec::new(0, 0);
         let res = nix::poll::ppoll(
             &mut pfds,
@@ -4843,6 +4928,7 @@ fn loop_inner<'a>(
         drop(pfds);
         drop(sfd_refs);
         drop(timeline_refs);
+        drop(dmabuf_refs);
 
         if sigint_received.load(Ordering::Acquire) {
             error!("SIGINT");
@@ -5149,6 +5235,30 @@ fn loop_inner<'a>(
                         return Err(tag!("Failed to read from eventfd: {:?}", code));
                     }
                 }
+            }
+        }
+
+        /* Process DMABUFs being polled  */
+        let mut base_dmabuf_id = ndmabufbase_fds;
+        for d in dmabufs.iter() {
+            let evts = pfd_returns[base_dmabuf_id];
+            base_dmabuf_id += 1;
+
+            let rid = d.borrow().remote_id;
+
+            if evts.contains(PollFlags::POLLIN) {
+                let mut g = tasksys.tasks.lock().unwrap();
+                /* Tasks should now be ready to process */
+                if let Some(mut tasks) = g.waiting_for_implicit_acquire.remove(&rid) {
+                    debug!(
+                        "Dmabuf with RID={} may safely be read from, queueing {} tasks",
+                        rid,
+                        tasks.len()
+                    );
+                    g.construct.extend(tasks.drain(..));
+                }
+                drop(g);
+                tasksys.task_notify.notify_one();
             }
         }
 
@@ -5489,6 +5599,8 @@ pub struct Options {
     pub test_skip_vulkan: bool,
     /** If true, assume the platform does not support timeline semaphore importing/exporting */
     pub test_no_timeline_export: bool,
+    /** If true, assume the platform does not support binary semaphore importing */
+    pub test_no_binary_semaphore_import: bool,
 }
 
 /** The main entrypoint for Wayland protocol proxying; should be given already opened and connected sockets
@@ -5582,6 +5694,7 @@ pub fn main_interface_loop(
         task_notify: Condvar::new(),
         tasks: Mutex::new(TaskSet {
             construct: VecDeque::new(),
+            waiting_for_implicit_acquire: BTreeMap::new(),
             last_seqno: 0,
             decompress: VecDeque::new(),
             apply: BTreeMap::new(),

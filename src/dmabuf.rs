@@ -155,9 +155,10 @@ pub struct VulkanDmabuf {
     // todo: use a <=4 vector size optimization without any heap allocation
     memory_planes: Vec<(vk::DeviceMemory, u32, u32)>, /* mem / offset / stride */
 
-    /** In order to extract sync files for implicit synchronization, store a copy of the
-     * DMABUF fd. (This may need to be changed to support disjoint multi-planar images.) */
-    main_fd: OwnedFd,
+    /** In order to extract sync files for implicit synchronization, and to poll the implicit
+     * fences if sync file extraction is not supported, store a copy of the DMABUF fd.
+     * (This may need to be changed to support disjoint multi-planar images.) */
+    pub main_fd: OwnedFd,
 
     pub inner: Mutex<VulkanDmabufInner>,
 }
@@ -728,8 +729,10 @@ pub struct DeviceInfo {
     pub hw_enc_h264: bool,
     pub hw_dec_h264: bool,
     pub hw_dec_av1: bool,
-    /** Iff true, device supports import and export of timeline semaphores to sync files */
+    /** Iff true, device supports import and export of timeline semaphores from/to sync files */
     supports_timeline_import_export: bool,
+    /** Iff true, device supports import of binary semaphores from sync files*/
+    supports_binary_import: bool,
 }
 
 /** List of instance extensions that Waypipe requires */
@@ -829,6 +832,8 @@ const EXT_LIST_VIDEO_BASE: &[(&CStr, u32)] = &[
 pub fn setup_vulkan_instance(
     debug: bool,
     video: &VideoSetting,
+    test_no_timeline_export: bool,
+    test_no_binary_import: bool,
 ) -> Result<Option<Arc<VulkanInstance>>, String> {
     if cfg!(target_os = "freebsd") {
         /* FreeBSD does not currently support the EXPORT_SYNC_FILE ioctl, needed for
@@ -1053,19 +1058,39 @@ pub fn setup_vulkan_instance(
                 &ext_semaphore_req,
                 &mut ext_semaphore_info,
             );
-
-            // TODO: add debug option to override/disable this, once implicit sync interop using poll()
-            // is implemented
-            let supports_timeline_import_export =
+            let mut supports_timeline_import_export =
                 ext_semaphore_info.external_semaphore_features.contains(
                     vk::ExternalSemaphoreFeatureFlags::IMPORTABLE_KHR
                         | vk::ExternalSemaphoreFeatureFlags::EXPORTABLE_KHR,
                 );
-            if !supports_timeline_import_export {
-                debug!(
-                    "Physical device does not support importing or exporting timeline semaphores"
-                );
-                continue;
+
+            let mut binary_semaphore_info = vk::SemaphoreTypeCreateInfoKHR::default()
+                .semaphore_type(vk::SemaphoreType::BINARY)
+                .initial_value(0);
+            let ext_binary_semaphore_req = vk::PhysicalDeviceExternalSemaphoreInfo::default()
+                .handle_type(vk::ExternalSemaphoreHandleTypeFlags::SYNC_FD)
+                .push_next(&mut binary_semaphore_info);
+            let mut ext_binary_semaphore_info = vk::ExternalSemaphoreProperties::default();
+            instance.get_physical_device_external_semaphore_properties(
+                p,
+                &ext_binary_semaphore_req,
+                &mut ext_binary_semaphore_info,
+            );
+            let mut supports_binary_import = ext_binary_semaphore_info
+                .external_semaphore_features
+                .contains(vk::ExternalSemaphoreFeatureFlags::IMPORTABLE_KHR);
+            debug!(
+                "Timeline semaphore import/export: {}; binary semaphore import: {}",
+                fmt_bool(supports_timeline_import_export),
+                fmt_bool(supports_binary_import)
+            );
+            if test_no_timeline_export {
+                supports_timeline_import_export = false;
+                debug!("Test override: timeline semaphore import/export disabled");
+            }
+            if test_no_binary_import {
+                supports_binary_import = false;
+                debug!("Test override: binary semaphore import disabled");
             }
 
             let render_id = if drm_prop.has_render != 0 {
@@ -1091,6 +1116,7 @@ pub fn setup_vulkan_instance(
                 hw_enc_h264,
                 hw_dec_h264,
                 hw_dec_av1,
+                supports_binary_import,
                 supports_timeline_import_export,
             })
         }
@@ -1108,6 +1134,7 @@ impl VulkanInstance {
     pub fn has_device(&self, main_device: Option<u64>) -> bool {
         self.pick_device(main_device).is_some()
     }
+
     /** If `main_device` is None, provide device info for the "best" available
      * device; otherwise, for the device with the specified ID, if available.
      */
@@ -1176,7 +1203,6 @@ pub fn setup_vulkan_device_base(
     instance: &Arc<VulkanInstance>,
     main_device: Option<u64>,
     format_filter_for_video: bool,
-    test_no_timeline_export: bool,
 ) -> Result<Option<VulkanDevice>, String> {
     let Some(dev_info) = instance.pick_device(main_device) else {
         if let Some(d) = main_device {
@@ -1438,22 +1464,21 @@ pub fn setup_vulkan_device_base(
 
         let init_sem_value = 0;
         let drm_fd = drm_open_render(dev_info.device_id, false)?;
-        let (semaphore, semaphore_external) =
-            if dev_info.supports_timeline_import_export && !test_no_timeline_export {
-                let (semaphore, semaphore_drm_handle, semaphore_fd, semaphore_event_fd) =
-                    vulkan_create_timeline_parts(&dev, &ext_semaphore_fd, &drm_fd, init_sem_value)?;
-                drop(semaphore_fd);
-                (
-                    semaphore,
-                    Some(VulkanExternalTimelineSemaphore {
-                        drm_handle: semaphore_drm_handle,
-                        event_fd: semaphore_event_fd,
-                    }),
-                )
-            } else {
-                let semaphore = vulkan_create_simple_timeline(&dev, init_sem_value)?;
-                (semaphore, None)
-            };
+        let (semaphore, semaphore_external) = if dev_info.supports_timeline_import_export {
+            let (semaphore, semaphore_drm_handle, semaphore_fd, semaphore_event_fd) =
+                vulkan_create_timeline_parts(&dev, &ext_semaphore_fd, &drm_fd, init_sem_value)?;
+            drop(semaphore_fd);
+            (
+                semaphore,
+                Some(VulkanExternalTimelineSemaphore {
+                    drm_handle: semaphore_drm_handle,
+                    event_fd: semaphore_event_fd,
+                }),
+            )
+        } else {
+            let semaphore = vulkan_create_simple_timeline(&dev, init_sem_value)?;
+            (semaphore, None)
+        };
 
         Ok(Some(VulkanDevice {
             _instance: instance.clone(),
@@ -1490,14 +1515,8 @@ pub fn setup_vulkan_device(
     main_device: Option<u64>,
     video: &VideoSetting,
     debug: bool,
-    test_no_timeline_export: bool,
 ) -> Result<Option<Arc<VulkanDevice>>, String> {
-    let Some(mut dev) = setup_vulkan_device_base(
-        instance,
-        main_device,
-        video.format.is_some(),
-        test_no_timeline_export,
-    )?
+    let Some(mut dev) = setup_vulkan_device_base(instance, main_device, video.format.is_some())?
     else {
         return Ok(None);
     };
@@ -3094,6 +3113,11 @@ impl VulkanDevice {
         };
         &data.modifiers
     }
+
+    /** Returns true if the device can import binary semaphores from sync files */
+    pub fn supports_binary_semaphore_import(&self) -> bool {
+        self.dev_info.supports_binary_import
+    }
 }
 
 impl VulkanDmabuf {
@@ -3479,17 +3503,14 @@ pub static VULKAN_MUTEX: Mutex<()> = Mutex::new(());
 fn test_dmabuf() {
     let _serialize_test = VULKAN_MUTEX.lock().unwrap();
 
-    let Ok(Some(instance)) = setup_vulkan_instance(true, &VideoSetting::default()) else {
+    let Ok(Some(instance)) = setup_vulkan_instance(true, &VideoSetting::default(), false, false)
+    else {
         return;
     };
     for dev_id in list_render_device_ids() {
-        let Ok(Some(vulk)) = setup_vulkan_device(
-            &instance,
-            Some(dev_id),
-            &VideoSetting::default(),
-            true,
-            false,
-        ) else {
+        let Ok(Some(vulk)) =
+            setup_vulkan_device(&instance, Some(dev_id), &VideoSetting::default(), true)
+        else {
             continue;
         };
 

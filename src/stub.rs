@@ -22,6 +22,7 @@ mod dmabuf_stub {
         pub vulk: Arc<VulkanDevice>,
         pub width: u32,
         pub height: u32,
+        pub main_fd: OwnedFd,
     }
     pub struct VulkanBuffer(());
     pub struct VulkanBufferReadView<'a> {
@@ -34,6 +35,8 @@ mod dmabuf_stub {
     pub fn setup_vulkan_instance(
         debug: bool,
         video: &VideoSetting,
+        test_no_timeline_export: bool,
+        test_no_binary_import: bool,
     ) -> Result<Option<Arc<VulkanInstance>>, String> {
         unreachable!();
     }
@@ -41,7 +44,6 @@ mod dmabuf_stub {
         instance: &Arc<VulkanInstance>,
         main_device: Option<u64>,
         format_filter_for_video: bool,
-        test_no_timeline_export: bool,
     ) -> Result<Option<VulkanDevice>, String> {
         unreachable!();
     }
@@ -50,7 +52,6 @@ mod dmabuf_stub {
         main_device: Option<u64>,
         video: &VideoSetting,
         debug: bool,
-        test_no_timeline_export: bool,
     ) -> Result<Option<Arc<VulkanDevice>>, String> {
         unreachable!();
     }
@@ -177,6 +178,9 @@ mod dmabuf_stub {
             planes: &[AddDmabufPlane],
             can_store_and_sample: bool,
         ) -> bool {
+            unreachable!();
+        }
+        pub fn supports_binary_semaphore_import(&self) -> bool {
             unreachable!();
         }
     }
