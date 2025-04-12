@@ -1175,13 +1175,16 @@ pub fn translate_dmabuf_fd(
                 }
             }
             if use_video {
-                if !vulk.can_import_image(drm_format, width, height, &planes, true) {
+                if vulk
+                    .can_import_image(drm_format, width, height, &planes, true)
+                    .is_err()
+                {
                     use_video = false;
                 }
             }
             if !use_video {
-                if !vulk.can_import_image(drm_format, width, height, &planes, false) {
-                    return Err(tag!("Cannot import DMABUF, unsupported format/size/modifier combination: {:x}, {}x{}, {:x}", drm_format, width, height, planes[0].modifier));
+                if let Err(e) = vulk.can_import_image(drm_format, width, height, &planes, false) {
+                    return Err(tag!("Cannot import DMABUF, format/size/modifier combination: {:x}, {}x{}, {:x}, has: {}", drm_format, width, height, planes[0].modifier, e));
                 }
             }
 

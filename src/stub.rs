@@ -151,6 +151,12 @@ mod dmabuf_stub {
             unreachable!();
         }
     }
+    pub struct VulkanImageParameterMismatch(());
+    impl std::fmt::Display for VulkanImageParameterMismatch {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            unreachable!();
+        }
+    }
     impl VulkanDevice {
         pub fn wait_for_timeline_pt(&self, pt: u64, max_wait: u64) -> Result<bool, String> {
             unreachable!();
@@ -177,7 +183,7 @@ mod dmabuf_stub {
             height: u32,
             planes: &[AddDmabufPlane],
             can_store_and_sample: bool,
-        ) -> bool {
+        ) -> Result<(), VulkanImageParameterMismatch> {
             unreachable!();
         }
         pub fn supports_binary_semaphore_import(&self) -> bool {

@@ -95,6 +95,12 @@ pub struct VulkanDevice {
     memory_properties: vk::PhysicalDeviceMemoryProperties,
 }
 
+pub enum VulkanImageParameterMismatch {
+    Format,
+    Modifier,
+    Size((u32, u32)),
+}
+
 /** The associated drm handle/eventfd associated with a timeline semaphore, which can be
  * used to wait for updates on it.
  *
@@ -303,6 +309,19 @@ impl Drop for VulkanCopyHandle {
                 );
             }
             self.vulk.dev.free_command_buffers(*cmd_pool, &[self.cb]);
+        }
+    }
+}
+
+impl std::fmt::Display for VulkanImageParameterMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Format => f.write_str("unsupported format"),
+            Self::Modifier => f.write_str("unsupported modifier"),
+            Self::Size(max_size) => f.write_fmt(format_args!(
+                "provided size is ≰ max size=({},{})",
+                max_size.0, max_size.1
+            )),
         }
     }
 }
@@ -3085,19 +3104,19 @@ impl VulkanDevice {
         height: u32,
         planes: &[AddDmabufPlane], // todo: move modifier extraction out of the function
         can_store_and_sample: bool,
-    ) -> bool {
+    ) -> Result<(), VulkanImageParameterMismatch> {
         /* post linux-dmabuf version 5, all planes must have same modifier */
         let modifier = planes[0].modifier;
         assert!(planes.iter().all(|x| x.modifier == modifier));
 
         let Some(vk_format) = drm_to_vulkan(drm_format) else {
-            return false;
+            return Err(VulkanImageParameterMismatch::Format);
         };
         let Some(data) = self.formats.get(&vk_format) else {
-            return false;
+            return Err(VulkanImageParameterMismatch::Format);
         };
         let Some(idx) = data.modifiers.iter().position(|x| *x == modifier) else {
-            return false;
+            return Err(VulkanImageParameterMismatch::Modifier);
         };
         let mod_data = &data.modifier_data[idx];
         let max_size = if can_store_and_sample {
@@ -3105,7 +3124,11 @@ impl VulkanDevice {
         } else {
             mod_data.max_size_transfer
         };
-        width <= max_size.0 && height <= max_size.1
+        if width <= max_size.0 && height <= max_size.1 {
+            Ok(())
+        } else {
+            Err(VulkanImageParameterMismatch::Size(max_size))
+        }
     }
 
     /** Return whether the device supports the given format */
