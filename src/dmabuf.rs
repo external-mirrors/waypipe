@@ -18,7 +18,7 @@ use std::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /** Properties of a specific format+modifier combination */
-#[derive(Debug)]
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ModifierData {
     pub plane_count: u32,
     pub max_size_transfer: (u32, u32),
@@ -1501,6 +1501,48 @@ pub fn setup_vulkan_device_base(
                     modifier_data: mod_data_list,
                 },
             );
+        }
+
+        if log::log_enabled!(log::Level::Debug) {
+            /* Print the entire set of formats/modifiers that Waypipe supports, along with the
+             * properties of them that Waypipe uses, compactly. */
+            let mut entries: Vec<(ModifierData, vk::Format, u64)> = Vec::new();
+            for f in formats.iter() {
+                for (m, data) in f.1.modifiers.iter().zip(f.1.modifier_data.iter()) {
+                    entries.push((data.clone(), *f.0, *m));
+                }
+            }
+
+            entries.sort_unstable();
+            let mut primary_segments: Vec<usize> = vec![0];
+            for i in 1..entries.len() {
+                if entries[i].0 != entries[i - 1].0 {
+                    primary_segments.push(i);
+                }
+            }
+            debug!("Format/modifier type classes: {}", primary_segments.len());
+            primary_segments.push(entries.len());
+            for w in primary_segments.windows(2) {
+                let segment = &entries[w[0]..w[1]];
+                debug!(
+                    "{} pairs with: planes: {} max tx size: {:?}, max vid size: {:?}",
+                    segment.len(),
+                    segment[0].0.plane_count,
+                    segment[0].0.max_size_transfer,
+                    segment[0].0.max_size_store_and_sample
+                );
+                let mut fmt_segment = vec![0];
+                for i in 1..segment.len() {
+                    if segment[i].1 != segment[i - 1].1 {
+                        fmt_segment.push(i);
+                    }
+                }
+                fmt_segment.push(segment.len());
+                for v in fmt_segment.windows(2) {
+                    let mods: Vec<u64> = segment[v[0]..v[1]].iter().map(|x| x.2).collect();
+                    debug!("- format: {:?}, modifiers: 0x{:x?}", segment[v[0]].1, mods);
+                }
+            }
         }
 
         let init_sem_value = 0;
