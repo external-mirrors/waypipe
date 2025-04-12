@@ -662,7 +662,10 @@ fn dmabuf_sync_file_export(dmabuf_fd: &OwnedFd) -> Result<Option<OwnedFd>, Strin
     }
 }
 
-/** Identify the maximum supported image extents for a given format-modifier pair */
+/** Identify the maximum supported image extents for a given format-modifier pair.
+ *
+ * Returns None if the image format/modifier/usage/etc. combination is not supported.
+ */
 fn get_max_external_image_size(
     instance: &Instance,
     physdev: vk::PhysicalDevice,
@@ -670,7 +673,7 @@ fn get_max_external_image_size(
     format: vk::Format,
     modifier: u64,
     flags: vk::ImageUsageFlags,
-) -> Result<(u32, u32), String> {
+) -> Result<Option<(u32, u32)>, String> {
     let mut ext_create_info = vk::PhysicalDeviceExternalImageFormatInfo::default()
         .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
     let img_qfis = &[queue_family];
@@ -690,14 +693,23 @@ fn get_max_external_image_size(
     let mut ext_info = vk::ExternalImageFormatProperties::default();
     let mut image_prop = vk::ImageFormatProperties2::default().push_next(&mut ext_info);
     unsafe {
-        instance
-            .get_physical_device_image_format_properties2(physdev, &format_info, &mut image_prop)
-            .map_err(|x| tag!("Failed to get image format properities: {:?}", x))?;
-
-        Ok((
-            image_prop.image_format_properties.max_extent.width,
-            image_prop.image_format_properties.max_extent.height,
-        ))
+        match instance.get_physical_device_image_format_properties2(
+            physdev,
+            &format_info,
+            &mut image_prop,
+        ) {
+            Err(vk::Result::ERROR_FORMAT_NOT_SUPPORTED) => Ok(None),
+            Err(x) => Err(tag!(
+                "Failed to get image format properties for (format={:?},modifier={:x}): {:?}",
+                format,
+                modifier,
+                x
+            )),
+            Ok(()) => Ok(Some((
+                image_prop.image_format_properties.max_extent.width,
+                image_prop.image_format_properties.max_extent.height,
+            ))),
+        }
     }
 }
 
@@ -1392,14 +1404,18 @@ pub fn setup_vulkan_device_base(
                     continue;
                 }
 
-                let max_size_transfer = get_max_external_image_size(
+                let Some(max_size_transfer) = get_max_external_image_size(
                     &instance.instance,
                     physdev,
                     queue_family,
                     *f,
                     m.drm_format_modifier,
                     base_usage,
-                )?;
+                )?
+                else {
+                    /* Specific combination of format/modifier/usage/queue not supported. */
+                    continue;
+                };
 
                 let store_feature = vk::FormatFeatureFlags::TRANSFER_SRC
                     | vk::FormatFeatureFlags::TRANSFER_DST
@@ -1414,14 +1430,14 @@ pub fn setup_vulkan_device_base(
                     .drm_format_modifier_tiling_features
                     .contains(store_feature)
                 {
-                    Some(get_max_external_image_size(
+                    get_max_external_image_size(
                         &instance.instance,
                         physdev,
                         queue_family,
                         *f,
                         m.drm_format_modifier,
                         store_usage,
-                    )?)
+                    )?
                 } else {
                     None
                 };
