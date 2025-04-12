@@ -150,6 +150,9 @@ mod dmabuf_stub {
         pub fn has_device(&self, main_device: Option<u64>) -> bool {
             unreachable!();
         }
+        pub fn device_supports_timeline_import_export(&self, main_device: Option<u64>) -> bool {
+            unreachable!();
+        }
     }
     pub struct VulkanImageParameterMismatch(());
     impl std::fmt::Display for VulkanImageParameterMismatch {
@@ -187,6 +190,9 @@ mod dmabuf_stub {
             unreachable!();
         }
         pub fn supports_binary_semaphore_import(&self) -> bool {
+            unreachable!();
+        }
+        pub fn supports_timeline_import_export(&self) -> bool {
             unreachable!();
         }
     }

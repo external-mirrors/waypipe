@@ -3918,7 +3918,7 @@ pub fn process_way_msg(
                 }
             }
             if intf == WP_LINUX_DRM_SYNCOBJ_MANAGER_V1 {
-                match glob.dmabuf_device {
+                match &glob.dmabuf_device {
                     DmabufDevice::Unknown => {
                         /* store globals for replay later */
                         let WpExtra::WlRegistry(ref mut reg) = obj.extra else {
@@ -3934,7 +3934,30 @@ pub fn process_way_msg(
                         );
                         return Ok(ProcMsg::Done);
                     }
-                    DmabufDevice::VulkanSetup(_) | DmabufDevice::Vulkan(_) => { /* keep */ }
+                    DmabufDevice::VulkanSetup(vkinst) => {
+                        let dev = if let Some(node) = &glob.opts.drm_node {
+                            Some(get_dev_for_drm_node_path(node)?)
+                        } else {
+                            None
+                        };
+                        if !vkinst.device_supports_timeline_import_export(dev) {
+                            debug!(
+                                "Timeline semaphore import/export will not be supported: Dropping interface: {}",
+                                EscapeWlName(intf)
+                            );
+                            return Ok(ProcMsg::Done);
+                        }
+                    }
+                    DmabufDevice::Vulkan((_, vulk)) => {
+                        /* Keep if timeline semaphores supported */
+                        if !vulk.supports_timeline_import_export() {
+                            debug!(
+                                "Timeline semaphore import/export is not supported: Dropping interface: {}",
+                                EscapeWlName(intf)
+                            );
+                            return Ok(ProcMsg::Done);
+                        }
+                    }
                 }
             }
 
@@ -3957,14 +3980,38 @@ pub fn process_way_msg(
                 let WpExtra::WlRegistry(ref mut reg) = obj.extra else {
                     return Err(tag!("Unexpected extra type for wl_registry"));
                 };
-                for (sync_name, sync_version) in reg.syncobj_manager_replay.drain(..) {
-                    write_evt_wl_registry_global(
-                        dst,
-                        object_id,
-                        sync_name,
-                        WP_LINUX_DRM_SYNCOBJ_MANAGER_V1,
-                        sync_version,
+                let timelines_supported = match &glob.dmabuf_device {
+                    /* Assume true since, once set up, Waypipe will most likely support drm syncobj iff the compositor does */
+                    DmabufDevice::VulkanSetup(_) => true,
+                    DmabufDevice::Unknown => {
+                        if glob.on_display_side {
+                            true
+                        } else {
+                            unreachable!();
+                        }
+                    }
+                    DmabufDevice::Unavailable => unreachable!(),
+                    DmabufDevice::Gbm(_) => false,
+                    DmabufDevice::Vulkan((_, vulk)) => vulk.supports_timeline_import_export(),
+                };
+                if !timelines_supported && !reg.syncobj_manager_replay.is_empty() {
+                    debug!(
+                        "Timeline semaphore import/export is not supported, not replaying {} advertisements for {}",
+                        reg.syncobj_manager_replay.len(),
+                        EscapeWlName(WP_LINUX_DRM_SYNCOBJ_MANAGER_V1)
                     );
+                }
+
+                for (sync_name, sync_version) in reg.syncobj_manager_replay.drain(..) {
+                    if timelines_supported {
+                        write_evt_wl_registry_global(
+                            dst,
+                            object_id,
+                            sync_name,
+                            WP_LINUX_DRM_SYNCOBJ_MANAGER_V1,
+                            sync_version,
+                        );
+                    }
                 }
             }
 

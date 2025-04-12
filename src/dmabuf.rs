@@ -1166,6 +1166,12 @@ impl VulkanInstance {
         self.pick_device(main_device).is_some()
     }
 
+    /** Return true if the device exists and will support timeline semaphore import and export */
+    pub fn device_supports_timeline_import_export(&self, main_device: Option<u64>) -> bool {
+        self.pick_device(main_device)
+            .is_some_and(|d| d.supports_timeline_import_export)
+    }
+
     /** If `main_device` is None, provide device info for the "best" available
      * device; otherwise, for the device with the specified ID, if available.
      */
@@ -3156,6 +3162,11 @@ impl VulkanDevice {
     /** Returns true if the device can import binary semaphores from sync files */
     pub fn supports_binary_semaphore_import(&self) -> bool {
         self.dev_info.supports_binary_import
+    }
+
+    /** Returns true if the device can import/export timeline semaphores from sync files */
+    pub fn supports_timeline_import_export(&self) -> bool {
+        self.dev_info.supports_timeline_import_export
     }
 }
 
