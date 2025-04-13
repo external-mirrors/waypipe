@@ -922,20 +922,6 @@ pub fn setup_vulkan_instance(
     test_no_timeline_export: bool,
     test_no_binary_import: bool,
 ) -> Result<Option<Arc<VulkanInstance>>, String> {
-    if cfg!(target_os = "freebsd") {
-        /* FreeBSD does not currently support the EXPORT_SYNC_FILE ioctl, needed for
-         * the Vulkan backend to interoperate with implicitly synchronized applications.
-         *
-         * TODO: introduce a runtime check -- old Linux kernels also do not support
-         * the ioctl.
-         *
-         * Note: alternatively, could stop compiling the Vulkan backend, but the added
-         * build complexity may not be worth it since which platforms work may change with time.
-         */
-        debug!("Vulkan backend not supported, no EXPORT_SYNC_FILE");
-        return Ok(None);
-    }
-
     let app_name = CString::new(env!("CARGO_PKG_NAME")).unwrap();
     let version: u32 = (env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap() << 24)
         | (env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap() << 16);
@@ -1166,6 +1152,18 @@ pub fn setup_vulkan_instance(
             let mut supports_binary_import = ext_binary_semaphore_info
                 .external_semaphore_features
                 .contains(vk::ExternalSemaphoreFeatureFlags::IMPORTABLE_KHR);
+            if cfg!(target_os = "freebsd") {
+                /* FreeBSD does not (as of writing) support the EXPORT_SYNC_FILE ioctl, and
+                 * thus cannot, even if binary semaphores can be imported, extract a sync file
+                 * from a dmabuf; with implicitly synchronized applications it will need to
+                 * fall back to polling the dmabuf. This may change in the future.
+                 *
+                 * TODO: introduce a runtime check -- old Linux kernels also do not support
+                 * the ioctl.
+                 */
+                debug!("No EXPORT_SYNC_FILE, disabling binary semaphore import/export");
+                supports_binary_import = false;
+            }
             debug!(
                 "Timeline semaphore import/export: {}; binary semaphore import: {}",
                 fmt_bool(supports_timeline_import_export),
