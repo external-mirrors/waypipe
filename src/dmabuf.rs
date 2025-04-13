@@ -370,18 +370,40 @@ pub struct FormatLayoutInfo {
 
 // TODO: determine if it is worth it to deduplicate shm and dmabuf format information.
 // (the code pathways will probably become very different.)
+
 /** List of Vulkan formats which Waypipe supports.
  *
- * Since channel interpretations do not affect processing, multiple DRM formats may
- * be mapped onto a single Vulkan format. */
+ * Channel interpretations _usually_ do not affect processing; given a linear
+ * layout it shouldn't matter which channel is R and which is B as long as the
+ * transfer operations (vkCmdCopyImageToBuffer, etc.) preserve the order.
+ *
+ * However, the DMABUF layout may depend on the precise (format, modifier) pair and
+ * so buffers should be imported/exported using the closest matching Vulkan format.
+ * In particular, DRM_FORMAT_ABGR8888 should use R8G8B8A8_UNORM, and
+ * DRM_FORMAT_ARGB8888 should use B8G8R8A8_UNORM. It is possible that a driver
+ * implements both ABGR and ARGB buffers using a fixed ABGR memory layout (using
+ * the format value to determine whether to swap R and B channels when transferring
+ * the data to a buffer, instead of just copying raw data as would occur with a naive
+ * linear layout). As a result, it is _not_ safe in general to import or export
+ * a DRM format using anything but the exact corresponding Vulkan format. */
 const SUPPORTED_FORMAT_LIST: &[vk::Format] = &[
     vk::Format::R4G4B4A4_UNORM_PACK16,
+    vk::Format::B4G4R4A4_UNORM_PACK16,
+    // vk::Format::A4R4G4B4_UNORM_PACK16_EXT, A4B4G4R4_UNORM_PACK16_EXT require VK_EXT_4444_formats or Vulkan 1.3
     vk::Format::R5G6B5_UNORM_PACK16,
+    vk::Format::B5G6R5_UNORM_PACK16,
+    // vk::Format::A1B5G5R5_UNORM_PACK16_KHR, // requires VK_KHR_maintenance5 or Vulkan 1.4.
+    vk::Format::A1R5G5B5_UNORM_PACK16,
+    vk::Format::B5G5R5A1_UNORM_PACK16,
+    vk::Format::R5G5B5A1_UNORM_PACK16,
     vk::Format::R8_UNORM,
     vk::Format::R8G8_UNORM,
     vk::Format::R8G8B8_UNORM,
+    vk::Format::B8G8R8_UNORM,
     vk::Format::R8G8B8A8_UNORM,
+    vk::Format::B8G8R8A8_UNORM,
     vk::Format::A2R10G10B10_UNORM_PACK32,
+    vk::Format::A2B10G10R10_UNORM_PACK32,
     vk::Format::R16_UNORM,
     vk::Format::R16G16_UNORM,
     vk::Format::R16G16B16A16_UNORM,
@@ -392,13 +414,24 @@ const SUPPORTED_FORMAT_LIST: &[vk::Format] = &[
 /** Get properties of a [vk::Format] */
 pub fn get_vulkan_info(f: vk::Format) -> FormatLayoutInfo {
     match f {
-        vk::Format::R4G4B4A4_UNORM_PACK16 => FormatLayoutInfo { bpp: 2, planes: 1 },
-        vk::Format::R5G6B5_UNORM_PACK16 => FormatLayoutInfo { bpp: 2, planes: 1 },
+        vk::Format::R4G4B4A4_UNORM_PACK16
+        | vk::Format::B4G4R4A4_UNORM_PACK16
+        | vk::Format::R5G6B5_UNORM_PACK16
+        | vk::Format::B5G6R5_UNORM_PACK16
+        | vk::Format::A1R5G5B5_UNORM_PACK16
+        | vk::Format::B5G5R5A1_UNORM_PACK16
+        | vk::Format::R5G5B5A1_UNORM_PACK16 => FormatLayoutInfo { bpp: 2, planes: 1 },
         vk::Format::R8_UNORM => FormatLayoutInfo { bpp: 1, planes: 1 },
         vk::Format::R8G8_UNORM => FormatLayoutInfo { bpp: 2, planes: 1 },
-        vk::Format::R8G8B8_UNORM => FormatLayoutInfo { bpp: 3, planes: 1 },
-        vk::Format::R8G8B8A8_UNORM => FormatLayoutInfo { bpp: 4, planes: 1 },
-        vk::Format::A2R10G10B10_UNORM_PACK32 => FormatLayoutInfo { bpp: 4, planes: 1 },
+        vk::Format::R8G8B8_UNORM | vk::Format::B8G8R8_UNORM => {
+            FormatLayoutInfo { bpp: 3, planes: 1 }
+        }
+        vk::Format::R8G8B8A8_UNORM | vk::Format::B8G8R8A8_UNORM => {
+            FormatLayoutInfo { bpp: 4, planes: 1 }
+        }
+        vk::Format::A2R10G10B10_UNORM_PACK32 | vk::Format::A2B10G10R10_UNORM_PACK32 => {
+            FormatLayoutInfo { bpp: 4, planes: 1 }
+        }
         vk::Format::R16_UNORM => FormatLayoutInfo { bpp: 2, planes: 1 },
         vk::Format::R16G16_UNORM => FormatLayoutInfo { bpp: 4, planes: 1 },
         vk::Format::R16G16B16A16_UNORM => FormatLayoutInfo { bpp: 8, planes: 1 },
@@ -469,37 +502,60 @@ pub fn drm_to_vulkan(drm_format: u32) -> Option<vk::Format> {
     };
     // TODO: is it safe to bundle multiple original channels into one? e.g. RGB233 => R8_UNORM
     // TODO: UNORM vs interpreting everything as UINT
+
+    /* 8-bit RGB, the endianness-independent formats */
+    match shm_format {
+        R8 => return Some(vk::Format::R8_UNORM),
+        Gr88 => return Some(vk::Format::R8G8_UNORM),
+        Rgb888 => return Some(vk::Format::B8G8R8_UNORM),
+        Bgr888 => return Some(vk::Format::R8G8B8_UNORM),
+        Abgr8888 | Xbgr8888 => return Some(vk::Format::R8G8B8A8_UNORM),
+        Argb8888 | Xrgb8888 => return Some(vk::Format::B8G8R8A8_UNORM),
+        /* Bgra/Rgba/Ayuv/Xyuv-type have no direct analogue and using
+         * R8G8B8A8_UNORM/B8G8R8A8_UNORM for either could potentially cause
+         * channel swaps on import */
+        _ => (),
+    }
+
+    /* Vulkan physical device endianness matches host endianness, while the Wayland and
+     * DRM formats are endianness-independent (typically little-endian). To keep things simple,
+     * on big endian systems, only permit formats with endianness-independent layout. */
+    if cfg!(not(target_endian = "little")) {
+        return None;
+    }
+
     Some(match shm_format {
-        Xrgb4444 | Xbgr4444 | Rgbx4444 | Bgrx4444 | Argb4444 | Abgr4444 | Rgba4444 | Bgra4444 => {
-            vk::Format::R4G4B4A4_UNORM_PACK16
-        }
+        /* Packed formats */
+        Rgba4444 | Rgbx4444 => vk::Format::R4G4B4A4_UNORM_PACK16,
+        Bgra4444 | Bgrx4444 => vk::Format::B4G4R4A4_UNORM_PACK16,
 
-        Rgb565 | Bgr565 => vk::Format::R5G6B5_UNORM_PACK16,
+        Rgb565 => vk::Format::R5G6B5_UNORM_PACK16,
+        Bgr565 => vk::Format::B5G6R5_UNORM_PACK16,
 
-        /* 8-bit RGB */
-        R8 | C8 | D8 => vk::Format::R8_UNORM,
-        Rg88 | Gr88 => vk::Format::R8G8_UNORM,
-        Rgb888 | Bgr888 => vk::Format::R8G8B8_UNORM,
-        Argb8888 | Abgr8888 | Xrgb8888 | Xbgr8888 | Rgba8888 | Bgra8888 | Rgbx8888 | Bgrx8888
-        | Ayuv | Avuy8888 | Xyuv8888 => vk::Format::R8G8B8A8_UNORM,
+        Abgr1555 | Xbgr1555 => vk::Format::A1B5G5R5_UNORM_PACK16_KHR,
+        Argb1555 | Xrgb1555 => vk::Format::A1R5G5B5_UNORM_PACK16,
+        Bgra5551 | Bgrx5551 => vk::Format::B5G5R5A1_UNORM_PACK16,
+        Rgba5551 | Rgbx5551 => vk::Format::R5G5B5A1_UNORM_PACK16,
+
         /* 10-bit RGB */
-        Argb2101010 | Xrgb2101010 | Abgr2101010 | Xbgr2101010 => {
-            vk::Format::A2R10G10B10_UNORM_PACK32
-        }
+        Argb2101010 | Xrgb2101010 => vk::Format::A2R10G10B10_UNORM_PACK32,
+        Abgr2101010 | Xbgr2101010 => vk::Format::A2B10G10R10_UNORM_PACK32,
+
         /* 16-bit RGB */
         R16 => vk::Format::R16_UNORM,
-        Rg1616 | Gr1616 => vk::Format::R16G16_UNORM,
-        Xrgb16161616 | Xbgr16161616 | Argb16161616 | Abgr16161616 => vk::Format::R16G16B16A16_UNORM,
-        Xrgb16161616f | Xbgr16161616f | Argb16161616f | Abgr16161616f => {
-            vk::Format::R16G16B16A16_SFLOAT
-        }
+        Gr1616 => vk::Format::R16G16_UNORM,
+        Abgr16161616 | Xbgr16161616 => vk::Format::R16G16B16A16_UNORM,
+        Abgr16161616f | Xbgr16161616f => vk::Format::R16G16B16A16_SFLOAT,
 
-        Yuyv | Yvyu => vk::Format::G8B8G8R8_422_UNORM,
+        /* YUV */
+        Yuyv => vk::Format::G8B8G8R8_422_UNORM,
+        Uyvy => vk::Format::B8G8R8G8_422_UNORM,
         Yuv420 => vk::Format::G8_B8_R8_3PLANE_420_UNORM,
         Yuv422 => vk::Format::G8_B8_R8_3PLANE_422_UNORM,
         Yuv444 => vk::Format::G8_B8_R8_3PLANE_444_UNORM,
         Nv12 => vk::Format::G8_B8R8_2PLANE_420_UNORM,
         Nv16 => vk::Format::G8_B8R8_2PLANE_422_UNORM,
+
         P016 => vk::Format::G16_B16R16_2PLANE_420_UNORM,
         Q401 => vk::Format::G16_B16_R16_3PLANE_444_UNORM,
 
