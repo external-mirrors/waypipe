@@ -1158,11 +1158,15 @@ pub fn setup_vulkan_instance(
                  * from a dmabuf; with implicitly synchronized applications it will need to
                  * fall back to polling the dmabuf. This may change in the future.
                  *
-                 * TODO: introduce a runtime check -- old Linux kernels also do not support
-                 * the ioctl.
+                 * It also does not currently support DRM_IOCTL_SYNCOBJ_EVENTFD, needed to
+                 * use exported timeline semaphores by linking them to eventfds.
+                 *
+                 * TODO: introduce a runtime check; and/or move to finer-grained feature
+                 * detection. Old Linux and other kernels also do not support these ioctls.
                  */
                 debug!("No EXPORT_SYNC_FILE, disabling binary semaphore import/export");
                 supports_binary_import = false;
+                supports_timeline_import_export = false;
             }
             debug!(
                 "Timeline semaphore import/export: {}; binary semaphore import: {}",
