@@ -204,12 +204,21 @@ struct ObjZwlrScreencopyFrame {
 struct ObjExtImageCopyCaptureSession {
     dmabuf_device: Option<u64>,
     dmabuf_formats: Vec<(u32, Vec<u64>)>,
+    /* The sorted list of format/modifier pairs from the last batch of buffer constraint events */
+    last_format_mod_list: Vec<(u32, u64)>,
+    frame_list: Vec<ObjId>, /* At most one frame _should_ exist at a time */
 }
 
 /** Additional information for ext_image_copy_capture_frame_v1 */
 struct ObjExtImageCopyCaptureFrame {
     /* Store sfd and shm metadata of target buffer in case the wl_buffer is destroyed early */
     buffer: Option<(Rc<RefCell<ShadowFd>>, Option<ObjWlBufferShm>)>,
+
+    /** This is reset to None when the parent session is destroyed. */
+    capture_session: Option<ObjId>,
+
+    /** If the parent session is destroyed, retain the last list of suppported modifiers here. */
+    supported_modifiers: Vec<(u32, u64)>,
 }
 
 /** Additional information for zwlr_gamma_control_v1 */
@@ -3288,6 +3297,8 @@ pub fn process_way_msg(
                         ObjExtImageCopyCaptureSession {
                             dmabuf_device: None,
                             dmabuf_formats: Vec::new(),
+                            last_format_mod_list: Vec::new(),
+                            frame_list: Vec::new(),
                         },
                     )),
                 },
@@ -3311,6 +3322,8 @@ pub fn process_way_msg(
                         ObjExtImageCopyCaptureSession {
                             dmabuf_device: None,
                             dmabuf_formats: Vec::new(),
+                            last_format_mod_list: Vec::new(),
+                            frame_list: Vec::new(),
                         },
                     )),
                 },
@@ -3469,6 +3482,17 @@ pub fn process_way_msg(
                         dst, object_id, *fmt, &output,
                     );
                 }
+
+                let mut format_mod_list = Vec::new();
+                for (fmt, mods) in session.dmabuf_formats.iter() {
+                    for m in mods.iter() {
+                        format_mod_list.push((*fmt, *m))
+                    }
+                }
+                format_mod_list.sort_unstable();
+                session.last_format_mod_list = format_mod_list;
+            } else {
+                session.last_format_mod_list = Vec::new();
             }
             write_evt_ext_image_copy_capture_session_v1_done(dst, object_id);
 
@@ -3484,6 +3508,12 @@ pub fn process_way_msg(
             OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_CREATE_FRAME,
         ) => {
             check_space!(msg.len(), 0, remaining_space);
+
+            let WpExtra::ExtImageCopyCaptureSession(ref session) = obj.extra else {
+                unreachable!();
+            };
+            let supported_modifiers = session.last_format_mod_list.clone();
+
             let frame = parse_req_ext_image_copy_capture_session_v1_create_frame(msg)?;
             insert_new_object(
                 &mut glob.objects,
@@ -3491,13 +3521,41 @@ pub fn process_way_msg(
                 WpObject {
                     obj_type: WaylandInterface::ExtImageCopyCaptureFrameV1,
                     extra: WpExtra::ExtImageCopyCaptureFrame(Box::new(
-                        ObjExtImageCopyCaptureFrame { buffer: None },
+                        ObjExtImageCopyCaptureFrame {
+                            buffer: None,
+                            supported_modifiers,
+                            capture_session: Some(object_id),
+                        },
                     )),
                 },
             )?;
             copy_msg(msg, dst);
             Ok(ProcMsg::Done)
         }
+        (
+            WaylandInterface::ExtImageCopyCaptureSessionV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_SESSION_V1_DESTROY,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+
+            let WpExtra::ExtImageCopyCaptureSession(ref mut session) = obj.extra else {
+                unreachable!();
+            };
+            let mut frames = Vec::new();
+            std::mem::swap(&mut session.frame_list, &mut frames);
+            let last_format_mod_list = session.last_format_mod_list.clone();
+            for frame_id in frames {
+                let object = glob.objects.get_mut(&frame_id).unwrap();
+                let WpExtra::ExtImageCopyCaptureFrame(ref mut frame) = object.extra else {
+                    unreachable!();
+                };
+                frame.capture_session = None;
+                frame.supported_modifiers = last_format_mod_list.clone();
+            }
+            Ok(ProcMsg::Done)
+        }
+
         (WaylandInterface::ZwlrScreencopyFrameV1, OPCODE_ZWLR_SCREENCOPY_FRAME_V1_COPY) => {
             check_space!(msg.len(), 0, remaining_space);
             copy_msg(msg, dst);
@@ -3557,6 +3615,31 @@ pub fn process_way_msg(
             frame.buffer = Some(buf_info);
             Ok(ProcMsg::Done)
         }
+
+        (
+            WaylandInterface::ExtImageCopyCaptureFrameV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_DESTROY,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+
+            let WpExtra::ExtImageCopyCaptureFrame(ref mut frame) = obj.extra else {
+                unreachable!();
+            };
+            let mut session: Option<ObjId> = None;
+            std::mem::swap(&mut frame.capture_session, &mut session);
+
+            if let Some(session_id) = session {
+                let object = glob.objects.get_mut(&session_id).unwrap();
+                let WpExtra::ExtImageCopyCaptureSession(ref mut session) = object.extra else {
+                    unreachable!();
+                };
+                if let Some(i) = session.frame_list.iter().position(|x| *x == object_id) {
+                    session.frame_list.remove(i);
+                }
+            }
+            Ok(ProcMsg::Done)
+        }
         (
             WaylandInterface::ExtImageCopyCaptureFrameV1,
             OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ATTACH_BUFFER,
@@ -3586,6 +3669,52 @@ pub fn process_way_msg(
                 unreachable!();
             };
             frame.buffer = Some(buf_info);
+            Ok(ProcMsg::Done)
+        }
+
+        (
+            WaylandInterface::ExtImageCopyCaptureFrameV1,
+            OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_CAPTURE,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+
+            if glob.on_display_side {
+                let WpExtra::ExtImageCopyCaptureFrame(ref frame) = obj.extra else {
+                    unreachable!();
+                };
+                /* Warn if the buffer being submitted does not have a format/modifier pair in the
+                 * buffer constraints list; Waypipe currently does not have a mechanism to reliably
+                 * ensure this occurs. */
+                let fmtmod = if let Some(ref buffer) = frame.buffer {
+                    let b = buffer.0.borrow();
+                    if let ShadowFdVariant::Dmabuf(ref d) = b.data {
+                        Some((d.drm_format, d.drm_modifier))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(pair) = fmtmod {
+                    let err = if let Some(session_id) = frame.capture_session {
+                        let object = glob.objects.get_mut(&session_id).unwrap();
+                        let WpExtra::ExtImageCopyCaptureSession(ref session) = object.extra else {
+                            unreachable!();
+                        };
+                        session.last_format_mod_list.binary_search(&pair).is_err()
+                    } else {
+                        frame.supported_modifiers.binary_search(&pair).is_err()
+                    };
+                    if err {
+                        error!("A wl_buffer Waypipe created with (format, modifier) = (0x{:08x},0x{:016x}) \
+                            is being submitted to ext_image_copy_capture_frame_v1#{}, whose parent ext_image_copy_capture_session_v1's \
+                            most recent update did not include the (format, modifier) combination. This may be a known Waypipe issue.",
+                            pair.0, pair.1, object_id);
+                    }
+                }
+            }
             Ok(ProcMsg::Done)
         }
         (WaylandInterface::ZwlrScreencopyFrameV1, OPCODE_ZWLR_SCREENCOPY_FRAME_V1_READY) => {

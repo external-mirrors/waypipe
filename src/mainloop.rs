@@ -542,6 +542,7 @@ pub struct ShadowFdDmabuf {
     /* Mirror copy of the dmabuf; only present after the first request */
     mirror: Option<Arc<Mirror>>,
     pub drm_format: u32,
+    pub drm_modifier: u64,
     pub damage: Damage,
 
     /* For compatibility with the C implementation of Waypipe, which acts as-if
@@ -1163,6 +1164,7 @@ pub fn translate_dmabuf_fd(
 
     debug!("Translating dmabuf fd");
 
+    let drm_modifier = planes[0].modifier;
     let (buf, video_encode) = match device {
         DmabufDevice::Unknown | DmabufDevice::Unavailable | DmabufDevice::VulkanSetup(_) => {
             unreachable!()
@@ -1219,6 +1221,7 @@ pub fn translate_dmabuf_fd(
             buf,
             mirror: None,
             drm_format,
+            drm_modifier,
             first_damage: true,
             export_planes: Vec::new(),
             damage: Damage::Intervals(Vec::new()),
@@ -1639,10 +1642,11 @@ fn process_sfd_msg(
             };
 
             /* Eagerly create a mirror copy of the dmabuf contents; this is currently needed
-             * to properly handle non-texel-aligned diff messages, as those cannot be directly
+             * to properly handle non-texel-block-aligned diff messages, as those cannot be directly
              * written to the dmabuf and must update the mirror first. */
             // TODO: for protocol version 2, this can be dropped
             let mirror = Some(Arc::new(Mirror::new(nom_size, false)?));
+            let drm_modifier = add_planes[0].modifier;
 
             let sfd = Rc::new(RefCell::new(ShadowFd {
                 remote_id,
@@ -1651,6 +1655,7 @@ fn process_sfd_msg(
                     buf,
                     mirror,
                     drm_format,
+                    drm_modifier,
                     view_row_stride,
                     first_damage: true,
                     damage: Damage::Intervals(Vec::new()),
@@ -1730,6 +1735,7 @@ fn process_sfd_msg(
                 // &[0],
                 true,
             )?;
+            let drm_modifier = add_planes[0].modifier;
 
             let video_decode_state = setup_video_decode(&buf, vid_type)?;
 
@@ -1740,6 +1746,7 @@ fn process_sfd_msg(
                     buf: DmabufImpl::Vulkan(buf),
                     mirror: None,
                     drm_format,
+                    drm_modifier,
                     view_row_stride,
                     first_damage: true,
                     damage: Damage::Intervals(Vec::new()),
