@@ -574,57 +574,28 @@ fn inverse_damage_rect_transform(
 /** Get an interval containing the entire memory region corresponding to the buffer */
 fn damage_for_entire_buffer(buffer: &ObjWlBufferShm) -> (usize, usize) {
     let start = (buffer.offset) as usize;
-    let end = (buffer.offset + buffer.stride * buffer.height) as usize;
-    assert!(start < end);
+    let end = if let Some(layout) = get_shm_format_layout(buffer.format) {
+        let mut end = start;
+        assert!(buffer.stride >= 0 && buffer.width >= 0 && buffer.height >= 0);
+        // TODO: use checked_mul and return None on overflow?
+        let ext_stride = (buffer.stride as u32) * layout.planes[0].hsub.get();
+
+        for plane in layout.planes {
+            /* In practice, divisions should always be exact/with no remainder;
+             * in case odd sizes are for some reason used, the most sensible thing
+             * to do is round up. (Exactly how to calculate these parameters is left
+             * entirely unspecified by the Wayland protocol as of writing.) */
+            let plane_stride = (ext_stride * plane.bpt.get())
+                .div_ceil(layout.planes[0].bpt.get() * plane.hsub.get());
+            let plane_height = (buffer.height as u32).div_ceil(plane.vsub.get());
+
+            end = end.saturating_add(plane_height.saturating_mul(plane_stride) as usize);
+        }
+        end
+    } else {
+        start.saturating_add(buffer.stride.saturating_mul(buffer.height) as usize)
+    };
     (64 * (start / 64), align(end, 64))
-}
-
-/** For single-plane non-subsampled linear formats, return the bytes used per pixel. */
-fn get_bpp(fmt: u32) -> Option<usize> {
-    use WlShmFormat::*;
-
-    let f: WlShmFormat = fmt.try_into().ok()?;
-    match f {
-        Argb8888 | Xrgb8888 => Some(4),
-        C8 | Rgb332 | Bgr233 => Some(1),
-        Xrgb4444 | Xbgr4444 | Rgbx4444 | Bgrx4444 | Argb4444 | Abgr4444 | Rgba4444 | Bgra4444
-        | Xrgb1555 | Xbgr1555 | Rgbx5551 | Bgrx5551 | Argb1555 | Abgr1555 | Rgba5551 | Bgra5551
-        | Rgb565 | Bgr565 => Some(2),
-        Rgb888 | Bgr888 => Some(3),
-        Xbgr8888 | Rgbx8888 | Bgrx8888 | Abgr8888 | Rgba8888 | Bgra8888 | Xrgb2101010
-        | Xbgr2101010 | Rgbx1010102 | Bgrx1010102 | Argb2101010 | Abgr2101010 | Rgba1010102
-        | Bgra1010102 => Some(4),
-        Yuyv | Yvyu | Uyvy | Vyuy | Ayuv => Some(4),
-        Nv12 | Nv21 | Nv16 | Nv61 | Yuv410 | Yvu410 | Yuv411 | Yvu411 | Yuv420 | Yvu420
-        | Yuv422 | Yvu422 | Yuv444 | Yvu444 => None,
-        R8 => Some(1),
-        R16 | Rg88 | Gr88 => Some(2),
-        Rg1616 | Gr1616 => Some(4),
-        Xrgb16161616f | Xbgr16161616f | Argb16161616f | Abgr16161616f => Some(8),
-        Xyuv8888 => Some(4),
-        Vuy888 => Some(3),
-        Vuy101010 => None,
-        Y210 | Y212 | Y216 => None, // subsampled packed
-        Y410 | Y412 | Y416 => None,
-        Xvyu2101010 => Some(4),
-        Xvyu1216161616 => Some(8),
-        Xvyu16161616 => Some(4),
-        Y0l0 | X0l0 | Y0l2 | X0l2 => None, // 2x2 tiled
-        Yuv4208bit => None,
-        Yuv42010bit => None,
-        Xrgb8888A8 | Xbgr8888A8 | Rgbx8888A8 | Bgrx8888A8 | Rgb888A8 | Bgr888A8 | Rgb565A8
-        | Bgr565A8 | Nv24 | Nv42 | P210 | P010 | P012 | P016 => None,
-        Axbxgxrx106106106106 => Some(8),
-        Nv15 | Q410 | Q401 => None,
-        Xrgb16161616 | Xbgr16161616 | Argb16161616 | Abgr16161616 => Some(8),
-        C1 | C2 | C4 | D1 | D2 | D4 => None,
-        D8 => Some(1),
-        R1 | R2 | R4 => None,
-        R10 => Some(2),
-        R12 => Some(2),
-        Avuy8888 | Xvuy8888 => Some(4),
-        P030 => None,
-    }
 }
 
 /** Return a list of rectangular areas damaged on a surface since the last time the given
@@ -745,10 +716,26 @@ fn get_damage_for_shm(
         panic!();
     };
 
-    let Some(bpp) = get_bpp(shm_info.format) else {
-        debug!("Format without known bpp {}", shm_info.format);
+    let Some(layout) = get_shm_format_layout(shm_info.format) else {
+        debug!("Format without known linear layout {}", shm_info.format);
         return vec![damage_for_entire_buffer(shm_info)];
     };
+    let [p0] = layout.planes else {
+        debug!(
+            "Format {} has {} planes",
+            shm_info.format,
+            layout.planes.len()
+        );
+        return vec![damage_for_entire_buffer(shm_info)];
+    };
+    if p0.hsub.get() != 1 || p0.vsub.get() != 1 || p0.htex.get() != 1 || p0.vtex.get() != 1 {
+        debug!(
+            "Format {} has nontrivial texels or subsampling",
+            shm_info.format
+        );
+        return vec![damage_for_entire_buffer(shm_info)];
+    }
+    let bpp = p0.bpt.get();
 
     let mut rects = get_damage_rects(surface, attachment);
     compute_damaged_segments(
@@ -757,7 +744,7 @@ fn get_damage_for_shm(
         128,
         shm_info.offset.try_into().unwrap(),
         shm_info.stride.try_into().unwrap(),
-        bpp,
+        bpp as usize,
     )
 }
 
@@ -774,17 +761,37 @@ fn get_damage_for_dmabuf(
         DmabufImpl::Gbm(ref buf) => (buf.nominal_size(sfdd.view_row_stride), buf.width),
     };
 
+    assert!(
+        sfdd.drm_format != WlShmFormat::Xrgb8888 as u32
+            && sfdd.drm_format != WlShmFormat::Argb8888 as u32
+    );
     let wayl_format = drm_to_wayland(sfdd.drm_format);
-    let Some(bpp) = get_bpp(wayl_format) else {
+    let Some(layout) = get_shm_format_layout(wayl_format) else {
         debug!("Format without known bpp {}", sfdd.drm_format);
         return vec![(0, align(nom_len, 64))];
     };
+    let [p0] = layout.planes else {
+        debug!(
+            "Format {} has {} planes",
+            sfdd.drm_format,
+            layout.planes.len()
+        );
+        return vec![(0, align(nom_len, 64))];
+    };
+    if p0.hsub.get() != 1 || p0.vsub.get() != 1 || p0.htex.get() != 1 || p0.vtex.get() != 1 {
+        debug!(
+            "Format {} has nontrivial texels or subsampling",
+            sfdd.drm_format
+        );
+        return vec![(0, align(nom_len, 64))];
+    }
+    let bpp = p0.bpt.get();
 
     let mut rects = get_damage_rects(surface, attachment);
     /* Stride: tightly packed. */
     // except: possibly gcd(4,bpp) aligned ?
-    let stride = sfdd.view_row_stride.unwrap_or(width * (bpp as u32));
-    compute_damaged_segments(&mut rects[..], 6, 128, 0, stride as usize, bpp)
+    let stride = sfdd.view_row_stride.unwrap_or(width * bpp);
+    compute_damaged_segments(&mut rects[..], 6, 128, 0, stride as usize, bpp as usize)
 }
 
 /** Construct a format table for use by the zwp_linux_dmabuf_v1 protocol,
@@ -2533,7 +2540,8 @@ pub fn process_way_msg(
                     let (mod_hi, mod_lo) = split_u64(mod_linear);
 
                     let wayl_format = drm_to_wayland(drm_format);
-                    let bpp = get_bpp(wayl_format).unwrap();
+                    // TODO: this will need to change for multiplanar or packed formats
+                    let bpp = get_shm_format_layout(wayl_format).unwrap().planes[0].bpt;
 
                     write_req_zwp_linux_buffer_params_v1_add(
                         dst,
@@ -2541,7 +2549,7 @@ pub fn process_way_msg(
                         true,
                         /* plane idx */ 0,
                         /* offset */ 0,
-                        (bpp * width as usize) as u32, // stride as if tightly packed
+                        bpp.get().checked_mul(width).unwrap(), // stride as if tightly packed
                         mod_hi,
                         mod_lo,
                     );
@@ -2655,7 +2663,8 @@ pub fn process_way_msg(
                     let (mod_hi, mod_lo) = split_u64(mod_linear);
 
                     let wayl_format = drm_to_wayland(drm_format);
-                    let bpp = get_bpp(wayl_format).unwrap();
+                    // TODO: update for multiplanar/complicated pixel formats
+                    let bpp = get_shm_format_layout(wayl_format).unwrap().planes[0].bpt;
 
                     write_req_zwp_linux_buffer_params_v1_add(
                         dst,
@@ -2663,7 +2672,7 @@ pub fn process_way_msg(
                         true,
                         /* plane idx */ 0,
                         /* offset */ 0,
-                        (bpp * width as usize) as u32, // stride as if tightly packed
+                        bpp.get().checked_mul(width).unwrap(), // stride as if tightly packed
                         mod_hi,
                         mod_lo,
                     );

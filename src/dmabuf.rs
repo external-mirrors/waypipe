@@ -449,19 +449,6 @@ pub fn get_vulkan_info(f: vk::Format) -> FormatLayoutInfo {
     }
 }
 
-/** Convert a DRM fourcc format code to a Wayland format code.
- *
- * Wayland and DRM differ in encodings for Argb8888 and Xrgb8888 only */
-pub fn drm_to_wayland(drm_format: u32) -> u32 {
-    if drm_format == fourcc('A', 'R', '2', '4') {
-        WlShmFormat::Argb8888 as u32
-    } else if drm_format == fourcc('X', 'R', '2', '4') {
-        WlShmFormat::Xrgb8888 as u32
-    } else {
-        drm_format
-    }
-}
-
 /** Convert a Wayland fourcc format code to a DRM format code.
  *
  * Wayland and DRM differ in encodings for Argb8888 and Xrgb8888 only */

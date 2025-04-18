@@ -94,9 +94,6 @@ mod dmabuf_stub {
     ) -> Result<(Arc<VulkanTimelineSemaphore>, OwnedFd), String> {
         unreachable!();
     }
-    pub fn drm_to_wayland(drm_format: u32) -> u32 {
-        unreachable!();
-    }
     pub fn get_dev_for_drm_node_path(path: &PathBuf) -> Result<u64, &'static str> {
         unreachable!();
     }

@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*! Misc utilities and types */
 use crate::platform::*;
+use crate::wayland_gen::WlShmFormat;
+use core::num::NonZeroU32;
 use nix::fcntl;
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -585,6 +587,7 @@ pub struct AddDmabufPlane {
     pub modifier: u64,
 }
 
+/** Construct a fourcc code from the component letters */
 pub const fn fourcc(a: char, b: char, c: char, d: char) -> u32 {
     u32::from_le_bytes([(a as u8), (b as u8), (c as u8), (d as u8)])
 }
@@ -722,4 +725,423 @@ impl BadRng {
     pub fn next_usize(&mut self, maxval: usize) -> usize {
         (self.next() % maxval as u64) as usize
     }
+}
+
+/** Basic layout parameters of a Wayland/drm_fourcc.h linear layout format plane; these are
+ * sufficient to describe where data for a pixel is, within a plane, but do not describe
+ * the exact way the data is encoded. */
+#[derive(Clone, Copy)]
+pub struct PlaneLayout {
+    /** Bytes per (subsampled) texel block */
+    pub bpt: NonZeroU32,
+    /** Horizontal subsampling ratio (width / texel block count) */
+    pub hsub: NonZeroU32,
+    /** Vertical subsampling ratio (height / texel block count) */
+    pub vsub: NonZeroU32,
+    /** Width of a texel block in pixels; this should divide hsub. */
+    pub htex: NonZeroU32,
+    /** Height of a texel block in pixels; this should divide vsub. */
+    pub vtex: NonZeroU32,
+}
+
+/** Basic layout parameters for a (possibly) multiplanar Wayland/drm_fourcc.h linear layout format.
+ * These are sufficient to determine, given width/height/offset/stride parameters, where the data
+ * corresponding to a given pixel is, but do not determine the exact way the data is encoded.
+ */
+pub struct FormatLayout {
+    pub planes: &'static [PlaneLayout],
+}
+
+/** Convert a DRM fourcc format code to a Wayland format code.
+ *
+ * Wayland and DRM differ in encodings for Argb8888 and Xrgb8888 only.
+ *
+ * Both names for Argb8888/Xrgb8888 can safely be used to specify wl_shm formats if
+ * the compositor advertised both, but only DRM formats are permitted for linux-dmabuf.
+ */
+pub fn drm_to_wayland(drm_format: u32) -> u32 {
+    if drm_format == fourcc('A', 'R', '2', '4') {
+        WlShmFormat::Argb8888 as u32
+    } else if drm_format == fourcc('X', 'R', '2', '4') {
+        WlShmFormat::Xrgb8888 as u32
+    } else {
+        drm_format
+    }
+}
+
+/** Get the layout for a wl_shm/drm_fourcc format. Returns None if the format is unsupported
+ * (either being entirely invalid, or a format lacking any linear layout.) */
+pub fn get_shm_format_layout(format: u32) -> Option<FormatLayout> {
+    use crate::wayland_gen::WlShmFormat::*;
+
+    /* Safety: values are not zero */
+    const N1: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(1) };
+    const N2: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(2) };
+    const N3: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(3) };
+    const N4: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(4) };
+    const N5: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(5) };
+    const N6: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(6) };
+    const N8: NonZeroU32 = unsafe { NonZeroU32::new_unchecked(8) };
+
+    const SIMPLE_1: PlaneLayout = PlaneLayout {
+        bpt: N1,
+        hsub: N1,
+        vsub: N1,
+        htex: N1,
+        vtex: N1,
+    };
+    const SIMPLE_2: PlaneLayout = PlaneLayout {
+        bpt: N2,
+        hsub: N1,
+        vsub: N1,
+        htex: N1,
+        vtex: N1,
+    };
+
+    /* Formats which do not have a wl_shm name yet */
+    const NV20: u32 = fourcc('N', 'V', '2', '0');
+    const NV30: u32 = fourcc('N', 'V', '3', '0');
+    match format {
+        NV20 => {
+            return Some(FormatLayout {
+                planes: &[
+                    PlaneLayout {
+                        bpt: N5,
+                        hsub: N4,
+                        vsub: N1,
+                        htex: N4,
+                        vtex: N1,
+                    },
+                    PlaneLayout {
+                        bpt: N5,
+                        hsub: N4,
+                        vsub: N1,
+                        htex: N2,
+                        vtex: N1,
+                    },
+                ],
+            })
+        }
+        NV30 => {
+            return Some(FormatLayout {
+                planes: &[
+                    PlaneLayout {
+                        bpt: N5,
+                        hsub: N4,
+                        vsub: N1,
+                        htex: N4,
+                        vtex: N1,
+                    },
+                    PlaneLayout {
+                        // ?
+                        bpt: N5,
+                        hsub: N2,
+                        vsub: N1,
+                        htex: N2,
+                        vtex: N1,
+                    },
+                ],
+            });
+        }
+        _ => (),
+    }
+
+    let f: WlShmFormat = (drm_to_wayland(format)).try_into().ok()?;
+
+    Some(match f {
+        R8 | C8 | D8 | Rgb332 | Bgr233 => FormatLayout {
+            planes: &[SIMPLE_1],
+        },
+
+        Xrgb4444 | Xbgr4444 | Rgbx4444 | Bgrx4444 | Argb4444 | Abgr4444 | Rgba4444 | Bgra4444
+        | Xrgb1555 | Xbgr1555 | Rgbx5551 | Bgrx5551 | Argb1555 | Abgr1555 | Rgba5551 | Bgra5551
+        | Rgb565 | Bgr565 | R10 | R12 | R16 | Rg88 | Gr88 => FormatLayout {
+            planes: &[SIMPLE_2],
+        },
+
+        Rgb888 | Bgr888 | Vuy888 => FormatLayout {
+            planes: &[PlaneLayout {
+                bpt: N3,
+                hsub: N1,
+                vsub: N1,
+                htex: N1,
+                vtex: N1,
+            }],
+        },
+
+        Argb8888 | Xrgb8888 | Xbgr8888 | Rgbx8888 | Bgrx8888 | Abgr8888 | Rgba8888 | Bgra8888
+        | Xrgb2101010 | Xbgr2101010 | Rgbx1010102 | Bgrx1010102 | Argb2101010 | Abgr2101010
+        | Rgba1010102 | Bgra1010102 | Ayuv | Avuy8888 | Xvuy8888 | Xyuv8888 | Xvyu2101010
+        | Rg1616 | Gr1616 | Y410 => FormatLayout {
+            planes: &[PlaneLayout {
+                bpt: N4,
+                hsub: N1,
+                vsub: N1,
+                htex: N1,
+                vtex: N1,
+            }],
+        },
+
+        Xrgb16161616f | Xbgr16161616f | Argb16161616f | Abgr16161616f | Xrgb16161616
+        | Xbgr16161616 | Argb16161616 | Abgr16161616 | Axbxgxrx106106106106 | Xvyu1216161616
+        | Xvyu16161616 | Y412 | Y416 => FormatLayout {
+            planes: &[PlaneLayout {
+                bpt: N8,
+                hsub: N1,
+                vsub: N1,
+                htex: N1,
+                vtex: N1,
+            }],
+        },
+
+        R1 | C1 | D1 => FormatLayout {
+            planes: &[PlaneLayout {
+                bpt: N1,
+                hsub: N8,
+                vsub: N1,
+                htex: N8,
+                vtex: N1,
+            }],
+        },
+        R2 | C2 | D2 => FormatLayout {
+            planes: &[PlaneLayout {
+                bpt: N1,
+                hsub: N4,
+                vsub: N1,
+                htex: N4,
+                vtex: N1,
+            }],
+        },
+        R4 | C4 | D4 => FormatLayout {
+            planes: &[PlaneLayout {
+                bpt: N1,
+                hsub: N2,
+                vsub: N1,
+                htex: N2,
+                vtex: N1,
+            }],
+        },
+        Yuyv | Yvyu | Uyvy | Vyuy => FormatLayout {
+            planes: &[PlaneLayout {
+                bpt: N4,
+                hsub: N2,
+                vsub: N1,
+                htex: N2,
+                vtex: N1,
+            }],
+        },
+        Y210 | Y212 | Y216 => FormatLayout {
+            planes: &[PlaneLayout {
+                bpt: N8,
+                hsub: N2,
+                vsub: N1,
+                htex: N2,
+                vtex: N1,
+            }],
+        },
+        Y0l0 | X0l0 | Y0l2 | X0l2 => FormatLayout {
+            planes: &[PlaneLayout {
+                bpt: N8,
+                hsub: N2,
+                vsub: N2,
+                htex: N2,
+                vtex: N2,
+            }],
+        },
+
+        Rgb565A8 | Bgr565A8 => FormatLayout {
+            planes: &[SIMPLE_2, SIMPLE_1],
+        },
+
+        Rgb888A8 | Bgr888A8 => FormatLayout {
+            planes: &[
+                PlaneLayout {
+                    bpt: N3,
+                    hsub: N1,
+                    vsub: N1,
+                    htex: N1,
+                    vtex: N1,
+                },
+                SIMPLE_1,
+            ],
+        },
+
+        Xrgb8888A8 | Xbgr8888A8 | Rgbx8888A8 | Bgrx8888A8 => FormatLayout {
+            planes: &[
+                PlaneLayout {
+                    bpt: N4,
+                    hsub: N1,
+                    vsub: N1,
+                    htex: N1,
+                    vtex: N1,
+                },
+                SIMPLE_1,
+            ],
+        },
+
+        Nv12 | Nv21 => FormatLayout {
+            planes: &[
+                SIMPLE_1,
+                PlaneLayout {
+                    bpt: N2,
+                    hsub: N2,
+                    vsub: N2,
+                    htex: N1,
+                    vtex: N1,
+                },
+            ],
+        },
+        Nv16 | Nv61 => FormatLayout {
+            planes: &[
+                SIMPLE_1,
+                PlaneLayout {
+                    bpt: N2,
+                    hsub: N2,
+                    vsub: N1,
+                    htex: N1,
+                    vtex: N1,
+                },
+            ],
+        },
+        Nv24 | Nv42 => FormatLayout {
+            planes: &[SIMPLE_1, SIMPLE_2],
+        },
+        Nv15 => FormatLayout {
+            planes: &[
+                PlaneLayout {
+                    bpt: N5,
+                    hsub: N4,
+                    vsub: N1,
+                    htex: N4,
+                    vtex: N1,
+                },
+                PlaneLayout {
+                    bpt: N5,
+                    hsub: N4,
+                    vsub: N2,
+                    htex: N2,
+                    vtex: N1,
+                },
+            ],
+        },
+
+        P210 | P010 | P012 | P016 => FormatLayout {
+            planes: &[
+                SIMPLE_2,
+                PlaneLayout {
+                    bpt: N4,
+                    hsub: N2,
+                    vsub: N2,
+                    htex: N1,
+                    vtex: N1,
+                },
+            ],
+        },
+        P030 => FormatLayout {
+            planes: &[
+                PlaneLayout {
+                    bpt: N4,
+                    hsub: N3,
+                    vsub: N1,
+                    htex: N3,
+                    vtex: N1,
+                },
+                PlaneLayout {
+                    bpt: N8,
+                    hsub: N6,
+                    vsub: N2,
+                    htex: N3,
+                    vtex: N1,
+                },
+            ],
+        },
+
+        Yuv410 | Yvu410 => FormatLayout {
+            planes: &[
+                SIMPLE_1,
+                PlaneLayout {
+                    bpt: N1,
+                    hsub: N4,
+                    vsub: N4,
+                    htex: N1,
+                    vtex: N1,
+                },
+                PlaneLayout {
+                    bpt: N1,
+                    hsub: N4,
+                    vsub: N4,
+                    htex: N1,
+                    vtex: N1,
+                },
+            ],
+        },
+        Yuv411 | Yvu411 => FormatLayout {
+            planes: &[
+                SIMPLE_1,
+                PlaneLayout {
+                    bpt: N1,
+                    hsub: N4,
+                    vsub: N1,
+                    htex: N1,
+                    vtex: N1,
+                },
+                PlaneLayout {
+                    bpt: N1,
+                    hsub: N4,
+                    vsub: N1,
+                    htex: N1,
+                    vtex: N1,
+                },
+            ],
+        },
+        Yuv420 | Yvu420 => FormatLayout {
+            planes: &[
+                SIMPLE_1,
+                PlaneLayout {
+                    bpt: N1,
+                    hsub: N2,
+                    vsub: N2,
+                    htex: N1,
+                    vtex: N1,
+                },
+                PlaneLayout {
+                    bpt: N1,
+                    hsub: N2,
+                    vsub: N2,
+                    htex: N1,
+                    vtex: N1,
+                },
+            ],
+        },
+        Yuv422 | Yvu422 => FormatLayout {
+            planes: &[
+                SIMPLE_1,
+                PlaneLayout {
+                    bpt: N1,
+                    hsub: N2,
+                    vsub: N1,
+                    htex: N1,
+                    vtex: N1,
+                },
+                PlaneLayout {
+                    bpt: N1,
+                    hsub: N2,
+                    vsub: N1,
+                    htex: N1,
+                    vtex: N1,
+                },
+            ],
+        },
+        Yuv444 | Yvu444 => FormatLayout {
+            planes: &[SIMPLE_1, SIMPLE_1, SIMPLE_1],
+        },
+
+        Q401 | Q410 => FormatLayout {
+            planes: &[SIMPLE_2, SIMPLE_2, SIMPLE_2],
+        },
+
+        Yuv4208bit | Yuv42010bit | Vuy101010 => {
+            return None;
+        }
+    })
 }
