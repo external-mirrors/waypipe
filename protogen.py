@@ -127,6 +127,7 @@ handled_funcs = [
     ("zwlr_screencopy_frame_v1", "buffer"),
     ("zwlr_screencopy_frame_v1", "buffer_done"),
     ("zwlr_screencopy_frame_v1", "copy"),
+    ("zwlr_screencopy_frame_v1", "copy_with_damage"),
     ("zwlr_screencopy_frame_v1", "destroy"),
     ("zwlr_screencopy_frame_v1", "failed"),
     ("zwlr_screencopy_frame_v1", "linux_dmabuf"),

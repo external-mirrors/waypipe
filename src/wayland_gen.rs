@@ -6209,6 +6209,29 @@ pub fn parse_req_zwlr_screencopy_frame_v1_destroy<'a>(msg: &'a [u8]) -> Result<(
     Ok(())
 }
 pub const OPCODE_ZWLR_SCREENCOPY_FRAME_V1_DESTROY: MethodId = MethodId::Request(1);
+pub fn write_req_zwlr_screencopy_frame_v1_copy_with_damage(
+    dst: &mut &mut [u8],
+    for_id: ObjId,
+    buffer: ObjId,
+) {
+    let l = length_req_zwlr_screencopy_frame_v1_copy_with_damage();
+    write_header(dst, for_id, l, 2, 0);
+    write_obj(dst, buffer);
+}
+pub fn length_req_zwlr_screencopy_frame_v1_copy_with_damage() -> usize {
+    12
+}
+pub fn parse_req_zwlr_screencopy_frame_v1_copy_with_damage<'a>(
+    mut msg: &'a [u8],
+) -> Result<ObjId, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_ZWLR_SCREENCOPY_FRAME_V1_COPY_WITH_DAMAGE: MethodId = MethodId::Request(2);
 pub fn write_evt_zwlr_screencopy_frame_v1_linux_dmabuf(
     dst: &mut &mut [u8],
     for_id: ObjId,

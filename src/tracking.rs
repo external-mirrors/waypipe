@@ -3527,6 +3527,37 @@ pub fn process_way_msg(
             Ok(ProcMsg::Done)
         }
         (
+            WaylandInterface::ZwlrScreencopyFrameV1,
+            OPCODE_ZWLR_SCREENCOPY_FRAME_V1_COPY_WITH_DAMAGE,
+        ) => {
+            check_space!(msg.len(), 0, remaining_space);
+            copy_msg(msg, dst);
+
+            let buffer = parse_req_zwlr_screencopy_frame_v1_copy_with_damage(msg)?;
+            if buffer.0 == 0 {
+                return Err(tag!(
+                    "zwlr_screencopy_frame_v1::copy requires non-null object"
+                ));
+            }
+            let buf_obj = glob.objects.get(&buffer).ok_or_else(|| {
+                tag!(
+                    "Failed to lookup buffer (id {}) for zwlr_screencopy_frame_v1::copy",
+                    buffer
+                )
+            })?;
+            let WpExtra::WlBuffer(ref d) = buf_obj.extra else {
+                return Err(tag!("Expected wl_buffer object"));
+            };
+            let buf_info = (d.sfd.clone(), d.shm_info);
+
+            let object = glob.objects.get_mut(&object_id).unwrap();
+            let WpExtra::ZwlrScreencopyFrame(ref mut frame) = object.extra else {
+                unreachable!();
+            };
+            frame.buffer = Some(buf_info);
+            Ok(ProcMsg::Done)
+        }
+        (
             WaylandInterface::ExtImageCopyCaptureFrameV1,
             OPCODE_EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ATTACH_BUFFER,
         ) => {
