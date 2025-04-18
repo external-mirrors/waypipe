@@ -3403,7 +3403,7 @@ pub fn process_way_msg(
                     ));
                 }
                 let current_device_id = dmabuf_dev_get_id(&glob.dmabuf_device);
-                if main_device != current_device_id {
+                if glob.on_display_side && main_device != current_device_id {
                     // todo: handle this case
                     return Err(tag!("image copy device did not match existing device; multiple devices are not yet supported"));
                 }
