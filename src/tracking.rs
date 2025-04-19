@@ -3368,7 +3368,9 @@ pub fn process_way_msg(
                 let m = u64::from_le_bytes(mb.try_into().unwrap());
                 mod_list.push(m);
             }
-            session.dmabuf_formats.push((fmt, mod_list));
+            if !mod_list.is_empty() {
+                session.dmabuf_formats.push((fmt, mod_list));
+            }
             /* Drop message; will be recreated when ::done arrives */
             Ok(ProcMsg::Done)
         }
@@ -3491,6 +3493,12 @@ pub fn process_way_msg(
                 }
                 format_mod_list.sort_unstable();
                 session.last_format_mod_list = format_mod_list;
+
+                if glob.on_display_side {
+                    for (fmt, mods) in session.dmabuf_formats.iter() {
+                        glob.screencopy_restrictions.insert(*fmt, mods.clone());
+                    }
+                }
             } else {
                 session.last_format_mod_list = Vec::new();
             }

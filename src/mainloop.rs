@@ -127,6 +127,11 @@ pub struct Globals {
      * b) are supported by Waypipe. Use this to restrict which modifiers to try when
      * replicating DMABUFs. */
     pub advertised_modifiers: BTreeMap<u32, Vec<u64>>,
+    /** If on display side, this stores the _most_ recent restrictions on dmabuf modifiers
+     * from ext_image_copy_capture_session_v1. Because any created wl_buffer could
+     * hypothetically be passed to the protocol, we must restrict all dmabuf that Waypipe
+     * creates to be safe. */
+    pub screencopy_restrictions: BTreeMap<u32, Vec<u64>>,
 
     pub opts: Options,
 
@@ -1601,10 +1606,11 @@ fn process_sfd_msg(
                 msg[12..76].try_into().unwrap(),
             ));
 
-            /* Restrict to compositor preferred modifiers, if any are available; otherwise,
-             * try arbitrary format, since e.g. a Wayland client could be blindly guessing
+            /* Restrict to compositor preferred modifiers, if any are available, or the (probably)
+             * sublist of modifiers that were at one point in time acceptable for screencopy;
+             * otherwise, try arbitrary format, since e.g. a Wayland client could be blindly guessing
              * the compositor's format support matches its own. */
-            let modifier_list = glob.advertised_modifiers.get(&drm_format).map(|x| &x[..]).unwrap_or_else(|| {
+            let modifier_list = glob.screencopy_restrictions.get(&drm_format).or_else(|| glob.advertised_modifiers.get(&drm_format)).map(|x| &x[..]).unwrap_or_else(|| {
                 debug!("No advertised modifiers for {}, falling back to arbitrary supported modifier", drm_format);
                 dmabuf_dev_modifier_list(&glob.dmabuf_device, drm_format)
             }
@@ -1718,7 +1724,7 @@ fn process_sfd_msg(
                 ));
             }
 
-            let modifier_list = glob.advertised_modifiers.get(&drm_format).map(|x| &x[..]).unwrap_or_else(|| {
+            let modifier_list = glob.screencopy_restrictions.get(&drm_format).or_else(|| glob.advertised_modifiers.get(&drm_format)).map(|x| &x[..]).unwrap_or_else(|| {
                 debug!("No advertised modifiers for {}, falling back to arbitrary supported modifier", drm_format);
                 dmabuf_dev_modifier_list(&glob.dmabuf_device, drm_format)
             }
@@ -5692,6 +5698,7 @@ pub fn main_interface_loop(
         max_buffer_uid: 1, /* Start at 1 to ensure 0 is never valid */
         presentation_clock: None,
         advertised_modifiers: BTreeMap::new(),
+        screencopy_restrictions: BTreeMap::new(),
         opts: (*opts).clone(), // todo: reference opts instead?
         wire_version: init_wire_version,
         has_first_message: false,
