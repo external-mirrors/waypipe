@@ -4039,12 +4039,31 @@ pub fn process_way_msg(
                 b"wp_security_context_manager_v1",        // sends socket listen fd over network
             ];
 
-            /* Version downgrading */
-            if intf == WL_SHM {
-                let max_v = INTERFACE_TABLE[WaylandInterface::WlShm as usize].version;
+            /* Limit the version of the following protocols to what Waypipe has compiled
+             * in, because future versions are very likely to require additional handling. */
+            let intf_code = match intf {
+                WL_SHM => Some(WaylandInterface::WlShm),
+                ZWP_LINUX_DMABUF_V1 => Some(WaylandInterface::ZwpLinuxDmabufV1),
+                WP_LINUX_DRM_SYNCOBJ_MANAGER_V1 => {
+                    Some(WaylandInterface::WpLinuxDrmSyncobjManagerV1)
+                }
+                EXT_IMAGE_COPY_CAPTURE_MANAGER_V1 => {
+                    Some(WaylandInterface::ExtImageCopyCaptureManagerV1)
+                }
+                ZWLR_SCREENCOPY_MANAGER_V1 => Some(WaylandInterface::ZwlrScreencopyManagerV1),
+                ZWLR_EXPORT_DMABUF_MANAGER_V1 => Some(WaylandInterface::ZwlrExportDmabufManagerV1),
+                _ => None,
+            };
+            if let Some(code) = intf_code {
+                let max_v = INTERFACE_TABLE[code as usize].version;
                 if version > max_v {
+                    debug!(
+                        "Downgrading {} version from {} to {}",
+                        EscapeWlName(intf),
+                        version,
+                        max_v
+                    );
                     version = max_v;
-                    debug!("Downgrading wl_shm version from {} to {}", version, max_v);
                 }
             }
             if blacklist.contains(&intf) {
@@ -4083,16 +4102,8 @@ pub fn process_way_msg(
                     return Ok(ProcMsg::Done);
                 }
 
-                let max_v = INTERFACE_TABLE[WaylandInterface::ZwpLinuxDmabufV1 as usize].version;
                 /* note: with versions < 4, the the compositor has no way to specify the preferred
                  * drm node, so it may be chosen arbitrarily */
-                if version > max_v {
-                    version = max_v;
-                    debug!(
-                        "Downgrading zwp_linux_dmabuf_v1 version from {} to {}",
-                        version, max_v
-                    );
-                }
             }
             if intf == WP_LINUX_DRM_SYNCOBJ_MANAGER_V1 {
                 match &glob.dmabuf_device {
