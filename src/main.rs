@@ -258,15 +258,11 @@ fn prune_connections(connections: &mut BTreeMap<u32, std::process::Child>, pid: 
         let _ = child.wait();
         debug!("Status received");
     } else {
-        let success = wait::waitpid(
-            pid,
-            Some(wait::WaitPidFlag::WEXITED | wait::WaitPidFlag::WNOHANG),
-        )
-        .is_ok();
+        let status = wait::waitpid(pid, Some(wait::WaitPidFlag::WNOHANG));
         error!(
-            "Received SIGCHLD for unexpected child: {}{}",
+            "Received SIGCHLD for unexpected child {}: {:?}",
             pid.as_raw(),
-            string_if_bool(!success, ", but waitpid() failed")
+            status
         );
     }
 }
