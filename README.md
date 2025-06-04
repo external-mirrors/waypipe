@@ -35,7 +35,7 @@ kill %1
 ```
 
 It's possible to set up the local and remote processes so that, when the
-connection between the the sockets used by each end breaks, one can create a new
+connection between the sockets used by each end breaks, one can create a new
 forwarded socket on the remote side and reconnect the two processes. For a more
 detailed example, see the man page.
 
