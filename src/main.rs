@@ -8,6 +8,7 @@ use nix::poll::{PollFd, PollFlags};
 use nix::sys::{signal, socket, wait};
 use nix::{fcntl, unistd};
 use std::collections::BTreeMap;
+use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::Write;
@@ -784,16 +785,6 @@ fn handle_client_conn(link_fd: OwnedFd, wayland_fd: OwnedFd, opts: &Options) -> 
     )
 }
 
-/** Get filesystem path for waypipe (via /proc/self/exe) */
-fn get_self_path() -> Result<OsString, String> {
-    fcntl::readlink("/proc/self/exe").map_err(|x| {
-        tag!(
-            "Failed to lookup path to own executable (/proc/self/exe): {}",
-            x
-        )
-    })
-}
-
 /** Start a process to handle a specific Wayland connection.
  *
  * (Use spawn instead of forking. Spawning ensures ASLR is reseeded, and
@@ -917,7 +908,9 @@ fn run_server_inner(
             .map_err(|x| tag!("Failed to set sigaction: {}", x))?;
     }
 
-    let self_path = get_self_path()?;
+    let self_path = env::current_exe()
+        .map_err(|x| tag!("Failed to lookup path to own executable: {}", x))?
+        .into_os_string();
 
     socket::listen(&display_socket, socket::Backlog::MAXCONN)
         .map_err(|x| tag!("Failed to listen to socket: {}", x))?;
@@ -1178,7 +1171,9 @@ fn run_client_inner(
     /* Collect path to self now, instead of later, for use when spawning subprocesses.
      * (When the executable is deleted, /proc/self/exe is modified with a " (deleted)"
      * suffix, so identifying the executable path could fail.) */
-    let self_path = get_self_path()?;
+    let self_path = env::current_exe()
+        .map_err(|x| tag!("Failed to lookup path to own executable: {}", x))?
+        .into_os_string();
 
     'outer: loop {
         /* Handle any child process exits (including the case where cmd_child exited immediately)*/
