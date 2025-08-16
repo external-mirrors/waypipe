@@ -99,6 +99,8 @@ fn main() {
         "AV_LOG_INFO",
         "AV_LOG_WARNING",
         "AV_NUM_DATA_POINTERS",
+        "LIBAVUTIL_VERSION_MAJOR",
+        "LIBAVCODEC_VERSION_MAJOR",
     ];
 
     let bindgen = "bindgen";

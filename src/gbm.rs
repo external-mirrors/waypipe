@@ -169,9 +169,9 @@ pub fn setup_gbm_device(device: Option<u64>) -> Result<Option<Rc<GBMDevice>>, St
         return Ok(None);
     }
     unsafe {
-        let bindings = match gbm::new("libgbm.so") {
+        let bindings = match gbm::new("libgbm.so.1") {
             Err(x) => {
-                error!("Failed to load libgbm.so: {}", x);
+                error!("Failed to load libgbm.so.1: {}", x);
                 return Ok(None);
             }
             Ok(x) => x,

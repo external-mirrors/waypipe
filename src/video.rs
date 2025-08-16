@@ -17,7 +17,7 @@ use waypipe_ffmpeg_wrapper::{
     AVPixelFormat_AV_PIX_FMT_NONE, AVPixelFormat_AV_PIX_FMT_NV12, AVPixelFormat_AV_PIX_FMT_VULKAN,
     AVPixelFormat_AV_PIX_FMT_YUV420P, AVRational, AVVkFrame, AVVulkanDeviceContext,
     AVVulkanFramesContext, VkStructureType_VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-    AV_LOG_VERBOSE, AV_LOG_WARNING, AV_NUM_DATA_POINTERS,
+    AV_LOG_VERBOSE, AV_LOG_WARNING, AV_NUM_DATA_POINTERS, LIBAVCODEC_VERSION_MAJOR,
 };
 use waypipe_shaders::{NV12_IMG_TO_RGB, RGB_TO_NV12_IMG, RGB_TO_YUV420_BUF, YUV420_BUF_TO_RGB};
 
@@ -599,7 +599,8 @@ pub unsafe fn setup_video(
     device_exts: &[*const c_char],
     instance_exts: &[*const c_char],
 ) -> Result<Option<VulkanVideo>, String> {
-    let lib = match ffmpeg::new("libavcodec.so") {
+    /* loading libavcodec transitively loads a matching libavutil */
+    let lib = match ffmpeg::new(format!("libavcodec.so.{}", LIBAVCODEC_VERSION_MAJOR)) {
         Ok(x) => x,
         Err(x) => {
             error!("Failed to load libavcodec (+ libavutil, etc.): {}. Video encoding/decoding is disabled.", x);
