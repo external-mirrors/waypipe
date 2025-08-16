@@ -3,7 +3,7 @@
 use crate::platform::*;
 use crate::wayland_gen::WlShmFormat;
 use core::num::NonZeroU32;
-use nix::fcntl;
+use nix::{fcntl, unistd};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::fs::ReadDir;
@@ -694,13 +694,68 @@ pub fn set_cloexec(fd: &OwnedFd, cloexec: bool) -> Result<(), String> {
     Ok(())
 }
 
-/** Set the O_NONBLOCK flag for the file description */
+/** Set the O_NONBLOCK flag for the file description, clearing all other flags. */
 pub fn set_nonblock(fd: &OwnedFd) -> Result<(), String> {
     fcntl::fcntl(
         fd.as_raw_fd(),
         fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
     )
     .map_err(|x| tag!("Failed to set nonblocking: {:?}", x))?;
+    Ok(())
+}
+
+/** Unset the O_NONBLOCK flag for the file description, clearing all other flags. */
+pub fn set_blocking(fd: &OwnedFd) -> Result<(), String> {
+    fcntl::fcntl(
+        fd.as_raw_fd(),
+        fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::empty()),
+    )
+    .map_err(|x| tag!("Failed to set blocking: {:?}", x))?;
+    Ok(())
+}
+
+/** Given blocking `fd`, read exactly enough to fill `data`, or return error.
+ * This blocks until completion or error. */
+pub fn read_exact(fd: &OwnedFd, data: &mut [u8]) -> nix::Result<()> {
+    let mut offset = 0;
+    while offset < data.len() {
+        match unistd::read(fd.as_raw_fd(), &mut data[offset..]) {
+            Ok(s) => {
+                if s == 0 {
+                    return Err(nix::errno::Errno::ENODATA);
+                }
+                offset += s;
+            }
+            Err(nix::errno::Errno::EINTR) => {
+                continue;
+            }
+            Err(code) => {
+                /* Note: since `fd` should not have O_NONBLOCK, EAGAIN is unexpected */
+                return Err(code);
+            }
+        }
+    }
+    Ok(())
+}
+
+/** Given blocking `fd`, write `data`, or return error if not everything was written.
+ * This blocks until completion or error. */
+pub fn write_exact(fd: &OwnedFd, data: &[u8]) -> nix::Result<()> {
+    let mut offset = 0;
+    while offset < data.len() {
+        match unistd::write(fd, &data[offset..]) {
+            Ok(s) => {
+                offset += s;
+            }
+            Err(nix::errno::Errno::EINTR) => {
+                continue;
+            }
+            Err(code) => {
+                /* Note: since `fd` should not have O_NONBLOCK, EAGAIN is unexpected */
+                return Err(code);
+            }
+        }
+    }
     Ok(())
 }
 

@@ -355,7 +355,8 @@ fn build_connection_command<'a>(
 }
 
 /** Send connection header and run the main proxy loop for a new
- * `waypipe server` connection
+ * `waypipe server` connection. `link_fd` is expected to be a _blocking_
+ * socket.
  */
 fn handle_server_conn(
     link_fd: OwnedFd,
@@ -402,8 +403,7 @@ fn handle_server_conn(
     debug!("header: {:0x}", lead);
     header[..4].copy_from_slice(&u32::to_le_bytes(lead));
 
-    nix::unistd::write(&link_fd, &header)
-        .map_err(|x| tag!("Failed to write connection header: {}", x))?;
+    write_exact(&link_fd, &header).map_err(|x| tag!("Failed to write connection header: {}", x))?;
 
     debug!("have written initial bytes");
 
@@ -422,19 +422,26 @@ fn handle_server_conn(
     )
 }
 
-/** Connect to a socket (and possibly unlink its path); the socket returned is
- * nonblocking and cloexec. */
+/** Connect to a socket (and possibly unlink its path); the socket fd returned is
+ * cloexec. the socket file status flags may or may not include O_NONBLOCK and
+ * should be set by the caller. */
 fn socket_connect(
     spec: &SocketSpec,
     cwd: &OwnedFd,
+    nonblocking: bool,
     unlink_after: bool, /* Unlink after connecting? */
 ) -> Result<OwnedFd, String> {
+    let socket_flags = if nonblocking {
+        socket::SockFlag::SOCK_CLOEXEC | socket::SockFlag::SOCK_NONBLOCK
+    } else {
+        socket::SockFlag::SOCK_CLOEXEC
+    };
     let socket = match spec {
         SocketSpec::Unix(path) => {
             let socket = socket::socket(
                 socket::AddressFamily::Unix,
                 socket::SockType::Stream,
-                socket::SockFlag::SOCK_CLOEXEC,
+                socket_flags,
                 None,
             )
             .map_err(|x| tag!("Failed to create socket: {}", x))?;
@@ -627,9 +634,9 @@ fn socket_create_and_bind(
     }
 }
 
-/** Connect to the Wayland display socket at the given `path` */
+/** Connect to the Wayland display socket at the given `path`. */
 fn connect_to_display_at(cwd: &OwnedFd, path: &Path) -> Result<OwnedFd, String> {
-    socket_connect(&SocketSpec::Unix(path.into()), cwd, false)
+    socket_connect(&SocketSpec::Unix(path.into()), cwd, true, false)
 }
 
 /** Connect to the Wayland display socket indicated by `WAYLAND_DISPLAY` and
@@ -699,14 +706,11 @@ fn setup_sigint_handler() -> Result<(signal::SigSet, &'static AtomicBool), Strin
 }
 
 /** Check connection header and run the main proxy loop for a new
- * `waypipe client` connection. */
+ * `waypipe client` connection. `link_fd` is expected to be a
+ * _blocking_ socket. */
 fn handle_client_conn(link_fd: OwnedFd, wayland_fd: OwnedFd, opts: &Options) -> Result<(), String> {
     let mut buf = [0_u8; 16];
-    let nr = nix::unistd::read(link_fd.as_raw_fd(), &mut buf)
-        .map_err(|x| tag!("Failed to read connection header: {}", x))?;
-    if nr != buf.len() {
-        return Err(tag!("Connection header not completely sent ({} bytes)", nr));
-    }
+    read_exact(&link_fd, &mut buf).map_err(|x| tag!("Failed to read connection header: {}", x))?;
 
     let header = u32::from_le_bytes(buf[..4].try_into().unwrap());
     debug!("Connection header: 0x{:08x}", header);
@@ -795,11 +799,15 @@ fn get_self_path() -> Result<OsString, String> {
  * (Use spawn instead of forking. Spawning ensures ASLR is reseeded, and
  * provides a nicer command line string, with the mixed-cost-benefit of
  * using the latest dynamic library versions, and repeating process
- * setup costs.) */
+ * setup costs.).
+ *
+ * Note: the connection file descriptor `connection_fd` is expected to
+ * not be cloexec, and not have the O_NONBLOCK file status flag.
+ */
 fn spawn_connection_handler(
     self_path: &OsStr,
     conn_args: &[&OsStr],
-    wrapped_fd: OwnedFd,
+    connection_fd: OwnedFd,
     wayland_display: Option<&OsStr>,
 ) -> Result<Child, String> {
     /* Launch connection handler using explicit path to self.  An alternative
@@ -812,7 +820,7 @@ fn spawn_connection_handler(
         .args(conn_args)
         .env(
             "WAYPIPE_CONNECTION_FD",
-            format!("{}", wrapped_fd.as_raw_fd()),
+            format!("{}", connection_fd.as_raw_fd()),
         )
         .env_remove("WAYLAND_SOCKET");
     if let Some(disp) = wayland_display {
@@ -827,7 +835,7 @@ fn spawn_connection_handler(
         )
     })?;
 
-    drop(wrapped_fd);
+    drop(connection_fd);
 
     Ok(child)
 }
@@ -861,7 +869,7 @@ fn run_server_oneshot(
         .map_err(|x| tag!("Failed to run program {:?}: {}", command[0], x))?;
     drop(sock2);
 
-    let link_fd = socket_connect(socket_path, cwd, unlink_at_end)?;
+    let link_fd = socket_connect(socket_path, cwd, false, unlink_at_end)?;
 
     handle_server_conn(link_fd, sock1, options, None)?;
 
@@ -983,6 +991,7 @@ fn run_server_inner(
                     // SAFETY: freshly created file descriptor, exclusively captured here
                     OwnedFd::from_raw_fd(conn_fd)
                 };
+                set_blocking(&wrapped_fd)?;
 
                 let child = spawn_connection_handler(&self_path, conn_args, wrapped_fd, None)?;
                 let cid = child.id();
@@ -1101,6 +1110,7 @@ fn run_client_oneshot(
         }
     };
     set_cloexec(&link_fd, true)?;
+    set_blocking(&link_fd)?;
 
     /* Now that ssh has connected to the socket, it can safely be removed
      * from the file system */
@@ -1249,6 +1259,7 @@ fn run_client_inner(
                     OwnedFd::from_raw_fd(conn_fd)
                 };
 
+                set_blocking(&wrapped_fd)?;
                 let child = spawn_connection_handler(
                     &self_path,
                     conn_args,
@@ -2135,6 +2146,7 @@ fn main() -> Result<(), String> {
                 socket_connect(
                     &socket.ok_or_else(|| tag!("Socket path not provided"))?,
                     &cwd,
+                    false,
                     false,
                 )?
             };

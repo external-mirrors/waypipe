@@ -5,45 +5,27 @@ use crate::util::*;
 use crate::wayland::*;
 use crate::wayland_gen::*;
 use log::debug;
-use nix::{sys::socket, unistd};
+use nix::sys::socket;
 use std::io::{Cursor, IoSlice, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
 
 fn read_event(connection: &OwnedFd) -> Result<Vec<u8>, String> {
     let mut msg = vec![0; 8];
-    match unistd::read(connection.as_raw_fd(), &mut msg) {
-        Err(x) => {
-            return Err(tag!("Reading from compositor failed: {:?}", x));
-        }
-        Ok(s) => {
-            if s < 8 {
-                return Err(tag!("Incomplete event read: only {} of 8 bytes", s));
-            }
-        }
-    }
+    read_exact(connection, &mut msg)
+        .map_err(|x| tag!("Reading from compositor failed: {:?}", x))?;
 
     let (_object_id, length, _opcode) = parse_wl_header(&msg);
     msg.resize(length, 0);
 
-    match unistd::read(connection.as_raw_fd(), &mut msg[8..]) {
-        Err(x) => {
-            return Err(tag!("Reading from compositor failed: {:?}", x));
-        }
-        Ok(s) => {
-            if s < msg.len() - 8 {
-                return Err(tag!(
-                    "Incomplete event read: only {} of {} bytes",
-                    s + 8,
-                    msg.len()
-                ));
-            }
-        }
-    }
+    read_exact(connection, &mut msg[8..])
+        .map_err(|x| tag!("Reading from compositor failed: {:?}", x))?;
     Ok(msg)
 }
 
-/* `connection` is a blocking socket connecting to the compositor.
- * Returns the ''
+/**
+ * Set up a security context.
+ *
+ * `connection` is a blocking socket connecting to the compositor.
  */
 pub fn provide_secctx(
     connection: OwnedFd,
@@ -63,14 +45,7 @@ pub fn provide_secctx(
     let msg = &tmp[..msg_len];
 
     debug!("Requesting compositor globals");
-    match unistd::write(&connection, msg) {
-        Err(x) => {
-            return Err(tag!("Failed to write to compositor: {:?}", x));
-        }
-        Ok(s) => {
-            assert!(s == msg.len());
-        }
-    }
+    write_exact(&connection, msg).map_err(|x| tag!("Failed to write to compositor: {:?}", x))?;
 
     let secctx_name: u32 = loop {
         let msg = read_event(&connection)?;
@@ -132,18 +107,24 @@ pub fn provide_secctx(
         app_id,
         std::str::from_utf8(&pid_str[..pid_len]).unwrap()
     );
-    match socket::sendmsg::<()>(
-        connection.as_raw_fd(),
-        &iovs,
-        &cmsgs,
-        nix::sys::socket::MsgFlags::empty(),
-        None,
-    ) {
-        Err(x) => {
-            return Err(tag!("Failed to write to compositor: {:?}", x));
-        }
-        Ok(s) => {
-            assert!(s == msg_len);
+    loop {
+        match socket::sendmsg::<()>(
+            connection.as_raw_fd(),
+            &iovs,
+            &cmsgs,
+            nix::sys::socket::MsgFlags::empty(),
+            None,
+        ) {
+            Ok(s) => {
+                assert!(s == msg_len);
+                break;
+            }
+            Err(nix::errno::Errno::EINTR) => {
+                continue;
+            }
+            Err(x) => {
+                return Err(tag!("Failed to write to compositor: {:?}", x));
+            }
         }
     }
     drop(close_fd);
