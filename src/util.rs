@@ -715,14 +715,14 @@ pub fn set_blocking(fd: &OwnedFd) -> Result<(), String> {
 }
 
 /** Given blocking `fd`, read exactly enough to fill `data`, or return error.
- * This blocks until completion or error. */
-pub fn read_exact(fd: &OwnedFd, data: &mut [u8]) -> nix::Result<()> {
+ * This blocks until completion or error. Returns Err(None) on EOF. */
+pub fn read_exact(fd: &OwnedFd, data: &mut [u8]) -> Result<(), Option<nix::Error>> {
     let mut offset = 0;
     while offset < data.len() {
         match unistd::read(fd.as_raw_fd(), &mut data[offset..]) {
             Ok(s) => {
                 if s == 0 {
-                    return Err(nix::errno::Errno::ENODATA);
+                    return Err(None);
                 }
                 offset += s;
             }
@@ -731,7 +731,7 @@ pub fn read_exact(fd: &OwnedFd, data: &mut [u8]) -> nix::Result<()> {
             }
             Err(code) => {
                 /* Note: since `fd` should not have O_NONBLOCK, EAGAIN is unexpected */
-                return Err(code);
+                return Err(Some(code));
             }
         }
     }

@@ -711,7 +711,8 @@ fn setup_sigint_handler() -> Result<(signal::SigSet, &'static AtomicBool), Strin
  * _blocking_ socket. */
 fn handle_client_conn(link_fd: OwnedFd, wayland_fd: OwnedFd, opts: &Options) -> Result<(), String> {
     let mut buf = [0_u8; 16];
-    read_exact(&link_fd, &mut buf).map_err(|x| tag!("Failed to read connection header: {}", x))?;
+    read_exact(&link_fd, &mut buf)
+        .map_err(|x| tag!("Failed to read connection header: {:?}", x))?;
 
     let header = u32::from_le_bytes(buf[..4].try_into().unwrap());
     debug!("Connection header: 0x{:08x}", header);
