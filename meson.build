@@ -42,18 +42,18 @@ if get_option('build_rs')
     # compute maximum of with_lz4/with_zstd/with_gbm/with_video features
     max_feature = get_option('with_lz4')
     if (max_feature.auto() and get_option('with_zstd').enabled()) or (not max_feature.enabled() and get_option(
-        'with_zstd',
-    ).auto())
+            'with_zstd',
+        ).auto())
         max_feature = get_option('with_zstd')
     endif
     if (max_feature.auto() and get_option('with_gbm').enabled()) or (not max_feature.enabled() and get_option(
-        'with_gbm',
-    ).auto())
+            'with_gbm',
+        ).auto())
         max_feature = get_option('with_gbm')
     endif
     if (max_feature.auto() and get_option('with_video').enabled()) or (not max_feature.enabled() and get_option(
-        'with_video',
-    ).auto())
+            'with_video',
+        ).auto())
         max_feature = get_option('with_video')
     endif
 
