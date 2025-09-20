@@ -2914,8 +2914,16 @@ fn create_dmabuf_and_copy(
 /** Helper function to test that video encoding works and approximately replicates test patterns;
  * the format and other video properties are specified in `opts`. */
 #[cfg(feature = "video")]
-fn test_dmavid_inner(vulk: &Arc<VulkanDevice>, info: &TestInfo, opts: &WaypipeOptions) -> bool {
-    let accurate_replication = AtomicBool::new(true);
+fn test_dmavid_inner(
+    vulk: &Arc<VulkanDevice>,
+    info: &TestInfo,
+    opts: &WaypipeOptions,
+    sizes: &[(usize, usize)],
+) -> Vec<bool> {
+    let mut accurate_replication = Vec::new();
+    for _ in sizes {
+        accurate_replication.push(AtomicBool::new(true));
+    }
     run_protocol_test_with_opts(
         info, opts, opts,
         &|mut ctx: ProtocolTestContext| {
@@ -2940,9 +2948,9 @@ fn test_dmavid_inner(vulk: &Arc<VulkanDevice>, info: &TestInfo, opts: &WaypipeOp
             };
             // todo: run these in parallel?
 
-            // The small (width <= 32, height <= 16 test sizes fail) with uniform (88)
-            // green channel. height=16 shows nonuniform output but still has high error
-            for (w, h) in [(64, 64), (257, 240), (1, 1), (11, 200), (201, 10)] {
+            // In older libavcodec versions, the small (width <= 32, height <= 16) test sizes
+            // failed with uniform (88) green channel. More recent versions enforce minimum sizes.
+            for (i, (w, h)) in sizes.iter().copied().enumerate() {
                 println!("Testing image transfer for WxH: {}x{}", w, h);
 
                 let seed = fill_pseudorand_xrgb(w, h);
@@ -3025,7 +3033,7 @@ fn test_dmavid_inner(vulk: &Arc<VulkanDevice>, info: &TestInfo, opts: &WaypipeOp
                 }
 
                 if avg_diff > threshold {
-                    accurate_replication.store(false, std::sync::atomic::Ordering::SeqCst);
+                    accurate_replication[i].store(false, std::sync::atomic::Ordering::SeqCst);
                 }
                 // TODO: once video library bugs are resolved, set this
                 // assert!(avg_diff < threshold);
@@ -3043,7 +3051,10 @@ fn test_dmavid_inner(vulk: &Arc<VulkanDevice>, info: &TestInfo, opts: &WaypipeOp
         }
     ).unwrap();
 
-    accurate_replication.load(std::sync::atomic::Ordering::SeqCst)
+    accurate_replication
+        .iter()
+        .map(|x| x.load(std::sync::atomic::Ordering::SeqCst))
+        .collect()
 }
 
 /** Test that video encoding works and approximately replicates test patterns. */
@@ -3054,7 +3065,7 @@ fn proto_dmavid(
     video_format: VideoFormat,
     try_hw_dec: bool,
     try_hw_enc: bool,
-    accurate_video_replication: bool,
+    accurate_on_small_images: bool,
 ) -> TestResult {
     let Ok(vulk) = setup_vulkan(device.id) else {
         return Ok(StatusOk::Skipped);
@@ -3085,22 +3096,46 @@ fn proto_dmavid(
         "\nTrying combination: video={:?}, try_hw_dec={}, try_hw_enc={}",
         video_format, try_hw_dec, try_hw_enc
     );
-    let pass = test_dmavid_inner(&vulk, &info, &opts);
+    let sizes = [(257, 240), (222, 129), (128, 333), (64, 64), (1, 1)];
+    let passes = test_dmavid_inner(&vulk, &info, &opts, &sizes);
+
+    let mut overall_pass = true;
+    let mut perfect = true;
+
+    for (pass, (w, h)) in passes.iter().zip(sizes.iter().copied()) {
+        let is_small = w < 128 || h < 128;
+        println!(
+            "Result for video={:?}, try_hw_dec={}, try_hw_enc={}, size={:?}: {}",
+            video_format,
+            try_hw_dec,
+            try_hw_enc,
+            (w, h),
+            if *pass { "pass" } else { "fail" }
+        );
+        if accurate_on_small_images || !is_small {
+            if !pass {
+                overall_pass = false;
+            }
+        }
+        if !pass {
+            perfect = false;
+        }
+    }
+    // NOTE: as of writing, AMD hardware video decoding, and Intel hardware video
+    // encoding, of size w<=32, h<=16 (w=32,h=16) images does not accurately
+    // reproduce colors. Nor do x264 or vp9 software encoding/decoding for 1x1 images.
     println!(
-        "Result for video={:?}, try_hw_dec={}, try_hw_enc={}: {}",
+        "Overall result for video={:?}, try_hw_dec={}, try_hw_enc={}: expected accurate on small {}; was accurate {}; accurate on all {}",
         video_format,
         try_hw_dec,
         try_hw_enc,
-        if pass { "pass" } else { "fail" }
+        accurate_on_small_images,
+        overall_pass,
+        perfect
     );
+    assert!(overall_pass);
 
-    // NOTE: as of writing, AMD hardware video decoding, and Intel hardware video
-    // encoding, of size w<=32, h<=16 (w=32,h=16) images does not accurately
-    // reproduce colors
-    if accurate_video_replication {
-        assert!(pass);
-    }
-    if pass {
+    if perfect {
         Ok(StatusOk::Pass)
     } else {
         Err(StatusBad::Unclear("Video replication not exact".into()))
@@ -5007,10 +5042,10 @@ fn register_video_tests<'a>(
         (VideoFormat::H264, false, true, false),
         (VideoFormat::VP9, false, false, true),
         (VideoFormat::AV1, false, false, true),
-        (VideoFormat::AV1, false, true, false),
+        (VideoFormat::AV1, false, true, true),
     ];
 
-    for (format, try_hwenc, try_hwdec, expect_accurate) in table {
+    for (format, try_hwenc, try_hwdec, expect_accurate_on_small) in table {
         for (dev_name, dev_id) in devices {
             let name = format!(
                 "proto::dmavid_{}::{}::{}::{}",
@@ -5037,7 +5072,14 @@ fn register_video_tests<'a>(
                         /* Video encoding/decoding only works with Vulkan right now */
                         device_type: RenderDeviceType::Vulkan,
                     };
-                    proto_dmavid(info, dev, format, try_hwdec, try_hwenc, expect_accurate)
+                    proto_dmavid(
+                        info,
+                        dev,
+                        format,
+                        try_hwdec,
+                        try_hwenc,
+                        expect_accurate_on_small,
+                    )
                 }),
             ));
         }

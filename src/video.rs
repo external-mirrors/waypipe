@@ -1215,15 +1215,31 @@ pub fn setup_video_decode_sw(
     }
 }
 
+/** libavcodec does not currently appear to have a way to expose the range of sizes
+ * for which hardware encoding/decoding is supported. (Which may be graphics driver
+ * dependent.) Technically one could try avcodec_open() and look for an EINVAL, but
+ * doing that could hide bugs in Waypipe.) Hardcode a relatively safe threshold
+ * for now, until a better solution is found.
+ */
+const MIN_H264_HW_SIZE: (u32, u32) = (128, 128);
+
 pub fn setup_video_decode(
     img: &Arc<VulkanDmabuf>,
     fmt: VideoFormat,
 ) -> Result<VideoDecodeState, String> {
     assert!(img.can_store_and_sample);
     let video = img.vulk.video.as_ref().unwrap();
-    if (video.can_hw_dec_h264 && fmt == VideoFormat::H264 && !video.codecs_h264.decoder.is_null())
-        || (video.can_hw_dec_av1 && fmt == VideoFormat::AV1 && !video.codecs_av1.decoder.is_null())
-    {
+    let can_hw_decode = match fmt {
+        VideoFormat::AV1 => video.can_hw_dec_av1 && !video.codecs_av1.decoder.is_null(),
+        VideoFormat::VP9 => false,
+        VideoFormat::H264 => {
+            video.can_hw_dec_h264
+                && !video.codecs_h264.decoder.is_null()
+                && (img.width >= MIN_H264_HW_SIZE.0 && img.height >= MIN_H264_HW_SIZE.1)
+        }
+    };
+
+    if can_hw_decode {
         setup_video_decode_hw(img, fmt)
     } else {
         setup_video_decode_sw(img, fmt)
@@ -2257,7 +2273,16 @@ pub fn setup_video_encode(
 ) -> Result<VideoEncodeState, String> {
     assert!(img.can_store_and_sample);
     let video = img.vulk.video.as_ref().unwrap();
-    if video.can_hw_enc_h264 && fmt == VideoFormat::H264 && !video.codecs_h264.encoder.is_null() {
+    let can_hw_encode = match fmt {
+        VideoFormat::AV1 => false,
+        VideoFormat::VP9 => false,
+        VideoFormat::H264 => {
+            video.can_hw_enc_h264
+                && !video.codecs_h264.encoder.is_null()
+                && (img.width >= MIN_H264_HW_SIZE.0 && img.height >= MIN_H264_HW_SIZE.1)
+        }
+    };
+    if can_hw_encode {
         setup_video_encode_hw(img, fmt, bpf)
     } else {
         setup_video_encode_sw(img, fmt, bpf)
