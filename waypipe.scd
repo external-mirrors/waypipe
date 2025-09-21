@@ -13,7 +13,7 @@ waypipe - A transparent proxy for Wayland applications
 *waypipe* *bench*++
 *waypipe* [*--version*] [*-h*, *--help*]
 
-\[options...\] = [*-c*, *--compress* C] [*-d*, *--debug*] [*-n*, *--no-gpu*] [*-o*, *--oneshot*] [*-s*, *--socket* S] [*--display* D] [*--drm-node* R] [*--remote-node* R] [*--remote-bin* R] [*--login-shell*] [*--threads* T] [*--title-prefix* P] [*--unlink-socket*] [*--video* V] [*--vsock*] [*--secctx S*]
+\[options...\] = [*-c*, *--compress* C] [*-d*, *--debug*] [*-n*, *--no-gpu*] [*-o*, *--oneshot*] [*-s*, *--socket* S] [*--display* D] [*--drm-node* R] [*--remote-node* R] [*--remote-bin* R] [*--remote-socket* S] [*--login-shell*] [*--threads* T] [*--title-prefix* P] [*--unlink-socket*] [*--video* V] [*--vsock*] [*--secctx S*]
 
 
 # DESCRIPTION
@@ -73,8 +73,9 @@ compressible as images containing pictures.
 	Use *S* as the path for the Unix socket. The default socket path for
 	server mode is _/tmp/waypipe-server.sock_; for client mode, it is
 	_/tmp/waypipe-client.sock_; and in ssh mode, *S* gives the prefix used by
-	both the client and the server for their socket paths. The default prefix
-	in ssh mode is _/tmp/waypipe_.
+	both the client and the server for their socket paths. (The actual socket
+	paths in ssh mode add a randomized suffix to *S*.) The default prefix in ssh
+	mode is _/tmp/waypipe_.
 
 	When vsock is enabled use *S* to specify a CID and a port number.
 
@@ -101,6 +102,11 @@ compressible as images containing pictures.
 	In ssh mode, specify the path *R* to the waypipe binary on the remote
 	computer, or its name if it is available in _PATH_. It defaults to
 	*waypipe* if this option isn’t passed.
+
+*--remote-socket R*
+	In ssh mode, specify the prefix used by the remote *waypipe server* for
+	its socket path. This overrides the *--socket* option, on the server side
+	only.
 
 *--login-shell*
 	Only for server mode; if no command is being run, open a login shell.

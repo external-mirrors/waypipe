@@ -1600,7 +1600,7 @@ fn main() -> Result<(), String> {
                     "Set the socket path to either create or connect to.\n\
                   - server default: /tmp/waypipe-server.sock\n\
                   - client default: /tmp/waypipe-client.sock\n\
-                  - ssh: sets the prefix for the socket path\n\
+                  - ssh: sets the prefix for client and server socket paths\n\
                   - vsock: [[s]CID:]port",
                 )
                 // todo: decide value parser based on --vsock flag?
@@ -1634,6 +1634,13 @@ fn main() -> Result<(), String> {
                 .help("ssh: Set the remote Waypipe binary to use")
                 .value_parser(value_parser!(PathBuf))
                 .default_value(env!("CARGO_PKG_NAME")),
+        )
+        .arg(
+            Arg::new("remote-socket")
+            .long("remote-socket")
+            .value_name("path")
+            .help("ssh: sets prefix of the remote server socket path")
+            .value_parser(value_parser!(OsString)),
         )
         .arg(
             Arg::new("login-shell")
@@ -1794,6 +1801,7 @@ fn main() -> Result<(), String> {
     let no_gpu = matches.get_one::<bool>("no-gpu").unwrap();
     let remotebin = matches.get_one::<PathBuf>("remote-bin").unwrap();
     let socket_arg = matches.get_one::<OsString>("socket");
+    let remote_socket_arg = matches.get_one::<OsString>("remote-socket");
     let title_prefix = matches.get_one::<String>("title-prefix").unwrap();
     let display = matches.get_one::<PathBuf>("display");
     let threads = matches.get_one::<u32>("threads").unwrap();
@@ -1831,17 +1839,35 @@ fn main() -> Result<(), String> {
             "Waypipe was built with support for VSOCK-type sockets on this platform.".into(),
         );
     }
+
     if vsock && socket_arg.is_none() {
         return Err("Socket must be specified with --socket when --vsock option used".into());
     }
-    let socket: Option<SocketSpec> = if let Some(s) = socket_arg {
+    let (client_sock_arg, server_sock_arg) = match matches.subcommand() {
+        Some(("ssh", _)) => (socket_arg, remote_socket_arg.or(socket_arg)),
+        Some(("client", _)) | Some(("client-conn", _)) => (socket_arg, None),
+        Some(("server", _)) | Some(("server-conn", _)) => (None, socket_arg),
+        _ => (None, None),
+    };
+
+    let to_socket_spec = |s: &OsStr| -> Result<SocketSpec, String> {
         if vsock {
-            Some(SocketSpec::VSock(VSockConfig::from_str(
+            Ok(SocketSpec::VSock(VSockConfig::from_str(
                 s.to_str().unwrap(),
             )?))
         } else {
-            Some(SocketSpec::Unix(PathBuf::from(s)))
+            Ok(SocketSpec::Unix(PathBuf::from(s)))
         }
+    };
+
+    let client_socket = if let Some(s) = client_sock_arg {
+        Some(to_socket_spec(s)?)
+    } else {
+        None
+    };
+
+    let server_socket = if let Some(s) = server_sock_arg {
+        Some(to_socket_spec(s)?)
     } else {
         None
     };
@@ -1906,41 +1932,43 @@ fn main() -> Result<(), String> {
             /* Login shell required if there are no arguments following the ssh destination */
             let needs_login_shell = destination_idx == ssh_args.len() - 1;
 
-            let socket_path: SocketSpec =
-                socket.unwrap_or(SocketSpec::Unix(PathBuf::from("/tmp/waypipe")));
-
             let rand_tag = get_rand_tag()?;
             let mut client_sock_path = OsString::new();
+            let client_sock =
+                match client_socket.unwrap_or(SocketSpec::Unix(PathBuf::from("/tmp/waypipe"))) {
+                    SocketSpec::Unix(path) => {
+                        client_sock_path.push(&path);
+                        client_sock_path.push(OsStr::new("-client-"));
+                        client_sock_path.push(OsStr::from_bytes(&rand_tag));
+                        client_sock_path.push(OsStr::new(".sock"));
+                        SocketSpec::Unix(PathBuf::from(client_sock_path.clone()))
+                    }
+                    SocketSpec::VSock(v) => SocketSpec::VSock(v),
+                };
             let mut server_sock_path = OsString::new();
-            let client_sock = match socket_path {
+            match server_socket.unwrap_or(SocketSpec::Unix(PathBuf::from("/tmp/waypipe"))) {
                 SocketSpec::Unix(path) => {
-                    client_sock_path.push(&path);
-                    client_sock_path.push(OsStr::new("-client-"));
-                    client_sock_path.push(OsStr::from_bytes(&rand_tag));
-                    client_sock_path.push(OsStr::new(".sock"));
                     server_sock_path.push(&path);
                     server_sock_path.push(OsStr::new("-server-"));
                     server_sock_path.push(OsStr::from_bytes(&rand_tag));
                     server_sock_path.push(OsStr::new(".sock"));
-                    if *loop_test {
-                        let client_path = PathBuf::from(&client_sock_path);
-                        let server_path = PathBuf::from(&server_sock_path);
-                        unistd::symlinkat(&client_path, None, &server_path).map_err(|x| {
-                            tag!(
-                                "Failed to create symlink from {:?} to {:?}: {}",
-                                client_path,
-                                server_path,
-                                x
-                            )
-                        })?;
-                    }
-                    SocketSpec::Unix(PathBuf::from(client_sock_path.clone()))
                 }
                 SocketSpec::VSock(v) => {
                     server_sock_path = OsString::from(v.port.to_string());
-                    SocketSpec::VSock(v)
                 }
             };
+            if *loop_test && !vsock {
+                let client_path = PathBuf::from(&client_sock_path);
+                let server_path = PathBuf::from(&server_sock_path);
+                unistd::symlinkat(&client_path, None, &server_path).map_err(|x| {
+                    tag!(
+                        "Failed to create symlink from {:?} to {:?}: {}",
+                        client_path,
+                        server_path,
+                        x
+                    )
+                })?;
+            }
             let mut linkage = OsString::new();
             linkage.push(server_sock_path.clone());
             linkage.push(OsStr::new(":"));
@@ -2032,8 +2060,8 @@ fn main() -> Result<(), String> {
         }
         Some(("client", _submatch)) => {
             debug!("Starting client main process");
-            let socket_path: SocketSpec =
-                socket.unwrap_or(SocketSpec::Unix(PathBuf::from("/tmp/waypipe-client.sock")));
+            let socket_path: SocketSpec = client_socket
+                .unwrap_or(SocketSpec::Unix(PathBuf::from("/tmp/waypipe-client.sock")));
 
             run_client(
                 None,
@@ -2076,8 +2104,8 @@ fn main() -> Result<(), String> {
                 };
             let argv0 = if *login_shell { argv0 } else { command[0] };
 
-            let socket_path: SocketSpec =
-                socket.unwrap_or(SocketSpec::Unix(PathBuf::from("/tmp/waypipe-server.sock")));
+            let socket_path: SocketSpec = server_socket
+                .unwrap_or(SocketSpec::Unix(PathBuf::from("/tmp/waypipe-server.sock")));
 
             if oneshot {
                 run_server_oneshot(&command, argv0, &opts, unlink, &socket_path, &cwd)
@@ -2140,7 +2168,7 @@ fn main() -> Result<(), String> {
                 s
             } else {
                 socket_connect(
-                    &socket.ok_or_else(|| tag!("Socket path not provided"))?,
+                    &server_socket.ok_or_else(|| tag!("Socket path not provided"))?,
                     &cwd,
                     false,
                     false,
