@@ -322,12 +322,20 @@ from being leaked to disk.
 
 File bug reports at: https://gitlab.freedesktop.org/mstoeckl/waypipe/
 
+## Common issues
+
 Some programs (gnome-terminal, firefox, kate, among others) have special
 mechanisms to ensure that only one process is running at a time. Starting
 those programs under Waypipe while they are running under a different
 Wayland compositor may silently open a window or tab in the original
 instance of the program. Such programs may have a command line argument
 to create a new instance.
+
+The *waypipe ssh* command requires that the *ssh* executable supports Unix
+socket forwarding; this is only supported in OpenSSH since version 6.7 (from
+2014), and may require specific configuration. Other implementations of SSH may
+not be able to forward Unix sockets; see the EXAMPLE section above for how to
+use non-SSH transports.
 
 # SEE ALSO
 
