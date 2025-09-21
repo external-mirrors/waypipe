@@ -1352,7 +1352,7 @@ pub fn setup_vulkan_device_base(
         let prio = &[1.0]; // make a single queue
         let cg_queue = qfis[0] == qfis[1];
         let nqf = if using_hw_video {
-            if qfis.iter().any(|x| *x == u32::MAX) {
+            if qfis.contains(&u32::MAX) {
                 return Err(tag!("Not all queue types needed available: compute {} graphics {} encode {} decode {}", qfis[0], qfis[1], qfis[2], qfis[3]));
             }
 
@@ -1927,7 +1927,7 @@ impl VulkanBuffer {
         Ok(())
     }
 
-    pub fn get_read_view(self: &VulkanBuffer) -> VulkanBufferReadView {
+    pub fn get_read_view<'a>(self: &'a VulkanBuffer) -> VulkanBufferReadView<'a> {
         let mut inner = self.inner.lock().unwrap();
         let dst = slice_from_raw_parts(inner.data as *const u8, self.buffer_len as usize);
         assert!(!inner.has_writer);
@@ -1941,7 +1941,7 @@ impl VulkanBuffer {
         }
     }
 
-    pub fn get_write_view(self: &VulkanBuffer) -> VulkanBufferWriteView {
+    pub fn get_write_view<'a>(self: &'a VulkanBuffer) -> VulkanBufferWriteView<'a> {
         let mut inner = self.inner.lock().unwrap();
         let dst = slice_from_raw_parts_mut(inner.data as *mut u8, self.buffer_len as usize);
         assert!(inner.reader_count == 0);
@@ -3174,7 +3174,10 @@ impl VulkanDevice {
     }
     /** Get the event_fd associated with the main timeline semaphore, if semaphore import/export is supported
      * and there is one. */
-    pub fn get_event_fd(&self, timeline_point: u64) -> Result<Option<BorrowedFd>, String> {
+    pub fn get_event_fd<'a>(
+        &'a self,
+        timeline_point: u64,
+    ) -> Result<Option<BorrowedFd<'a>>, String> {
         if let Some(ref ext) = self.semaphore_external {
             drm_syncobj_eventfd(&self.drm_fd, &ext.event_fd, ext.drm_handle, timeline_point)?;
             Ok(Some(ext.event_fd.as_fd()))
@@ -3384,15 +3387,15 @@ impl VulkanTimelineSemaphore {
     }
 
     /** Get the eventfd used with this timeline semaphore */
-    pub fn get_event_fd(self: &VulkanTimelineSemaphore) -> BorrowedFd {
+    pub fn get_event_fd<'a>(self: &'a VulkanTimelineSemaphore) -> BorrowedFd<'a> {
         self.external.event_fd.as_fd()
     }
     /** Configure the eventfd to be ready when the semaphore has reached the
      * timeline point */
-    pub fn link_event_fd(
-        self: &VulkanTimelineSemaphore,
+    pub fn link_event_fd<'a>(
+        self: &'a VulkanTimelineSemaphore,
         timeline_point: u64,
-    ) -> Result<BorrowedFd, String> {
+    ) -> Result<BorrowedFd<'a>, String> {
         drm_syncobj_eventfd(
             &self.vulk.drm_fd,
             &self.external.event_fd,

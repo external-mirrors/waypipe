@@ -205,7 +205,7 @@ impl Mirror {
         })
     }
     /* Get a subrange of the vector, assuming it is available */
-    pub fn get_mut_range(&self, span: Range<usize>) -> Option<MirrorRange> {
+    pub fn get_mut_range<'a>(&'a self, span: Range<usize>) -> Option<MirrorRange<'a>> {
         if span.end <= span.start {
             return None;
         }
