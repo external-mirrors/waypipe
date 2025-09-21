@@ -9,7 +9,7 @@ pub use crate::video::*;
 use crate::wayland_gen::*;
 use ash::*;
 use log::{debug, error};
-use nix::{errno, libc};
+use nix::{errno, libc, request_code_readwrite};
 use std::collections::BTreeMap;
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
@@ -551,18 +551,10 @@ pub fn drm_to_vulkan(drm_format: u32) -> Option<vk::Format> {
 }
 
 /* Definitions from drm.h and linux/dma-buf.h */
-
-/** Construct IOCTL request parameter. */
-const fn drm_iowr<T>(typ: u32, code: u8) -> u32 {
-    /* linux/ioctl.h */
-    let size = std::mem::size_of::<T>() as u32;
-    let dir = 0x1 | 0x2;
-    (code as u32) | (typ << 8) | (size << 16) | (dir << 30)
-}
-const DRM_IOCTL_SYNCOBJ_DESTROY: u32 = drm_iowr::<DrmSyncobjDestroy>('d' as u32, 0xC0);
-const DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE: u32 = drm_iowr::<DrmSyncobjHandle>('d' as u32, 0xC2);
-const DRM_IOCTL_SYNCOBJ_EVENTFD: u32 = drm_iowr::<DrmSyncobjEventFd>('d' as u32, 0xCF);
-const DMABUF_IOCTL_EXPORT_SYNC_FILE: u32 = drm_iowr::<DmabufExportSyncFile>('b' as u32, 0x02);
+const DRM_IOCTL_SYNCOBJ_DESTROY: (u32, u8) = ('d' as u32, 0xC0);
+const DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE: (u32, u8) = ('d' as u32, 0xC2);
+const DRM_IOCTL_SYNCOBJ_EVENTFD: (u32, u8) = ('d' as u32, 0xCF);
+const DMABUF_IOCTL_EXPORT_SYNC_FILE: (u32, u8) = ('b' as u32, 0x02);
 
 #[repr(C)]
 struct DrmSyncobjDestroy {
@@ -593,15 +585,21 @@ const DMA_BUF_SYNC_READ: u32 = 1 << 0;
 
 /** Requirements: for the specific ioctl used, arg must be properly
  * aligned, have the right type, and have the correct lifespan. */
-unsafe fn ioctl_loop(
+unsafe fn ioctl_loop<T>(
     drm_fd: &OwnedFd,
-    code: u32,
-    arg: *mut c_void,
+    typ: u32,
+    code: u8,
+    arg: *mut T,
     about: &str,
 ) -> Result<(), String> {
-    let req = code as libc::c_ulong;
     loop {
-        let ret = libc::ioctl(drm_fd.as_raw_fd(), req, arg);
+        // Note: Platforms vary in the signedness of the argument type passed
+        // to libc, and some old big-endian platforms have a different ioctl code format
+        let ret = libc::ioctl(
+            drm_fd.as_raw_fd(),
+            request_code_readwrite!(typ, code, std::mem::size_of::<T>()),
+            arg as *mut c_void,
+        );
         let errno = errno::Errno::last_raw();
         if ret == 0 {
             return Ok(());
@@ -630,10 +628,11 @@ fn drm_syncobj_eventfd(
     unsafe {
         // SAFETY: x is repr(C), x has proper type for the ioctl,
         // and the ioctl does not use the pointer after the call
-        ioctl_loop(
+        ioctl_loop::<DrmSyncobjEventFd>(
             drm_fd,
-            DRM_IOCTL_SYNCOBJ_EVENTFD,
-            &mut x as *mut _ as *mut c_void,
+            DRM_IOCTL_SYNCOBJ_EVENTFD.0,
+            DRM_IOCTL_SYNCOBJ_EVENTFD.1,
+            &mut x,
             "eventfd",
         )
     }
@@ -649,10 +648,11 @@ fn drm_syncobj_fd_to_handle(drm_fd: &OwnedFd, syncobj_fd: &OwnedFd) -> Result<u3
     unsafe {
         // SAFETY: x is repr(C), x has proper type for the ioctl,
         // and the ioctl does not use the pointer after the call
-        ioctl_loop(
+        ioctl_loop::<DrmSyncobjHandle>(
             drm_fd,
-            DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE,
-            &mut x as *mut _ as *mut c_void,
+            DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE.0,
+            DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE.1,
+            &mut x,
             "fd to handle",
         )?;
         Ok(x.handle)
@@ -671,8 +671,9 @@ fn drm_syncobj_destroy(drm_fd: &OwnedFd, handle: u32) -> Result<(), String> {
         // and the ioctl does not use the pointer after the call
         ioctl_loop(
             drm_fd,
-            DRM_IOCTL_SYNCOBJ_DESTROY,
-            &mut x as *mut _ as *mut c_void,
+            DRM_IOCTL_SYNCOBJ_DESTROY.0,
+            DRM_IOCTL_SYNCOBJ_DESTROY.1,
+            &mut x,
             "handle destroy",
         )
     }
@@ -688,16 +689,18 @@ fn dmabuf_sync_file_export(dmabuf_fd: &OwnedFd) -> Result<Option<OwnedFd>, Strin
         flags: DMA_BUF_SYNC_READ,
         fd: -1,
     };
-    // TODO: handle EINVAL specifically
     unsafe {
         // SAFETY: x is repr(C), x has proper type for the ioctl,
         // and the ioctl does not use the pointer after the call
 
-        let code = DMABUF_IOCTL_EXPORT_SYNC_FILE;
-        let req = code as libc::c_ulong;
-        let arg: *mut c_void = &mut x as *mut _ as *mut c_void;
+        let code = request_code_readwrite!(
+            DMABUF_IOCTL_EXPORT_SYNC_FILE.0,
+            DMABUF_IOCTL_EXPORT_SYNC_FILE.1,
+            std::mem::size_of::<DmabufExportSyncFile>()
+        );
+        let arg: *mut c_void = &mut x as *mut DmabufExportSyncFile as *mut c_void;
         loop {
-            let ret = libc::ioctl(dmabuf_fd.as_raw_fd(), req, arg);
+            let ret = libc::ioctl(dmabuf_fd.as_raw_fd(), code, arg);
             let errno = errno::Errno::last_raw();
             if ret == 0 {
                 break;
