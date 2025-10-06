@@ -11,14 +11,14 @@ test_diff = executable(
     include_directories: waypipe_includes,
     link_with: [lib_waypipe_src, common_src],
 )
-test('Whether diff operations successfully roundtrip', test_diff, timeout: 60)
+test('waypipe-c; Whether diff operations successfully roundtrip', test_diff, timeout: 60)
 test_damage = executable(
     'damage_merge',
     ['damage_merge.c'],
     include_directories: waypipe_includes,
     link_with: [lib_waypipe_src, common_src],
 )
-test('If damage rectangles merge efficiently', test_damage, timeout: 5)
+test('waypipe-c; If damage rectangles merge efficiently', test_damage, timeout: 5)
 test_mirror = executable(
     'fd_mirror',
     ['fd_mirror.c'],
@@ -28,7 +28,7 @@ test_mirror = executable(
 )
 # disable leak checking, because library code is often responsible
 test(
-    'How well buffers are replicated',
+    'waypipe-c; How well buffers are replicated',
     test_mirror,
     env: ['ASAN_OPTIONS=detect_leaks=0'],
     timeout: 40,
@@ -47,7 +47,7 @@ test_protocol = executable(
     link_with: [lib_waypipe_src, common_src],
 )
 test(
-    'That common Wayland message patterns work',
+    'waypipe-c; That common Wayland message patterns work',
     test_protocol,
     env: ['ASAN_OPTIONS=detect_leaks=0'],
     timeout: 20,
@@ -58,7 +58,7 @@ test_pipe = executable(
     include_directories: waypipe_includes,
     link_with: [lib_waypipe_src, common_src],
 )
-test('How well pipes are replicated', test_pipe, timeout: 20)
+test('waypipe-c; How well pipes are replicated', test_pipe, timeout: 20)
 test_fnlist = files('test_fnlist.txt')
 testproto_src = custom_target(
     'test-proto code',
@@ -87,7 +87,7 @@ test_parse = executable(
     include_directories: waypipe_includes,
     link_with: [lib_waypipe_src, common_src],
 )
-test('That protocol parsing fails cleanly', test_parse, timeout: 5)
+test('waypipe-c; That protocol parsing fails cleanly', test_parse, timeout: 5)
 
 fake_ssh = executable('ssh', ['fake_ssh.c'])
 
@@ -131,7 +131,7 @@ endforeach
 if weston_prog.found() and have_test_progs
     test_headless = join_paths(meson.current_source_dir(), 'headless.py')
     test(
-        'If clients crash when run with weston via waypipe',
+        'waypipe-c; If clients crash when run with weston via waypipe',
         python3,
         args: test_headless,
         env: headless_envlist,
@@ -145,7 +145,7 @@ startup_envlist += ['TEST_SLEEP_PATH=' + sleep_prog.full_path()]
 startup_envlist += ['TEST_FAKE_SSH_PATH=' + fake_ssh.full_path()]
 test_startup = join_paths(meson.current_source_dir(), 'startup_failure.py')
 test(
-    'That waypipe exits cleanly given a bad setup',
+    'waypipe-c; That waypipe exits cleanly given a bad setup',
     python3,
     args: test_startup,
     env: startup_envlist,
@@ -179,7 +179,7 @@ test_proto_hook = executable(
     link_with: [lib_waypipe_src, common_src],
 )
 test(
-    'That `waypipe bench` doesn\'t crash',
+    'waypipe-c; That `waypipe bench` doesn\'t crash',
     waypipe_prog,
     timeout: 20,
     args: ['--threads', '2', '--test-size', '16384', 'bench', '100.0'],
