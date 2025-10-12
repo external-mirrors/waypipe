@@ -3,6 +3,7 @@ name = "waypipe-gbm-wrapper"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.65.0"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 libloading = "0.8.5"
