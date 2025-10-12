@@ -1628,6 +1628,14 @@ fn main() -> Result<(), String> {
                 .value_parser(value_parser!(PathBuf)),
         )
         .arg(
+            Arg::new("ssh-bin")
+                .long("ssh-bin")
+                .value_name("path")
+                .help("ssh: Set the ssh binary to use")
+                .value_parser(value_parser!(PathBuf))
+                .default_value("ssh"),
+        )
+        .arg(
             Arg::new("remote-bin")
                 .long("remote-bin")
                 .value_name("path")
@@ -1799,6 +1807,7 @@ fn main() -> Result<(), String> {
 
     let mut oneshot = *matches.get_one::<bool>("oneshot").unwrap();
     let no_gpu = matches.get_one::<bool>("no-gpu").unwrap();
+    let sshbin = matches.get_one::<PathBuf>("ssh-bin").unwrap();
     let remotebin = matches.get_one::<PathBuf>("remote-bin").unwrap();
     let socket_arg = matches.get_one::<OsString>("socket");
     let remote_socket_arg = matches.get_one::<OsString>("remote-socket");
@@ -1983,7 +1992,7 @@ fn main() -> Result<(), String> {
 
             let mut ssh_cmd: Vec<&std::ffi::OsStr> = Vec::new();
             if !loop_test {
-                ssh_cmd.push(OsStr::new("ssh"));
+                ssh_cmd.push(OsStr::new(sshbin));
                 if needs_login_shell {
                     ssh_cmd.push(OsStr::new("-t"));
                 }
