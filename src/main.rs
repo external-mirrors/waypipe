@@ -1993,6 +1993,7 @@ fn main() -> Result<(), String> {
                 }
                 ssh_cmd.extend_from_slice(&ssh_args[..=destination_idx]);
             }
+            ssh_cmd.push(OsStr::new("--"));
             ssh_cmd.push(OsStr::new(remotebin));
             if opts.debug {
                 ssh_cmd.push(OsStr::new("--debug"));
