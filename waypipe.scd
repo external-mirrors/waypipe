@@ -309,11 +309,11 @@ In general, applications are not well tested against malicious compositors,
 and compositors are not well tested against malicious clients. Waypipe can
 connect the two, and may blindly forward denial-of-service and other attacks.
 
-Waypipe itself is written in C and links to compression, graphics, and video
-libraries; both it and these libraries may have security bugs. Some risk
-can be avoided by building Waypipe with DMABUF support turned off, or
-running Waypipe with the *--no-gpu* flag so that it does not expose graphics
-libraries.
+Waypipe itself has plenty of unsafe Rust code and links to compression,
+graphics, and video libraries; both it and these libraries may have security
+bugs. Some risk can be avoided by building Waypipe with DMABUF support turned
+off, or running Waypipe with the *--no-gpu* flag so that it does not expose
+graphics libraries.
 
 *waypipe ssh* has no explicit protections against timing attacks; an observer
 to the resulting network traffic may, by studying the size and timing of
