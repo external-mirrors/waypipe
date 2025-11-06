@@ -5,7 +5,7 @@ use log::{debug, error, Log, Record};
 use nix::errno::Errno;
 use nix::libc;
 use nix::poll::{PollFd, PollFlags};
-use nix::sys::{signal, socket, wait};
+use nix::sys::{signal, socket, stat, wait};
 use nix::{fcntl, unistd};
 use std::collections::BTreeMap;
 use std::env;
@@ -872,22 +872,413 @@ fn run_server_oneshot(
     Ok(())
 }
 
+/** Optional parameters for run_server_inner() and spawn_xwls_handler() related to
+ * the X display socket used for xwayland-satellite. */
+struct XSocketInfo {
+    #[cfg(target_os = "linux")]
+    abstract_socket: OwnedFd,
+    unix_socket: OwnedFd,
+    display: u8,
+}
+
+/** State needed to safely unlink the X display lock file and Unix socket */
+struct XCleanup {
+    /** The directory /tmp/ */
+    tmp_fd: OwnedFd,
+    /** The directory /tmp/.X11-unix */
+    x11_unix_fd: OwnedFd,
+    /** The display number (enough to determine which paths to unlink) */
+    display: u8,
+}
+
+impl Drop for XCleanup {
+    fn drop(&mut self) {
+        let mut lock_file_buf = [0u8; 32];
+        let lock_file_name = Path::new(OsStr::from_bytes(write_with_buffer(
+            &mut lock_file_buf,
+            |x| write!(x, ".X{}-lock", self.display).expect("not too long"),
+        )));
+
+        let mut socket_buf = [0u8; 16];
+        let socket_name = Path::new(OsStr::from_bytes(write_with_buffer(&mut socket_buf, |x| {
+            write!(x, "X{}", self.display).expect("not too long")
+        })));
+
+        debug!(
+            "Trying to unlink socket created at: /tmp/.X11-unix/X{}",
+            self.display
+        );
+        if let Err(e) = unistd::unlinkat(
+            Some(self.x11_unix_fd.as_raw_fd()),
+            socket_name,
+            unistd::UnlinkatFlags::NoRemoveDir,
+        ) {
+            error!(
+                "Failed to unlink display socket at: /tmp/.X11-unix/X{}: {:?}",
+                self.display, e
+            )
+        }
+
+        /* Unlock the lock file last, in the reverse of acquisition order, to
+         * try to reduce cases where multiple processes race to set up all sockets */
+        debug!(
+            "Trying to unlink lock file created at: /tmp/.X{}-lock",
+            self.display
+        );
+        if let Err(e) = unistd::unlinkat(
+            Some(self.tmp_fd.as_raw_fd()),
+            lock_file_name,
+            unistd::UnlinkatFlags::NoRemoveDir,
+        ) {
+            error!(
+                "Failed to unlink lock file at: /tmp/.X{}-lock: {:?}",
+                self.display, e
+            )
+        }
+
+        /* .X11-unix is _not_ unlinked, even if this was the last display */
+    }
+}
+
+/** Select the next available X display */
+fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
+    let tmp_fd = open_folder(Path::new("/tmp/"))?;
+
+    match stat::mkdirat(
+        Some(tmp_fd.as_raw_fd()),
+        Path::new(".X11-unix"),
+        stat::Mode::from_bits_retain(0b111111111),
+    ) {
+        Err(Errno::EEXIST) | Ok(()) => (),
+        Err(e) => {
+            return Err(tag!(
+                "Failed to create subfolder '.X11-unix' of '/tmp': {}",
+                e
+            ));
+        }
+    }
+
+    let x11_unix_fd_val = fcntl::openat(
+        Some(tmp_fd.as_raw_fd()),
+        Path::new(".X11-unix"),
+        dir_flags() | fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NOCTTY,
+        nix::sys::stat::Mode::empty(),
+    )
+    .map_err(|x| tag!("Failed to open subfolder '.X11-unix' of '/tmp': {}", x))?;
+
+    let x11_unix_fd = unsafe {
+        // SAFETY: freshly created file descriptor, immediately captured here;
+        // nix::fcntl::openat checked openat returned positive
+        OwnedFd::from_raw_fd(x11_unix_fd_val)
+    };
+
+    /* Creating the non-abstract unix socket now (and binding it last) simplifies
+     * the error handling paths slightly. */
+    let unix_socket: OwnedFd = socket::socket(
+        socket::AddressFamily::Unix,
+        socket::SockType::Stream,
+        socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .map_err(|x| tag!("Failed to create socket: {}", x))?;
+
+    /* Helper function to ensure abstract_socket is dropped before the lock
+     * file is unlinked. Returns Ok(None) on non-fatal error. */
+    #[cfg(target_os = "linux")]
+    fn bind_sockets(
+        unix_socket: &OwnedFd,
+        x11_unix_fd: &OwnedFd,
+        cwd: &OwnedFd,
+        display: u8,
+    ) -> Result<Option<OwnedFd>, String> {
+        let mut abstract_path_buf = [0u8; 32];
+        let abstract_path = Path::new(OsStr::from_bytes(write_with_buffer(
+            &mut abstract_path_buf,
+            |x| write!(x, "/tmp/.X11-unix/X{}", display).expect("not too long"),
+        )));
+
+        let abstract_addr =
+            socket::UnixAddr::new_abstract(abstract_path.as_os_str().as_encoded_bytes())
+                .expect("abstract address should be short");
+
+        let abstract_socket: OwnedFd = socket::socket(
+            socket::AddressFamily::Unix,
+            socket::SockType::Stream,
+            socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
+            None,
+        )
+        .map_err(|x| tag!("Failed to create socket: {}", x))?;
+
+        match socket::bind(abstract_socket.as_raw_fd(), &abstract_addr) {
+            Err(Errno::EADDRINUSE) => {
+                debug!(
+                    "Skipping X display number {}, abstract socket at {:?} already in use",
+                    display, abstract_path
+                );
+                return Ok(None);
+            }
+            Ok(()) => (),
+            Err(e) => {
+                return Err(tag!(
+                    "Failed to bind abstract socket at {:?}: {}",
+                    abstract_path,
+                    e
+                ));
+            }
+        }
+
+        match bind_unix_socket(unix_socket, x11_unix_fd, cwd, display) {
+            Ok(Some(())) => (),
+            Ok(None) => return Ok(None),
+            Err(x) => return Err(x),
+        };
+
+        Ok(Some(abstract_socket))
+    }
+
+    /* Helper function to bind the Unix socket. Returns Ok(None) on non-fatal error. */
+    fn bind_unix_socket(
+        unix_socket: &OwnedFd,
+        x11_unix_fd: &OwnedFd,
+        cwd: &OwnedFd,
+        display: u8,
+    ) -> Result<Option<()>, String> {
+        let mut sockname_buf = [0u8; 16];
+        let regular_sockname = Path::new(OsStr::from_bytes(write_with_buffer(
+            &mut sockname_buf,
+            |x| write!(x, "X{}", display).expect("not too long"),
+        )));
+
+        let reg_addr = socket::UnixAddr::new(regular_sockname).expect("filename should be short");
+
+        if let Err(e) = unistd::fchdir(x11_unix_fd.as_raw_fd()) {
+            return Err(tag!("Failed to visit folder '/tmp/.X11-unix': {:?}", e));
+        }
+
+        let r = socket::bind(unix_socket.as_raw_fd(), &reg_addr);
+
+        unistd::fchdir(cwd.as_raw_fd())
+            .map_err(|x| tag!("Failed to return to original path: {}", x))?;
+
+        match r {
+            Err(Errno::EADDRINUSE) => {
+                debug!(
+                    "Skipping X display number {}, unix socket at /tmp/.X11-unix/{:?} already in use",
+                    display, regular_sockname
+                );
+                return Ok(None);
+            }
+            Ok(()) => (),
+            Err(e) => {
+                return Err(tag!(
+                    "Failed to bind unix socket at /tmp/.X11-unix/{:?}: {}",
+                    display,
+                    e
+                ));
+            }
+        }
+        Ok(Some(()))
+    }
+
+    for display in 0..u8::MAX {
+        let lock_file_name = format!(".X{}-lock", display);
+
+        let pid = unistd::getpid();
+        let lock_fd_val = match fcntl::openat(
+            Some(tmp_fd.as_raw_fd()),
+            Path::new(&lock_file_name),
+            fcntl::OFlag::O_CLOEXEC
+                | fcntl::OFlag::O_NOCTTY
+                | fcntl::OFlag::O_WRONLY
+                | fcntl::OFlag::O_CREAT
+                | fcntl::OFlag::O_EXCL,
+            nix::sys::stat::Mode::from_bits_retain(0b100100100),
+        ) {
+            Err(Errno::EEXIST) => {
+                /* This does not check if the process that created the lockfile
+                 * still exists and try to overwrite the lockfile if not,
+                 * because waypipe does not restart xwayland-satellite if it
+                 * crashes or is killed, and replacing the lock file could
+                 * confuse future X11 clients. */
+                debug!(
+                    "Skipping X display number {}, lock file already exists",
+                    display
+                );
+                continue;
+            }
+            Ok(v) => v,
+            Err(e) => {
+                return Err(tag!("Failed to create X lock file in '/tmp': {}", e));
+            }
+        };
+
+        let lock_fd = unsafe {
+            // SAFETY: freshly created file descriptor, immediately captured here;
+            // nix::fcntl::openat checked openat returned positive
+            OwnedFd::from_raw_fd(lock_fd_val)
+        };
+
+        let mut contents_buf = [0u8; 11];
+        let contents = write_with_buffer(&mut contents_buf, |x| {
+            writeln!(x, "{: >10}", pid).expect("pid should be representable in 10 digits")
+        });
+        // There is a mild race condition where another process may see the lock
+        // file before it has been written to; this could be avoided with a more complex
+        // scheme that creates and applies renameat2 + RENAME_NOREPLACE, but even that
+        // is not perfect.
+        if let Err(e) = write_exact(&lock_fd, contents) {
+            unistd::unlinkat(
+                Some(tmp_fd.as_raw_fd()),
+                Path::new(&lock_file_name),
+                unistd::UnlinkatFlags::NoRemoveDir,
+            )
+            .map_err(|x| {
+                tag!(
+                    "Failed to unlink X lock file for display {}: {:?}",
+                    display,
+                    x
+                )
+            })?;
+            return Err(tag!(
+                "Failed to write pid to X lock file in '/tmp': {:?}",
+                e
+            ));
+        }
+
+        #[cfg(target_os = "linux")]
+        let r = bind_sockets(&unix_socket, &x11_unix_fd, cwd, display);
+
+        #[cfg(not(target_os = "linux"))]
+        let r = bind_unix_socket(&unix_socket, &x11_unix_fd, cwd, display);
+
+        let abstract_socket = match r {
+            Ok(Some(x)) => x,
+            Err(_) | Ok(None) => {
+                unistd::unlinkat(
+                    Some(tmp_fd.as_raw_fd()),
+                    Path::new(&lock_file_name),
+                    unistd::UnlinkatFlags::NoRemoveDir,
+                )
+                .map_err(|x| {
+                    tag!(
+                        "Failed to unlink X lock file for display {}: {:?}",
+                        display,
+                        x
+                    )
+                })?;
+                /* Propagate errors */
+                r?;
+                continue;
+            }
+        };
+
+        return Ok((
+            XSocketInfo {
+                #[cfg(target_os = "linux")]
+                abstract_socket,
+                unix_socket,
+                display,
+            },
+            XCleanup {
+                tmp_fd,
+                x11_unix_fd,
+                display,
+            },
+        ));
+    }
+
+    unistd::fchdir(cwd.as_raw_fd())
+        .map_err(|x| tag!("Failed to return to original path: {}", x))?;
+
+    Err(tag!("Failed to bind a valid X display number in 0..=255"))
+}
+
+/** Try to run xwayland-satellite to connect the X display specified in `xsock` with
+ * the `wayland_display` that this instance is serving.
+ */
+fn spawn_xwls_handler(
+    wayland_display: &OsStr,
+    xsock: XSocketInfo,
+) -> Result<std::process::Child, String> {
+    let mut x_disp_buf: [u8; 11] = [0; 11];
+    let x_disp_slice = write_with_buffer(&mut x_disp_buf, |x: &mut &mut [u8]| {
+        write!(x, ":{}", xsock.display).expect("buffer should be long enough")
+    });
+
+    #[cfg(target_os = "linux")]
+    let mut abstract_buf: [u8; 11] = [0; 11];
+    #[cfg(target_os = "linux")]
+    let abstract_slice = write_with_buffer(&mut abstract_buf, |x: &mut &mut [u8]| {
+        write!(x, "{}", xsock.abstract_socket.as_raw_fd()).expect("buffer should be long enough")
+    });
+    let mut regular_buf: [u8; 11] = [0; 11];
+    let regular_slice = write_with_buffer(&mut regular_buf, |x: &mut &mut [u8]| {
+        write!(x, "{}", xsock.unix_socket.as_raw_fd()).expect("buffer should be long enough")
+    });
+
+    let program = OsStr::new("xwayland-satellite");
+    #[cfg(target_os = "linux")]
+    set_cloexec(&xsock.abstract_socket, false)?;
+    set_cloexec(&xsock.unix_socket, false)?;
+    let child = std::process::Command::new(program)
+        .args([
+            OsStr::from_bytes(x_disp_slice),
+            #[cfg(target_os = "linux")]
+            OsStr::new("-listenfd"),
+            #[cfg(target_os = "linux")]
+            OsStr::from_bytes(abstract_slice),
+            OsStr::new("-listenfd"),
+            OsStr::from_bytes(regular_slice),
+        ])
+        .env("WAYLAND_DISPLAY", wayland_display)
+        .spawn()
+        .map_err(|x| tag!("Failed to run program {:?}: {}", program, x))?;
+    /* Close both sockets */
+    drop(xsock);
+    Ok(child)
+}
+
 /** Inner function for `run_server_multi`, used to ensure its cleanup always runs */
 fn run_server_inner(
     display_socket: &OwnedFd,
     argv0: &std::ffi::OsStr,
-    command: &[&OsStr],
+    command_with_args: &[&OsStr],
     display_short: &OsStr,
     conn_args: &[&OsStr],
+    mut opt_xsock: Option<XSocketInfo>,
+    opt_xchild: &mut Option<std::process::Child>,
     connections: &mut BTreeMap<u32, std::process::Child>,
 ) -> Result<std::process::Child, String> {
-    let mut cmd_child: std::process::Child = std::process::Command::new(command[0])
+    let mut command = std::process::Command::new(command_with_args[0]);
+    command
         .arg0(argv0)
-        .args(&command[1..])
+        .args(&command_with_args[1..])
         .env("WAYLAND_DISPLAY", display_short)
-        .env_remove("WAYLAND_SOCKET")
+        .env_remove("WAYLAND_SOCKET");
+    let mut x_disp_buf: [u8; 4] = [0; 4];
+    if let Some(ref xsock) = opt_xsock {
+        let mut len = x_disp_buf.len();
+        let mut x_disp_slice: &mut [u8] = &mut x_disp_buf;
+        write!(x_disp_slice, ":{}", xsock.display).unwrap();
+        len -= x_disp_slice.len();
+        command.env("DISPLAY", OsStr::from_bytes(&x_disp_buf[..len]));
+    }
+
+    /* Listen to sockets before launching the program,
+     * in case it is very fast to connect */
+    socket::listen(&display_socket, socket::Backlog::MAXCONN)
+        .map_err(|x| tag!("Failed to listen to socket: {}", x))?;
+    if let Some(ref xsock) = opt_xsock {
+        #[cfg(target_os = "linux")]
+        socket::listen(&xsock.abstract_socket, socket::Backlog::MAXCONN)
+            .map_err(|x| tag!("Failed to listen to socket: {}", x))?;
+        socket::listen(&xsock.unix_socket, socket::Backlog::MAXCONN)
+            .map_err(|x| tag!("Failed to listen to socket: {}", x))?;
+    }
+
+    let mut cmd_child: std::process::Child = command
         .spawn()
-        .map_err(|x| tag!("Failed to run program {:?}: {}", command[0], x))?;
+        .map_err(|x| tag!("Failed to run program {:?}: {}", command_with_args[0], x))?;
 
     /* Block SIGCHLD _after_ spawning subprocess, to avoid having cmd_child inherit
      * signal disposition changes; note this process should be single threaded. */
@@ -913,8 +1304,6 @@ fn run_server_inner(
         .map_err(|x| tag!("Failed to lookup path to own executable: {}", x))?
         .into_os_string();
 
-    socket::listen(&display_socket, socket::Backlog::MAXCONN)
-        .map_err(|x| tag!("Failed to listen to socket: {}", x))?;
     'outer: loop {
         loop {
             /* Handle any child process exits */
@@ -925,30 +1314,40 @@ fn run_server_inner(
                     | wait::WaitPidFlag::WNOWAIT,
             );
             match res {
-                Ok(status) => match status {
-                    wait::WaitStatus::Exited(pid, _code) => {
+                Ok(status) => {
+                    let opid = match status {
+                        wait::WaitStatus::Exited(pid, _code) => Some(pid),
+                        wait::WaitStatus::Signaled(pid, _signal, _bool) => Some(pid),
+                        wait::WaitStatus::StillAlive => {
+                            break;
+                        }
+                        _ => {
+                            panic!("Unexpected process status: {:?}", status);
+                        }
+                    };
+                    if let Some(pid) = opid {
                         if pid.as_raw() as u32 == cmd_child.id() {
                             let _ = cmd_child.wait();
                             debug!("Exiting, main command has stopped");
                             break 'outer;
                         }
-                        prune_connections(connections, pid);
-                    }
-                    wait::WaitStatus::Signaled(pid, _signal, _bool) => {
-                        if pid.as_raw() as u32 == cmd_child.id() {
-                            let _ = cmd_child.wait();
-                            debug!("Exiting, main command has stopped");
-                            break 'outer;
+                        let mut found = false;
+                        if let Some(ref mut xchild) = opt_xchild {
+                            if pid.as_raw() as u32 == xchild.id() {
+                                let _ = xchild.wait();
+                                error!("xwayland-satellite stopped early");
+                                /* Note that the lock file has not been cleaned up
+                                 * yet, ensuring X11 clients that attempt to connect
+                                 * to DISPLAY will not encounter a new X server. */
+                                *opt_xchild = None;
+                                found = true;
+                            }
                         }
-                        prune_connections(connections, pid);
+                        if !found {
+                            prune_connections(connections, pid);
+                        }
                     }
-                    wait::WaitStatus::StillAlive => {
-                        break;
-                    }
-                    _ => {
-                        panic!("Unexpected process status: {:?}", status);
-                    }
-                },
+                }
                 Err(Errno::ECHILD) => {
                     error!("Unexpected: no unwaited for children");
                     break 'outer;
@@ -960,44 +1359,95 @@ fn run_server_inner(
         }
 
         /* Wait for SIGCHLD or action */
-        let mut pfds = [PollFd::new(display_socket.as_fd(), PollFlags::POLLIN)];
-        let res = nix::poll::ppoll(&mut pfds, None, Some(pollmask));
+        let (mut pfds_with_xsock, mut pfds_base) = if let Some(ref xsock) = opt_xsock {
+            (
+                Some([
+                    PollFd::new(display_socket.as_fd(), PollFlags::POLLIN),
+                    PollFd::new(xsock.unix_socket.as_fd(), PollFlags::POLLIN),
+                    #[cfg(target_os = "linux")]
+                    PollFd::new(xsock.abstract_socket.as_fd(), PollFlags::POLLIN),
+                ]),
+                None,
+            )
+        } else {
+            (
+                None,
+                Some([PollFd::new(display_socket.as_fd(), PollFlags::POLLIN)]),
+            )
+        };
+
+        let pfds: &mut [PollFd] = if let Some(ref mut v) = pfds_with_xsock {
+            v
+        } else {
+            pfds_base.as_mut().unwrap()
+        };
+
+        let res = nix::poll::ppoll(pfds, None, Some(pollmask));
         if let Err(errno) = res {
             assert!(errno == Errno::EINTR || errno == Errno::EAGAIN);
             continue;
         }
 
-        let rev = pfds[0].revents().unwrap();
-        if rev.contains(PollFlags::POLLERR) {
+        if pfds
+            .iter()
+            .any(|p| p.revents().unwrap().contains(PollFlags::POLLERR))
+        {
             debug!("Exiting, socket error");
             break 'outer;
         }
-        if !rev.contains(PollFlags::POLLIN) {
-            continue;
+
+        let has_wayland_conn = pfds[0].revents().unwrap().contains(PollFlags::POLLIN);
+
+        let mut has_x_conn =
+            opt_xsock.is_some() && pfds[1].revents().unwrap().contains(PollFlags::POLLIN);
+        if cfg!(target_os = "linux") {
+            has_x_conn |=
+                opt_xsock.is_some() && pfds[2].revents().unwrap().contains(PollFlags::POLLIN);
         }
-        /* We have a connection */
-        debug!("Connection received");
 
-        let res = socket::accept(display_socket.as_raw_fd());
-        match res {
-            Ok(conn_fd) => {
-                let wrapped_fd = unsafe {
-                    // SAFETY: freshly created file descriptor, exclusively captured here
-                    OwnedFd::from_raw_fd(conn_fd)
-                };
-                set_blocking(&wrapped_fd)?;
+        if has_x_conn {
+            let xsock = opt_xsock.take().unwrap();
+            debug!("X connection received, trying to spawn xwayland-satellite");
 
-                let child = spawn_connection_handler(&self_path, conn_args, wrapped_fd, None)?;
-                let cid = child.id();
-                if connections.insert(cid, child).is_some() {
-                    return Err(tag!("Pid reuse: {}", cid));
+            match spawn_xwls_handler(display_short, xsock) {
+                Ok(c) => *opt_xchild = Some(c),
+                Err(e) => {
+                    /* Only log the error instead of aborting, so that a failure
+                     * to start xwayland-satellite for a new X11 connection does
+                     * not affect current or future Wayland clients. */
+                    error!(
+                        "Failed to start xwayland-satellite to handle new X11 connection: {:?}",
+                        e
+                    );
                 }
             }
-            Err(errno) => {
-                assert!(errno != Errno::EBADF && errno != Errno::EINVAL);
-                // This can fail for a variety of reasons, including OOM
-                // and the connection being aborted
-                debug!("Failed to receive connection");
+        }
+
+        if has_wayland_conn {
+            /* We have a connection */
+            debug!("Connection received");
+
+            let res = socket::accept(display_socket.as_raw_fd());
+            match res {
+                Ok(conn_fd) => {
+                    let wrapped_fd = unsafe {
+                        // SAFETY: freshly created file descriptor, exclusively captured here
+                        OwnedFd::from_raw_fd(conn_fd)
+                    };
+                    set_blocking(&wrapped_fd)?;
+
+                    let child = spawn_connection_handler(&self_path, conn_args, wrapped_fd, None)?;
+                    let cid = child.id();
+                    if connections.insert(cid, child).is_some() {
+                        return Err(tag!("Pid reuse: {}", cid));
+                    }
+                }
+                Err(errno) => {
+                    assert!(errno != Errno::EBADF && errno != Errno::EINVAL);
+                    // This can fail for a variety of reasons, including OOM
+                    // and the connection being aborted
+                    debug!("Failed to receive connection");
+                }
             }
         }
     }
@@ -1015,6 +1465,7 @@ fn run_server_multi(
     display_short: &OsStr,
     display: &OsStr,
     cwd: &OwnedFd,
+    run_xwls: bool,
 ) -> Result<(), String> {
     let mut connections = BTreeMap::new();
 
@@ -1027,14 +1478,46 @@ fn run_server_multi(
         socket::SockFlag::SOCK_NONBLOCK | socket::SockFlag::SOCK_CLOEXEC,
     )?;
 
+    let (mut opt_x, mut opt_cleanup) = (None, None);
+    if run_xwls {
+        let (x_disp, x_cleanup) = choose_x_display(cwd)?;
+        opt_x = Some(x_disp);
+        opt_cleanup = Some(x_cleanup);
+    }
+
+    let mut xwls_child = None;
     let res = run_server_inner(
         &display_socket,
         argv0,
         command,
         display_short,
         &conn_args,
+        opt_x,
+        &mut xwls_child,
         &mut connections,
     );
+    /* Unlink the X socket if one was created */
+    drop(opt_cleanup);
+
+    if let Some(mut child) = xwls_child {
+        /* xwayland-satellite has no means to communicate that there are no longer
+         * any clients connected to it, so waypipe cannot practically wait for those
+         * to detach like it can for Wayland connections; therefore, kill it when
+         * the command being run exits */
+        if let Err(e) = child.kill() {
+            debug!(
+                "Failed to send kill signal to xwayland-satellite subprocess: {:?}",
+                e
+            );
+        }
+        if let Err(e) = child.wait() {
+            debug!(
+                "Failed to wait for xwayland-satellite subprocess to exit: {:?}",
+                e
+            );
+        }
+    }
+
     /* Unlink the connection socket that was used */
     let sock_err = if unlink_at_end {
         if let SocketSpec::Unix(p) = socket_path {
@@ -1701,6 +2184,13 @@ fn main() -> Result<(), String> {
                 .value_parser(value_parser!(String)),
         )
         .arg(
+            Arg::new("xwls")
+            .long("xwls")
+            .value_name("display")
+            .help("server,ssh: Run xwayland-satellite to handle X11 clients")
+            .action(ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("anti-staircase")
                 .long("anti-staircase")
                 .hide(true)
@@ -1822,6 +2312,7 @@ fn main() -> Result<(), String> {
     let drm_node = matches.get_one::<PathBuf>("drm-node");
     let loop_test = matches.get_one::<bool>("test-loop").unwrap();
     let fast_bench = *matches.get_one::<bool>("test-fast-bench").unwrap();
+    let use_xwls = *matches.get_one::<bool>("xwls").unwrap();
     let test_wire_version: Option<u32> = matches.get_one::<u32>("test-wire-version").copied();
     let test_store_video: Option<PathBuf> = matches.get_one::<PathBuf>("test-store-video").cloned();
     let test_skip_vulkan: bool = *matches.get_one::<bool>("test-skip-vulkan").unwrap();
@@ -1836,6 +2327,10 @@ fn main() -> Result<(), String> {
     if !oneshot && std::env::var_os("WAYLAND_SOCKET").is_some() {
         debug!("Automatically enabling oneshot mode because WAYLAND_SOCKET is present");
         oneshot = true;
+    }
+
+    if use_xwls && oneshot {
+        return Err("Waypipe cannot run xwayland-satellite (option --xwls) in oneshot mode".into());
     }
 
     if cfg!(not(feature = "video")) && video.format.is_some() {
@@ -2045,6 +2540,9 @@ fn main() -> Result<(), String> {
                 ssh_cmd.push(OsStr::new("--display"));
                 ssh_cmd.push(&wayland_display);
             }
+            if use_xwls {
+                ssh_cmd.push(OsStr::new("--xwls"));
+            }
             if opts.test_skip_vulkan {
                 ssh_cmd.push(OsStr::new("--test-skip-vulkan"));
             }
@@ -2145,6 +2643,7 @@ fn main() -> Result<(), String> {
                     display_val.as_ref(),
                     display_path.as_ref(),
                     &cwd,
+                    use_xwls,
                 )
             }
         }

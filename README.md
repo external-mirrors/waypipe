@@ -93,9 +93,13 @@ Note: in practice, bindgen requires certain C library headers from clang, but so
 distributions have not made them a dependency of bindgen. If the build fails
 because `limits.h` or `stddef.h` is missing, try installing `clang`.
 
+The program [xwayland-satellite][i3] may be used at runtime iff the `--xwls`
+option is provided.
+
 [i0]: https://mesonbuild.com/
 [i1]: https://doc.rust-lang.org/cargo/
 [i2]: https://git.sr.ht/~sircmpwn/scdoc
+[i3]: https://github.com/Supreeeme/xwayland-satellite
 
 ### `waypipe-c`
 
