@@ -13,7 +13,8 @@ waypipe - A transparent proxy for Wayland applications
 *waypipe* *bench*++
 *waypipe* [*--version*] [*-h*, *--help*]
 
-\[options...\] = [*-c*, *--compress* C] [*-d*, *--debug*] [*-n*, *--no-gpu*] [*-o*, *--oneshot*] [*-s*, *--socket* S] [*--display* D] [*--drm-node* R] [*--remote-node* R] [*--remote-bin* R] [*--remote-socket* S] [*--login-shell*] [*--threads* T] [*--title-prefix* P] [*--unlink-socket*] [*--video* V] [*--vsock*] [*--secctx S*]
+\[options...\] = [*-c*, *--compress* C] [*-d*, *--debug*] [*-n*, *--no-gpu*] [*-o*, *--oneshot*] [*-s*, *--socket* S] [*--display* D] [*--drm-node* R] [*--remote-node* R] [*--ssh-bin R*] [*--remote-bin* R] [*--remote-socket* S] [*--login-shell*] [*--threads* T] [*--title-prefix* P] [*--unlink-socket*] [*--video* V] [*--vsock*] [*--secctx S*] [*--xwls*]
+
 
 
 # DESCRIPTION
@@ -168,6 +169,13 @@ compressible as images containing pictures.
 *--secctx S*
 	Enable the Wayland security context protocol (client or ssh modes). Specify
 	an application ID *S* that will be attached to the security context.
+
+*--xwls*
+	Use *xwayland-satellite* to run X clients under Wayland; for server or ssh
+	modes. This binds X display sockets for the next available display number
+	and sets the DISPLAY environment variable for the program run under
+	*waypipe server*. This option will only work if *xwayland-satellite* is
+	installed and in PATH.
 
 *--control C*++
 *--hwvideo*++

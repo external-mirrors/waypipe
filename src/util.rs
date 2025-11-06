@@ -222,6 +222,24 @@ where
     e
 }
 
+/** Helper function to write into a finite length buffer. It does not propagate
+ * errors and is most convenient if the write is certain to succeed. Example use:
+ *
+ * ```
+ * let mut buf = [0u8; 256];
+ * let slice = write_with_buffer(&mut buf, &|x: &mut &mut [u8]| {
+ *     write!(x, "{}", number).expect("buffer should be long enough")
+ * });
+ * ```
+ */
+pub fn write_with_buffer<F: Fn(&mut &mut [u8])>(b: &mut [u8], f: F) -> &[u8] {
+    let len = b.len();
+    let mut tmp = &mut b[..];
+    f(&mut tmp);
+    let slice_len = len - tmp.len();
+    &b[..slice_len]
+}
+
 /** A type to escape Wayland interface names, which should only consist of [a-zA-Z0-9_] */
 pub struct EscapeWlName<'a>(pub &'a [u8]);
 impl Display for EscapeWlName<'_> {
