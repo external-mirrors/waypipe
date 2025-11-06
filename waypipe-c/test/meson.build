@@ -11,14 +11,22 @@ test_diff = executable(
     include_directories: waypipe_includes,
     link_with: [lib_waypipe_src, common_src],
 )
-test('waypipe-c; Whether diff operations successfully roundtrip', test_diff, timeout: 60)
+test(
+    'waypipe-c; Whether diff operations successfully roundtrip',
+    test_diff,
+    timeout: 60,
+)
 test_damage = executable(
     'damage_merge',
     ['damage_merge.c'],
     include_directories: waypipe_includes,
     link_with: [lib_waypipe_src, common_src],
 )
-test('waypipe-c; If damage rectangles merge efficiently', test_damage, timeout: 5)
+test(
+    'waypipe-c; If damage rectangles merge efficiently',
+    test_damage,
+    timeout: 5,
+)
 test_mirror = executable(
     'fd_mirror',
     ['fd_mirror.c'],
