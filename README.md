@@ -34,10 +34,7 @@ ssh -R /tmp/socket-remote:/tmp/socket-local -t user@theserver \
 kill %1
 ```
 
-It's possible to set up the local and remote processes so that, when the
-connection between the sockets used by each end breaks, one can create a new
-forwarded socket on the remote side and reconnect the two processes. For a more
-detailed example, see the man page.
+For more detailed examples, see `waypipe`'s man page.
 
 ## Installing
 
