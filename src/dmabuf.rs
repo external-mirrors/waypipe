@@ -1021,7 +1021,7 @@ pub fn setup_vulkan_instance(
                         String::from("none")
                     };
                     let render = if drm_prop.has_render != 0 {
-                        format!("{}.{}", drm_prop.primary_major, drm_prop.primary_minor)
+                        format!("{}.{}", drm_prop.render_major, drm_prop.render_minor)
                     } else {
                         String::from("none")
                     };
@@ -1185,6 +1185,7 @@ pub fn setup_vulkan_instance(
 
             /* Some device_id is needed for the Wayland application to use */
             let Some(device_id) = render_id.or(primary_id) else {
+                debug!("Skipping device, has no DRM render or primary ID");
                 continue;
             };
 
@@ -1291,15 +1292,20 @@ pub fn setup_vulkan_device_base(
 ) -> Result<Option<VulkanDevice>, String> {
     let Some(dev_info) = instance.pick_device(main_device) else {
         if let Some(d) = main_device {
-            error!("Failed to find a Vulkan physical device with device id {}, or it does not meet all requirements.", d);
+            error!(
+                "Failed to find a Vulkan physical device with device id {} ({}.{}), or it does not meet all requirements.",
+                d, d >> 8, d & 0xff
+            );
         } else {
             error!("Failed to find any Vulkan physical device meeting all requirements.");
         }
         return Ok(None);
     };
     debug!(
-        "Chose physical device with device id: {}",
-        dev_info.device_id
+        "Chose physical device with device id: {} ({}.{})",
+        dev_info.device_id,
+        dev_info.device_id >> 8,
+        dev_info.device_id & 0xff
     );
 
     let physdev = dev_info.physdev;
