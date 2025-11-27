@@ -800,7 +800,10 @@ fn device_rank(info: &DeviceInfo) -> u8 {
 #[derive(Copy, Clone)]
 pub struct DeviceInfo {
     physdev: vk::PhysicalDevice,
-    device_id: u64,
+    /* Render node device ID. Waypipe always connects to the render node determined by this ID. */
+    render_device_id: u64,
+    /* Primary device ID, used for matching if the compositor indicates the primary node. */
+    primary_device_id: Option<u64>,
     typ: vk::PhysicalDeviceType,
     /* If hardware video encoding/decoding is supported; set to false if !with_video */
     pub hw_enc_h264: bool,
@@ -1184,14 +1187,15 @@ pub fn setup_vulkan_instance(
             };
 
             /* Some device_id is needed for the Wayland application to use */
-            let Some(device_id) = render_id.or(primary_id) else {
-                debug!("Skipping device, has no DRM render or primary ID");
+            let Some(device_id) = render_id else {
+                debug!("Skipping device, has no DRM render node");
                 continue;
             };
 
             physdevs.push(DeviceInfo {
                 physdev: p,
-                device_id,
+                render_device_id: device_id,
+                primary_device_id: primary_id,
                 typ: dev_type,
                 hw_enc_h264,
                 hw_dec_h264,
@@ -1227,7 +1231,7 @@ impl VulkanInstance {
     fn pick_device(&self, main_device: Option<u64>) -> Option<&DeviceInfo> {
         if let Some(d) = main_device {
             for x in &self.physdevs {
-                if x.device_id == d {
+                if x.render_device_id == d || x.primary_device_id == Some(d) {
                     return Some(x);
                 }
             }
@@ -1303,9 +1307,9 @@ pub fn setup_vulkan_device_base(
     };
     debug!(
         "Chose physical device with device id: {} ({}.{})",
-        dev_info.device_id,
-        dev_info.device_id >> 8,
-        dev_info.device_id & 0xff
+        dev_info.render_device_id,
+        dev_info.render_device_id >> 8,
+        dev_info.render_device_id & 0xff
     );
 
     let physdev = dev_info.physdev;
@@ -1600,7 +1604,7 @@ pub fn setup_vulkan_device_base(
         }
 
         let init_sem_value = 0;
-        let drm_fd = drm_open_render(dev_info.device_id, false)?;
+        let drm_fd = drm_open_render(dev_info.render_device_id, false)?;
         let (semaphore, semaphore_external) = if dev_info.supports_timeline_import_export {
             let (semaphore, semaphore_drm_handle, semaphore_fd, semaphore_event_fd) =
                 vulkan_create_timeline_parts(&dev, &ext_semaphore_fd, &drm_fd, init_sem_value)?;
@@ -1639,7 +1643,7 @@ pub fn setup_vulkan_device_base(
             memory_properties,
             timeline_semaphore,
             ext_semaphore_fd,
-            device_id: dev_info.device_id,
+            device_id: dev_info.render_device_id,
             formats,
             queue_family,
         }))
