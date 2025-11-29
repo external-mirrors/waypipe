@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 fn depfile_to_cargo(path: &std::path::Path) {
     use std::io::Read;
 
@@ -108,17 +110,18 @@ fn main() {
     let out_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("bindings.rs");
     let dep_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("depfile");
 
-    let mut args: Vec<&OsStr> = Vec::new();
-    args.push(OsStr::new("--dynamic-loading"));
-    args.push(OsStr::new("ffmpeg"));
-    args.push(OsStr::new("--dynamic-link-require-all"));
-    args.push(OsStr::new("--rust-target"));
-    args.push(OsStr::new("1.59"));
-    args.push(OsStr::new("--no-doc-comments"));
-    args.push(OsStr::new("--depfile"));
-    args.push(dep_path.as_os_str());
-    args.push(OsStr::new("--output"));
-    args.push(out_path.as_os_str());
+    let mut args: Vec<&OsStr> = vec![
+        OsStr::new("--dynamic-loading"),
+        OsStr::new("ffmpeg"),
+        OsStr::new("--dynamic-link-require-all"),
+        OsStr::new("--rust-target"),
+        OsStr::new("1.59"),
+        OsStr::new("--no-doc-comments"),
+        OsStr::new("--depfile"),
+        dep_path.as_os_str(),
+        OsStr::new("--output"),
+        out_path.as_os_str(),
+    ];
 
     for f in functions.iter() {
         args.push(OsStr::new("--allowlist-function"));

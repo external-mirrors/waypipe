@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use std::env;
 use std::ffi::OsStr;
 use std::fmt::Write;
@@ -41,19 +43,14 @@ fn main() {
 
         let s: &str = shader.file_stem().unwrap().to_str().unwrap();
 
-        write!(
-            &mut contents,
-            "pub const {}: &[u32] = &[\n",
-            s.to_uppercase()
-        )
-        .unwrap();
+        writeln!(&mut contents, "pub const {}: &[u32] = &[", s.to_uppercase()).unwrap();
 
         assert!(spirv.len() % 4 == 0);
         for w in spirv.chunks_exact(4) {
             let block = u32::from_ne_bytes(w.try_into().unwrap());
-            write!(&mut contents, "    {:#010x},\n", block).unwrap();
+            writeln!(&mut contents, "    {:#010x},", block).unwrap();
         }
-        write!(&mut contents, "];\n").unwrap();
+        writeln!(&mut contents, "];").unwrap();
     }
 
     let generated_path = Path::new(&env::var("OUT_DIR").unwrap()).join("shaders.rs");
