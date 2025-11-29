@@ -2460,7 +2460,7 @@ fn main() -> Result<(), String> {
                     server_sock_path.push(OsStr::new(".sock"));
                 }
                 SocketSpec::VSock(v) => {
-                    server_sock_path = OsString::from(v.port.to_string());
+                    server_sock_path = OsString::from(v.to_string());
                 }
             };
             if *loop_test && !vsock {
