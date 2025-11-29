@@ -194,11 +194,13 @@ fn open_folder(p: &Path) -> Result<OwnedFd, String> {
     })
 }
 
-/** Connection information for a VSOCK socket */
+/** Connection information for a VSOCK socket. */
 #[derive(Debug, Copy, Clone)]
 struct VSockConfig {
-    // todo: use option for (to_host, cid)?
+    /** If true, route connection via host (flag VMADDR_FLAG_TO_HOST) to a sibling VM. */
     to_host: bool,
+    /** CID to use when connecting to the socket. By default will be VMADDR_CID_HOST.
+     * (Waypipe always binds sockets using VMADDR_CID_ANY.) */
     cid: u32,
     port: u32,
 }
@@ -236,14 +238,13 @@ impl FromStr for VSockConfig {
             (false, VMADDR_CID_HOST)
         };
         let port = s.parse::<u32>().map_err(|_| FAILURE)?;
-
         Ok(VSockConfig { to_host, cid, port })
     }
 }
 
 impl fmt::Display for VSockConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.cid != VMADDR_CID_HOST {
+        if self.cid == VMADDR_CID_HOST && !self.to_host {
             write!(f, "{}", self.port)
         } else {
             let prefix = if self.to_host { "s" } else { "" };
