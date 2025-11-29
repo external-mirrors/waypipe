@@ -39,7 +39,7 @@ fn depfile_to_cargo(path: &std::path::Path) {
 }
 
 fn main() {
-    use std::ffi::OsStr;
+    use std::ffi::{OsStr, OsString};
 
     let lib = pkg_config::probe_library("libzstd").unwrap();
 
@@ -66,8 +66,8 @@ fn main() {
 
     let bindgen = "bindgen";
 
-    let out_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("bindings.rs");
-    let dep_path = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("depfile");
+    let out_path = std::path::Path::new(&std::env::var_os("OUT_DIR").unwrap()).join("bindings.rs");
+    let dep_path = std::path::Path::new(&std::env::var_os("OUT_DIR").unwrap()).join("depfile");
 
     let mut args: Vec<&OsStr> = vec![
         OsStr::new("--rust-target"),
@@ -93,9 +93,13 @@ fn main() {
     }
     args.push(OsStr::new("wrapper.h"));
     args.push(OsStr::new("--"));
-    let inc_vec: Vec<String> = includes
+    let inc_vec: Vec<OsString> = includes
         .iter()
-        .map(|x| format!("-I{}", x.to_string_lossy()))
+        .map(|x| {
+            let mut s = OsString::from("-I");
+            s.push(x);
+            s
+        })
         .collect();
     for x in inc_vec.iter() {
         args.push(OsStr::new(x));
