@@ -859,7 +859,7 @@ fn setup_vulkan(device_id: u64) -> Result<Arc<VulkanDevice>, String> {
 fn make_file_with_contents(data: &[u8]) -> Result<OwnedFd, String> {
     let local_fd = memfd::memfd_create(
         c"/waypipe",
-        memfd::MemFdCreateFlag::MFD_CLOEXEC | memfd::MemFdCreateFlag::MFD_ALLOW_SEALING,
+        memfd::MFdFlags::MFD_CLOEXEC | memfd::MFdFlags::MFD_ALLOW_SEALING,
     )
     .map_err(|x| tag!("Failed to create memfd: {:?}", x))?;
     unistd::ftruncate(&local_fd, data.len().try_into().unwrap())
@@ -1384,7 +1384,7 @@ fn check_pipe_transfer(
                     tmp.len()
                 };
 
-                match unistd::read(ord.as_ref().unwrap().as_raw_fd(), &mut tmp[..read_len]) {
+                match unistd::read(ord.as_ref().unwrap(), &mut tmp[..read_len]) {
                     Err(Errno::EINTR) | Err(Errno::EAGAIN) => { /* do nothing */ }
                     Err(Errno::ECONNRESET) | Err(Errno::ENOTCONN) => {
                         ord = None;
@@ -5349,17 +5349,12 @@ fn main() -> ExitCode {
         };
 
         let (read_out, new_stdouterr) = unistd::pipe2(fcntl::OFlag::empty()).unwrap();
-        let new_stdin = unsafe {
-            /* SAFETY: newly opened file descriptor */
-            OwnedFd::from_raw_fd(
-                fcntl::open(
-                    "/dev/null",
-                    fcntl::OFlag::O_RDONLY | fcntl::OFlag::O_NOCTTY,
-                    nix::sys::stat::Mode::empty(),
-                )
-                .unwrap(),
-            )
-        };
+        let new_stdin = fcntl::open(
+            "/dev/null",
+            fcntl::OFlag::O_RDONLY | fcntl::OFlag::O_NOCTTY,
+            nix::sys::stat::Mode::empty(),
+        )
+        .unwrap();
 
         let res = match unsafe {
             /* SAFETY: this program is not multi-threaded at this point.
@@ -5368,15 +5363,13 @@ fn main() -> ExitCode {
         } {
             unistd::ForkResult::Child => {
                 /* Blocking wait for child to complete */
-                #[allow(unused_unsafe)] /* dup2 is file-descriptor-unsafe */
-                unsafe {
-                    /* Atomically replace STDOUT, STDERR, STDIN; this may break library code which
-                     * incorrectly assumes standard io file descriptors never change properties
-                     * (e.g., by caching isatty()). */
-                    unistd::dup2(new_stdouterr.as_raw_fd(), libc::STDOUT_FILENO).unwrap();
-                    unistd::dup2(new_stdouterr.as_raw_fd(), libc::STDERR_FILENO).unwrap();
-                    unistd::dup2(new_stdin.as_raw_fd(), libc::STDIN_FILENO).unwrap();
-                }
+                /* Atomically replace STDOUT, STDERR, STDIN; this may break library code which
+                 * incorrectly assumes standard io file descriptors never change properties
+                 * (e.g., by caching isatty()). */
+                unistd::dup2_stdout(&new_stdouterr).unwrap();
+                unistd::dup2_stderr(&new_stdouterr).unwrap();
+                unistd::dup2_stdin(&new_stdin).unwrap();
+
                 drop(read_out);
 
                 if !core {
@@ -5454,7 +5447,7 @@ fn main() -> ExitCode {
                         continue;
                     }
 
-                    let eof_or_err = match unistd::read(read_out.as_raw_fd(), &mut tmp) {
+                    let eof_or_err = match unistd::read(&read_out, &mut tmp) {
                         Ok(n) => {
                             if n == 0 {
                                 true
@@ -5476,7 +5469,7 @@ fn main() -> ExitCode {
                 /* Read all remaining data in the pipe, dropping anything
                  * that was read after receipt of the information of test process death */
                 loop {
-                    match unistd::read(read_out.as_raw_fd(), &mut tmp) {
+                    match unistd::read(&read_out, &mut tmp) {
                         Ok(n) => {
                             if n == 0 {
                                 break;

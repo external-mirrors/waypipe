@@ -1380,7 +1380,7 @@ fn process_sfd_msg(
 
             let local_fd = memfd::memfd_create(
                 c"/waypipe",
-                memfd::MemFdCreateFlag::MFD_CLOEXEC | memfd::MemFdCreateFlag::MFD_ALLOW_SEALING,
+                memfd::MFdFlags::MFD_CLOEXEC | memfd::MFdFlags::MFD_ALLOW_SEALING,
             )
             .map_err(|x| tag!("Failed to create memfd: {:?}", x))?;
 
@@ -4955,7 +4955,7 @@ fn loop_inner<'a>(
         if pfd_returns[0].contains(PollFlags::POLLIN) {
             debug!("Self-pipe wakeup");
             let mut tmp: [u8; 64] = [0; 64];
-            let res = unistd::read(wake_r.as_raw_fd(), &mut tmp[..]);
+            let res = unistd::read(&wake_r, &mut tmp[..]);
             match res {
                 Ok(_) => {
                     /* worker thread may have a message */
@@ -5069,7 +5069,7 @@ fn loop_inner<'a>(
 
             if evts.contains(PollFlags::POLLIN) {
                 let mut data = [0u8; 8];
-                let r = nix::unistd::read(borrowed_fd.unwrap().as_raw_fd(), &mut data);
+                let r = nix::unistd::read(borrowed_fd.unwrap(), &mut data);
                 match r {
                     Ok(s) => {
                         /* Reads from an eventfd should always return 8 bytes; and short
@@ -5130,7 +5130,7 @@ fn loop_inner<'a>(
                 ShadowFdPipeBuffer::ReadFromWayland((ref mut buf, ref mut used_len)) => {
                     if evts.contains(PollFlags::POLLIN) {
                         /* read whatever is in buffer, append to region; fixed buffer size is OK? */
-                        let res = unistd::read(data.fd.as_raw_fd(), &mut buf[*used_len..]);
+                        let res = unistd::read(&data.fd, &mut buf[*used_len..]);
                         match res {
                             Ok(len) => {
                                 if len == 0 {
@@ -5217,7 +5217,7 @@ fn loop_inner<'a>(
             if evts.contains(PollFlags::POLLIN) {
                 let mut ret = [0u8; 8];
 
-                let r = nix::unistd::read(data.timeline.get_event_fd().as_raw_fd(), &mut ret);
+                let r = nix::unistd::read(&data.timeline.get_event_fd(), &mut ret);
                 match r {
                     Ok(s) => {
                         assert!(s == 8);

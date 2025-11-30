@@ -182,16 +182,12 @@ fn dir_flags() -> fcntl::OFlag {
 
 /** Get a file descriptor corresponding to a path, suitable for `fchdir()` */
 fn open_folder(p: &Path) -> Result<OwnedFd, String> {
-    let raw_fd = fcntl::open(
+    fcntl::open(
         p,
         dir_flags() | fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NOCTTY,
         nix::sys::stat::Mode::empty(),
     )
-    .map_err(|x| tag!("Failed to open folder '{:?}': {}", p, x))?;
-    Ok(unsafe {
-        // SAFETY: freshly created, checked valid, exclusively owned
-        OwnedFd::from_raw_fd(raw_fd)
-    })
+    .map_err(|x| tag!("Failed to open folder '{:?}': {}", p, x))
 }
 
 /** Connection information for a VSOCK socket. */
@@ -465,7 +461,7 @@ fn socket_connect(
                     nix::unistd::unlink(file)
                         .map_err(|x| tag!("Failed to unlink socket: {}", x))?;
                 }
-                nix::unistd::fchdir(cwd.as_raw_fd())
+                nix::unistd::fchdir(&cwd)
                     .map_err(|x| tag!("Failed to return to original path: {}", x))?;
                 x
             } else {
@@ -540,11 +536,9 @@ impl Drop for FileCleanup {
     fn drop(&mut self) {
         let file_name = self.full_path.file_name().unwrap();
         debug!("Trying to unlink socket created at: {:?}", self.full_path);
-        if let Err(x) = unistd::unlinkat(
-            Some(self.folder.as_raw_fd()),
-            file_name,
-            unistd::UnlinkatFlags::NoRemoveDir,
-        ) {
+        if let Err(x) =
+            unistd::unlinkat(&self.folder, file_name, unistd::UnlinkatFlags::NoRemoveDir)
+        {
             error!(
                 "Failed to unlink display socket at: {:?}: {:?}",
                 self.full_path, x
@@ -580,12 +574,11 @@ fn unix_socket_create_and_bind(
     let (f, r) = if let Some(folder) = path.parent() {
         let f = open_folder(folder)?;
 
-        unistd::fchdir(f.as_raw_fd()).map_err(|x| tag!("Failed to visit folder: {}", x))?;
+        unistd::fchdir(&f).map_err(|x| tag!("Failed to visit folder: {}", x))?;
         // eventually: is a 'bindat' equivalent available?
         // can use /proc/self/fd to workaround socket path length issues
         let x = socket::bind(socket.as_raw_fd(), &addr);
-        unistd::fchdir(cwd.as_raw_fd())
-            .map_err(|x| tag!("Failed to return to original path: {}", x))?;
+        unistd::fchdir(&cwd).map_err(|x| tag!("Failed to return to original path: {}", x))?;
         (f, x)
     } else {
         let f: OwnedFd =
@@ -910,7 +903,7 @@ impl Drop for XCleanup {
             self.display
         );
         if let Err(e) = unistd::unlinkat(
-            Some(self.x11_unix_fd.as_raw_fd()),
+            &self.x11_unix_fd,
             socket_name,
             unistd::UnlinkatFlags::NoRemoveDir,
         ) {
@@ -927,7 +920,7 @@ impl Drop for XCleanup {
             self.display
         );
         if let Err(e) = unistd::unlinkat(
-            Some(self.tmp_fd.as_raw_fd()),
+            &self.tmp_fd,
             lock_file_name,
             unistd::UnlinkatFlags::NoRemoveDir,
         ) {
@@ -947,7 +940,7 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
     let tmp_fd = open_folder(Path::new("/tmp/"))?;
 
     match stat::mkdirat(
-        Some(tmp_fd.as_raw_fd()),
+        &tmp_fd,
         Path::new(".X11-unix"),
         stat::Mode::from_bits_retain(0b111111111),
     ) {
@@ -960,19 +953,13 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
         }
     }
 
-    let x11_unix_fd_val = fcntl::openat(
-        Some(tmp_fd.as_raw_fd()),
+    let x11_unix_fd = fcntl::openat(
+        &tmp_fd,
         Path::new(".X11-unix"),
         dir_flags() | fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NOCTTY,
         nix::sys::stat::Mode::empty(),
     )
     .map_err(|x| tag!("Failed to open subfolder '.X11-unix' of '/tmp': {}", x))?;
-
-    let x11_unix_fd = unsafe {
-        // SAFETY: freshly created file descriptor, immediately captured here;
-        // nix::fcntl::openat checked openat returned positive
-        OwnedFd::from_raw_fd(x11_unix_fd_val)
-    };
 
     /* Creating the non-abstract unix socket now (and binding it last) simplifies
      * the error handling paths slightly. */
@@ -1053,14 +1040,13 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
 
         let reg_addr = socket::UnixAddr::new(regular_sockname).expect("filename should be short");
 
-        if let Err(e) = unistd::fchdir(x11_unix_fd.as_raw_fd()) {
+        if let Err(e) = unistd::fchdir(&x11_unix_fd) {
             return Err(tag!("Failed to visit folder '/tmp/.X11-unix': {:?}", e));
         }
 
         let r = socket::bind(unix_socket.as_raw_fd(), &reg_addr);
 
-        unistd::fchdir(cwd.as_raw_fd())
-            .map_err(|x| tag!("Failed to return to original path: {}", x))?;
+        unistd::fchdir(&cwd).map_err(|x| tag!("Failed to return to original path: {}", x))?;
 
         match r {
             Err(Errno::EADDRINUSE) => {
@@ -1086,8 +1072,8 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
         let lock_file_name = format!(".X{}-lock", display);
 
         let pid = unistd::getpid();
-        let lock_fd_val = match fcntl::openat(
-            Some(tmp_fd.as_raw_fd()),
+        let lock_fd = match fcntl::openat(
+            &tmp_fd,
             Path::new(&lock_file_name),
             fcntl::OFlag::O_CLOEXEC
                 | fcntl::OFlag::O_NOCTTY
@@ -1114,12 +1100,6 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
             }
         };
 
-        let lock_fd = unsafe {
-            // SAFETY: freshly created file descriptor, immediately captured here;
-            // nix::fcntl::openat checked openat returned positive
-            OwnedFd::from_raw_fd(lock_fd_val)
-        };
-
         let mut contents_buf = [0u8; 11];
         let contents = write_with_buffer(&mut contents_buf, |x| {
             writeln!(x, "{: >10}", pid).expect("pid should be representable in 10 digits")
@@ -1130,7 +1110,7 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
         // is not perfect.
         if let Err(e) = write_exact(&lock_fd, contents) {
             unistd::unlinkat(
-                Some(tmp_fd.as_raw_fd()),
+                &tmp_fd,
                 Path::new(&lock_file_name),
                 unistd::UnlinkatFlags::NoRemoveDir,
             )
@@ -1157,7 +1137,7 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
             Ok(Some(x)) => x,
             Err(_) | Ok(None) => {
                 unistd::unlinkat(
-                    Some(tmp_fd.as_raw_fd()),
+                    &tmp_fd,
                     Path::new(&lock_file_name),
                     unistd::UnlinkatFlags::NoRemoveDir,
                 )
@@ -1189,8 +1169,7 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
         ));
     }
 
-    unistd::fchdir(cwd.as_raw_fd())
-        .map_err(|x| tag!("Failed to return to original path: {}", x))?;
+    unistd::fchdir(&cwd).map_err(|x| tag!("Failed to return to original path: {}", x))?;
 
     Err(tag!("Failed to bind a valid X display number in 0..=255"))
 }
@@ -1896,11 +1875,11 @@ fn setup_secctx(
         connect_to_wayland_display(cwd)?
     };
 
-    let flags = fcntl::fcntl(wayland_conn.as_raw_fd(), fcntl::FcntlArg::F_GETFL)
+    let flags = fcntl::fcntl(&wayland_conn, fcntl::FcntlArg::F_GETFL)
         .map_err(|x| tag!("Failed to get wayland socket flags: {}", x))?;
     let mut flags = fcntl::OFlag::from_bits(flags).unwrap();
     flags.remove(fcntl::OFlag::O_NONBLOCK);
-    fcntl::fcntl(wayland_conn.as_raw_fd(), fcntl::FcntlArg::F_SETFL(flags))
+    fcntl::fcntl(&wayland_conn, fcntl::FcntlArg::F_SETFL(flags))
         .map_err(|x| tag!("Failed to set wayland socket flags: {}", x))?;
 
     let (close_r, close_w) = unistd::pipe2(fcntl::OFlag::O_CLOEXEC | fcntl::OFlag::O_NONBLOCK)
@@ -2288,7 +2267,7 @@ fn main() -> Result<(), String> {
     let logger = Logger {
         max_level,
         pid: std::process::id(),
-        color_output: nix::unistd::isatty(2).unwrap(),
+        color_output: nix::unistd::isatty(std::io::stderr()).unwrap(),
         anti_staircase,
         color: log_color,
         label: log_label,
@@ -2466,7 +2445,7 @@ fn main() -> Result<(), String> {
             if *loop_test && !vsock {
                 let client_path = PathBuf::from(&client_sock_path);
                 let server_path = PathBuf::from(&server_sock_path);
-                unistd::symlinkat(&client_path, None, &server_path).map_err(|x| {
+                unistd::symlinkat(&client_path, fcntl::AT_FDCWD, &server_path).map_err(|x| {
                     tag!(
                         "Failed to create symlink from {:?} to {:?}: {}",
                         client_path,

@@ -774,8 +774,7 @@ fn test_buffer_replication() {
 
     let local_fd = nix::sys::memfd::memfd_create(
         c"/test",
-        nix::sys::memfd::MemFdCreateFlag::MFD_CLOEXEC
-            | nix::sys::memfd::MemFdCreateFlag::MFD_ALLOW_SEALING,
+        nix::sys::memfd::MFdFlags::MFD_CLOEXEC | nix::sys::memfd::MFdFlags::MFD_ALLOW_SEALING,
     )
     .unwrap();
 

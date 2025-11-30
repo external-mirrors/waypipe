@@ -2958,8 +2958,7 @@ pub fn process_way_msg(
                     // Table has changed; send new fd
                     let local_fd = memfd::memfd_create(
                         c"/waypipe",
-                        memfd::MemFdCreateFlag::MFD_CLOEXEC
-                            | memfd::MemFdCreateFlag::MFD_ALLOW_SEALING,
+                        memfd::MFdFlags::MFD_CLOEXEC | memfd::MFdFlags::MFD_ALLOW_SEALING,
                     )
                     .map_err(|x| tag!("Failed to create memfd: {:?}", x))?;
                     let sz: u32 = new_table.len().try_into().unwrap();

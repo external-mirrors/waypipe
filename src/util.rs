@@ -7,7 +7,7 @@ use nix::{fcntl, unistd};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::fs::ReadDir;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::str::FromStr;
 
@@ -656,12 +656,8 @@ pub fn drm_open_render(dev_id: u64, rdrw: bool) -> Result<OwnedFd, String> {
                 if rdrw {
                     flags |= fcntl::OFlag::O_RDWR;
                 }
-                let raw_fd = fcntl::open(&path, flags, nix::sys::stat::Mode::empty())
-                    .map_err(|x| tag!("Failed to open drm node fd at '{:?}': {}", path, x))?;
-                return Ok(unsafe {
-                    // SAFETY: fd was just created, was checked valid, and is recorded nowhere else
-                    OwnedFd::from_raw_fd(raw_fd)
-                });
+                return fcntl::open(&path, flags, nix::sys::stat::Mode::empty())
+                    .map_err(|x| tag!("Failed to open drm node fd at '{:?}': {}", path, x));
             }
         }
     }
@@ -701,7 +697,7 @@ pub fn dmabuf_slice_get_first_stride(data: [u8; 64]) -> u32 {
 /** Set the close-on-exec flag for a file descriptor */
 pub fn set_cloexec(fd: &OwnedFd, cloexec: bool) -> Result<(), String> {
     fcntl::fcntl(
-        fd.as_raw_fd(),
+        fd,
         fcntl::FcntlArg::F_SETFD(if cloexec {
             fcntl::FdFlag::FD_CLOEXEC
         } else {
@@ -714,21 +710,15 @@ pub fn set_cloexec(fd: &OwnedFd, cloexec: bool) -> Result<(), String> {
 
 /** Set the O_NONBLOCK flag for the file description, clearing all other flags. */
 pub fn set_nonblock(fd: &OwnedFd) -> Result<(), String> {
-    fcntl::fcntl(
-        fd.as_raw_fd(),
-        fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
-    )
-    .map_err(|x| tag!("Failed to set nonblocking: {:?}", x))?;
+    fcntl::fcntl(fd, fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK))
+        .map_err(|x| tag!("Failed to set nonblocking: {:?}", x))?;
     Ok(())
 }
 
 /** Unset the O_NONBLOCK flag for the file description, clearing all other flags. */
 pub fn set_blocking(fd: &OwnedFd) -> Result<(), String> {
-    fcntl::fcntl(
-        fd.as_raw_fd(),
-        fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::empty()),
-    )
-    .map_err(|x| tag!("Failed to set blocking: {:?}", x))?;
+    fcntl::fcntl(fd, fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::empty()))
+        .map_err(|x| tag!("Failed to set blocking: {:?}", x))?;
     Ok(())
 }
 
@@ -737,7 +727,7 @@ pub fn set_blocking(fd: &OwnedFd) -> Result<(), String> {
 pub fn read_exact(fd: &OwnedFd, data: &mut [u8]) -> Result<(), Option<nix::Error>> {
     let mut offset = 0;
     while offset < data.len() {
-        match unistd::read(fd.as_raw_fd(), &mut data[offset..]) {
+        match unistd::read(&fd, &mut data[offset..]) {
             Ok(s) => {
                 if s == 0 {
                     return Err(None);
