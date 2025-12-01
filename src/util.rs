@@ -727,7 +727,7 @@ pub fn set_blocking(fd: &OwnedFd) -> Result<(), String> {
 pub fn read_exact(fd: &OwnedFd, data: &mut [u8]) -> Result<(), Option<nix::Error>> {
     let mut offset = 0;
     while offset < data.len() {
-        match unistd::read(&fd, &mut data[offset..]) {
+        match unistd::read(fd, &mut data[offset..]) {
             Ok(s) => {
                 if s == 0 {
                     return Err(None);

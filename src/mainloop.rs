@@ -5217,7 +5217,7 @@ fn loop_inner<'a>(
             if evts.contains(PollFlags::POLLIN) {
                 let mut ret = [0u8; 8];
 
-                let r = nix::unistd::read(&data.timeline.get_event_fd(), &mut ret);
+                let r = nix::unistd::read(data.timeline.get_event_fd(), &mut ret);
                 match r {
                     Ok(s) => {
                         assert!(s == 8);

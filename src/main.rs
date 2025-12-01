@@ -461,7 +461,7 @@ fn socket_connect(
                     nix::unistd::unlink(file)
                         .map_err(|x| tag!("Failed to unlink socket: {}", x))?;
                 }
-                nix::unistd::fchdir(&cwd)
+                nix::unistd::fchdir(cwd)
                     .map_err(|x| tag!("Failed to return to original path: {}", x))?;
                 x
             } else {
@@ -578,7 +578,7 @@ fn unix_socket_create_and_bind(
         // eventually: is a 'bindat' equivalent available?
         // can use /proc/self/fd to workaround socket path length issues
         let x = socket::bind(socket.as_raw_fd(), &addr);
-        unistd::fchdir(&cwd).map_err(|x| tag!("Failed to return to original path: {}", x))?;
+        unistd::fchdir(cwd).map_err(|x| tag!("Failed to return to original path: {}", x))?;
         (f, x)
     } else {
         let f: OwnedFd =
@@ -1040,13 +1040,13 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
 
         let reg_addr = socket::UnixAddr::new(regular_sockname).expect("filename should be short");
 
-        if let Err(e) = unistd::fchdir(&x11_unix_fd) {
+        if let Err(e) = unistd::fchdir(x11_unix_fd) {
             return Err(tag!("Failed to visit folder '/tmp/.X11-unix': {:?}", e));
         }
 
         let r = socket::bind(unix_socket.as_raw_fd(), &reg_addr);
 
-        unistd::fchdir(&cwd).map_err(|x| tag!("Failed to return to original path: {}", x))?;
+        unistd::fchdir(cwd).map_err(|x| tag!("Failed to return to original path: {}", x))?;
 
         match r {
             Err(Errno::EADDRINUSE) => {
@@ -1169,7 +1169,7 @@ fn choose_x_display(cwd: &OwnedFd) -> Result<(XSocketInfo, XCleanup), String> {
         ));
     }
 
-    unistd::fchdir(&cwd).map_err(|x| tag!("Failed to return to original path: {}", x))?;
+    unistd::fchdir(cwd).map_err(|x| tag!("Failed to return to original path: {}", x))?;
 
     Err(tag!("Failed to bind a valid X display number in 0..=255"))
 }
