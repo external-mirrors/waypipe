@@ -3,7 +3,7 @@
 use crate::platform::*;
 use crate::wayland_gen::WlShmFormat;
 use core::num::NonZeroU32;
-use nix::{fcntl, unistd};
+use nix::{fcntl, libc, unistd};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::fs::ReadDir;
@@ -1207,4 +1207,20 @@ pub fn get_shm_format_layout(format: u32) -> Option<FormatLayout> {
             return None;
         }
     })
+}
+
+/** Build a libc::timespec from seconds and nanoseconds.
+ *
+ * libc's issue 3223 [1] means that libc::timespec cannot be constructed as a
+ * struct literal on some 32 bit platforms that use 64 bit time. This includes
+ * Debian's armhf after the t64 transition. This function can then be used as a
+ * workaround constructor.
+ *
+ * [1] https://github.com/rust-lang/libc/issues/3223
+ */
+pub fn timespec_from_sec_nsec(sec: libc::time_t, nsec: libc::c_long) -> libc::timespec {
+    let mut ret: libc::timespec = unsafe { std::mem::zeroed() };
+    ret.tv_sec = sec;
+    ret.tv_nsec = nsec;
+    ret
 }

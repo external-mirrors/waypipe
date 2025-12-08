@@ -1186,20 +1186,14 @@ fn timespec_midpoint(stamp_1: libc::timespec, stamp_3: libc::timespec) -> libc::
         mid_nsec -= 1_000_000_000;
     }
 
-    libc::timespec {
-        tv_sec: mid_sec,
-        tv_nsec: mid_nsec,
-    }
+    timespec_from_sec_nsec(mid_sec, mid_nsec)
 }
 
 /** Estimate the time difference between two clocks.
  *
  * Return value is: (sec_diff, nsec_diff) where nsec_diff >= 0 */
 fn clock_sub(clock_a: u32, clock_b: u32) -> Result<(i64, u32), String> {
-    let mut stamp_1 = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
+    let mut stamp_1 = timespec_from_sec_nsec(0, 0);
     let mut stamp_2 = stamp_1;
     let mut stamp_3 = stamp_1;
     let ca: libc::clockid_t = clock_a.try_into().unwrap();
