@@ -66,7 +66,7 @@ pub struct VulkanDevice {
 
     dev_info: DeviceInfo,
     /** Queue family indices. Order: [compute+transfer, graphics+transfer, encode, decode] */
-    qfis: [u32; 4],
+    qfis: [Option<u32>; 4],
 
     /** Timeline semaphore; when it reaches 'queue.last_semaphore_value', all preceding work using
      * the semaphore is done */
@@ -1313,7 +1313,9 @@ pub fn setup_vulkan_device_base(
     );
 
     let physdev = dev_info.physdev;
-    let using_hw_video = dev_info.hw_enc_h264 | dev_info.hw_dec_h264 | dev_info.hw_dec_av1;
+    let using_hw_video_enc = dev_info.hw_enc_h264;
+    let using_hw_video_dec = dev_info.hw_dec_h264 | dev_info.hw_dec_av1;
+    let using_hw_video = using_hw_video_enc | using_hw_video_dec;
 
     unsafe {
         let memory_properties = instance
@@ -1323,7 +1325,7 @@ pub fn setup_vulkan_device_base(
             .instance
             .get_physical_device_queue_family_properties(physdev);
 
-        let mut qfis = [u32::MAX, u32::MAX, u32::MAX, u32::MAX];
+        let mut qfis = [None, None, None, None];
         let mut nqis = [0, 0, 0, 0];
         for (u, family) in queue_families.iter().enumerate().rev() {
             let i: u32 = u.try_into().unwrap();
@@ -1331,65 +1333,68 @@ pub fn setup_vulkan_device_base(
                 .queue_flags
                 .contains(vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER)
             {
-                qfis[0] = i;
+                qfis[0] = Some(i);
                 nqis[0] = family.queue_count;
             }
             if family
                 .queue_flags
                 .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::TRANSFER)
             {
-                qfis[1] = i;
+                qfis[1] = Some(i);
                 nqis[1] = family.queue_count;
             }
             if family
                 .queue_flags
                 .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
             {
-                qfis[2] = i;
+                qfis[2] = Some(i);
                 nqis[2] = family.queue_count;
             }
             if family
                 .queue_flags
                 .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
             {
-                qfis[3] = i;
+                qfis[3] = Some(i);
                 nqis[3] = family.queue_count;
             }
         }
 
-        let queue_family = qfis[0];
-
-        let prio = &[1.0]; // make a single queue
-        let cg_queue = qfis[0] == qfis[1];
-        let nqf = if using_hw_video {
-            if qfis.contains(&u32::MAX) {
-                return Err(tag!("Not all queue types needed available: compute {} graphics {} encode {} decode {}", qfis[0], qfis[1], qfis[2], qfis[3]));
-            }
-
-            if cg_queue {
-                3
-            } else {
-                4
-            }
-        } else {
-            1
+        let Some(queue_family) = qfis[0] else {
+            return Err(tag!("No compute+transfer queue available"));
         };
-        let qstart = if cg_queue { 1 } else { 0 };
 
-        let chosen_queues = [
-            vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(qfis[0])
-                .queue_priorities(prio),
-            vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(qfis[1])
-                .queue_priorities(prio),
-            vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(qfis[2])
-                .queue_priorities(prio),
-            vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(qfis[3])
-                .queue_priorities(prio),
-        ];
+        let prio = &[1.0];
+
+        let chosen_queues: Vec<vk::DeviceQueueCreateInfo<'_>> = if using_hw_video {
+            if qfis[1].is_none() {
+                return Err(tag!("No graphics+transfer queue available"));
+            }
+
+            if using_hw_video_enc && qfis[2].is_none() {
+                return Err(tag!("No encode queue available"));
+            }
+
+            if using_hw_video_dec && qfis[3].is_none() {
+                return Err(tag!("No decode queue available"));
+            }
+
+            // Only create one queue out of each family that we need.
+            let mut qfis = qfis.to_vec();
+            qfis.retain(Option::is_some);
+            qfis.sort_unstable();
+            qfis.dedup();
+            qfis.into_iter()
+                .map(|qf| {
+                    vk::DeviceQueueCreateInfo::default()
+                        .queue_family_index(qf.unwrap())
+                        .queue_priorities(prio)
+                })
+                .collect()
+        } else {
+            vec![vk::DeviceQueueCreateInfo::default()
+                .queue_family_index(queue_family)
+                .queue_priorities(prio)]
+        };
 
         let enabled_exts = get_enabled_exts(dev_info);
 
@@ -1403,7 +1408,7 @@ pub fn setup_vulkan_device_base(
         let mut features2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut features2x);
         let mut logical_info = vk::DeviceCreateInfo::default()
             .flags(vk::DeviceCreateFlags::empty())
-            .queue_create_infos(&chosen_queues[qstart..qstart + nqf])
+            .queue_create_infos(&chosen_queues)
             .enabled_extension_names(&enabled_exts)
             .push_next(&mut features2);
         if using_hw_video {
