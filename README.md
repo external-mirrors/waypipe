@@ -226,7 +226,8 @@ require that driver-specific environment variables be set.
 
 Since little-endian computers are vastly more common than big-endian, Waypipe
 only receives and produces little-endian Wayland protocol messages. For
-big-endian machines, run applications under a tool like `wswapendian` to adjust
+big-endian machines, run applications under a tool like
+[`wswapendian`](https://gitlab.freedesktop.org/mstoeckl/wswapendian) to adjust
 the protocol endianness. (Having Waypipe do this itself would require that it
 embed or load many more Wayland protocol descriptions and restrict clients to
 use them; at the moment it is more practical to do the endianness conversion
