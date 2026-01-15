@@ -81,12 +81,6 @@ if get_option('build_rs')
         has_zstd = true
         features += ['zstd']
     endif
-    libvulkan = dependency('vulkan', required: get_option('with_dmabuf'))
-    if libvulkan.found()
-        # Note: 'ash' is the vulkan wrapper used, and may require other libraries/programs to be present
-        has_dmabuf = 'true'
-        features += ['dmabuf']
-    endif
     libgbm = dependency(
         'gbm',
         version: '>=11.0.0',  # gbm is part of Mesa and has a matching version
@@ -95,6 +89,12 @@ if get_option('build_rs')
     if bindgen.found() and libgbm.found()
         has_dmabuf = 'gbm'
         features += ['gbmfallback']
+    endif
+    libvulkan = dependency('vulkan', required: get_option('with_dmabuf'))
+    if libvulkan.found()
+        # Note: 'ash' is the vulkan wrapper used, and may require other libraries/programs to be present
+        has_dmabuf = 'true'
+        features += ['dmabuf']
     endif
     glslc = find_program(
         'glslc',
