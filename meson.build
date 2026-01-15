@@ -36,7 +36,7 @@ if get_option('build_rs')
     has_lz4 = false
     has_zstd = false
     has_gbm = false
-    has_dmabuf = false
+    has_dmabuf = 'false'
     has_video = false
 
     # compute maximum of with_lz4/with_zstd/with_gbm/with_video features
@@ -84,7 +84,7 @@ if get_option('build_rs')
     libvulkan = dependency('vulkan', required: get_option('with_dmabuf'))
     if libvulkan.found()
         # Note: 'ash' is the vulkan wrapper used, and may require other libraries/programs to be present
-        has_dmabuf = true
+        has_dmabuf = 'true'
         features += ['dmabuf']
     endif
     libgbm = dependency(
@@ -92,8 +92,8 @@ if get_option('build_rs')
         version: '>=11.0.0',  # gbm is part of Mesa and has a matching version
         required: get_option('with_gbm'),
     )
-    if bindgen.found() and libzstd.found()
-        has_zstd = true
+    if bindgen.found() and libgbm.found()
+        has_dmabuf = 'gbm'
         features += ['gbmfallback']
     endif
     glslc = find_program(
@@ -154,7 +154,7 @@ if get_option('build_rs')
             raw_version,
             has_lz4.to_string('true', 'false'),
             has_zstd.to_string('true', 'false'),
-            has_dmabuf.to_string('true', 'false'),
+            has_dmabuf,
             has_video.to_string('true', 'false'),
         ],
         install: true,
