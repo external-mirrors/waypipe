@@ -4,6 +4,7 @@
 #[cfg(not(feature = "dmabuf"))]
 mod dmabuf_stub {
     use crate::util::AddDmabufPlane;
+    use log::debug;
     use std::os::fd::{BorrowedFd, OwnedFd};
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -38,7 +39,8 @@ mod dmabuf_stub {
         test_no_timeline_export: bool,
         test_no_binary_import: bool,
     ) -> Result<Option<Arc<VulkanInstance>>, String> {
-        unreachable!();
+        debug!("Waypipe was not compiled with Vulkan DMABUF backend");
+        return Ok(None);
     }
     pub fn setup_vulkan_device_base(
         instance: &Arc<VulkanInstance>,

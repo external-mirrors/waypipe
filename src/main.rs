@@ -2372,7 +2372,7 @@ fn main() -> Result<(), String> {
 
     let opts = Options {
         debug: *debug,
-        no_gpu: *no_gpu || cfg!(not(feature = "dmabuf")),
+        no_gpu: *no_gpu || cfg!(not(any(feature = "dmabuf", feature = "gbmfallback"))),
         compression,
         video,
         threads: *threads,
