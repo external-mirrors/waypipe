@@ -4,7 +4,6 @@ if __name__ != "__main__":
     quit(1)
 
 import os, subprocess, time, signal
-import multiprocessing
 
 
 def try_unlink(path):
@@ -307,8 +306,9 @@ if not wait_until_exists(abs_socket_path):
         "weston failed to create expected display socket path, " + abs_socket_path
     )
 
-with multiprocessing.Pool(3) as pool:
-    nontriv_failures = pool.map(run_sub_test, [(k, v) for k, v in sub_tests.items()])
+nontriv_failures = []
+for k, v in sub_tests.items():
+    nontriv_failures.append(run_sub_test((k, v)))
 
 safe_cleanup(weston_proc)
 weston_out.close()
