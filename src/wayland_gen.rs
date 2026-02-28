@@ -118,8 +118,16 @@ const DATA_WP_COLOR_MANAGER_V1: WaylandData = WaylandData {
             sig: &[NewId(WpImageDescriptionV1)],
             destructor: false,
         },
+        WaylandMethod {
+            name: "get_image_description",
+            sig: &[
+                NewId(WpImageDescriptionV1),
+                Object(WpImageDescriptionReferenceV1),
+            ],
+            destructor: false,
+        },
     ],
-    version: 1,
+    version: 2,
 };
 pub const WP_COLOR_MANAGER_V1: &[u8] = DATA_WP_COLOR_MANAGER_V1.name.as_bytes();
 pub fn write_req_wp_color_management_output_v1_get_image_description(
@@ -165,7 +173,7 @@ const DATA_WP_COLOR_MANAGEMENT_OUTPUT_V1: WaylandData = WaylandData {
             destructor: false,
         },
     ],
-    version: 1,
+    version: 2,
 };
 pub const WP_COLOR_MANAGEMENT_OUTPUT_V1: &[u8] = DATA_WP_COLOR_MANAGEMENT_OUTPUT_V1.name.as_bytes();
 const DATA_WP_COLOR_MANAGEMENT_SURFACE_V1: WaylandData = WaylandData {
@@ -188,17 +196,24 @@ const DATA_WP_COLOR_MANAGEMENT_SURFACE_V1: WaylandData = WaylandData {
             destructor: false,
         },
     ],
-    version: 1,
+    version: 2,
 };
 pub const WP_COLOR_MANAGEMENT_SURFACE_V1: &[u8] =
     DATA_WP_COLOR_MANAGEMENT_SURFACE_V1.name.as_bytes();
 const DATA_WP_COLOR_MANAGEMENT_SURFACE_FEEDBACK_V1: WaylandData = WaylandData {
     name: "wp_color_management_surface_feedback_v1",
-    evts: &[WaylandMethod {
-        name: "preferred_changed",
-        sig: &[Uint],
-        destructor: false,
-    }],
+    evts: &[
+        WaylandMethod {
+            name: "preferred_changed",
+            sig: &[Uint],
+            destructor: false,
+        },
+        WaylandMethod {
+            name: "preferred_changed2",
+            sig: &[Uint, Uint],
+            destructor: false,
+        },
+    ],
     reqs: &[
         WaylandMethod {
             name: "destroy",
@@ -216,7 +231,7 @@ const DATA_WP_COLOR_MANAGEMENT_SURFACE_FEEDBACK_V1: WaylandData = WaylandData {
             destructor: false,
         },
     ],
-    version: 1,
+    version: 2,
 };
 pub const WP_COLOR_MANAGEMENT_SURFACE_FEEDBACK_V1: &[u8] =
     DATA_WP_COLOR_MANAGEMENT_SURFACE_FEEDBACK_V1.name.as_bytes();
@@ -262,7 +277,7 @@ const DATA_WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1: WaylandData = WaylandData {
             destructor: false,
         },
     ],
-    version: 1,
+    version: 2,
 };
 pub const WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1: &[u8] =
     DATA_WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1.name.as_bytes();
@@ -321,7 +336,7 @@ const DATA_WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1: WaylandData = WaylandData {
             destructor: false,
         },
     ],
-    version: 1,
+    version: 2,
 };
 pub const WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1: &[u8] =
     DATA_WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1.name.as_bytes();
@@ -361,6 +376,11 @@ const DATA_WP_IMAGE_DESCRIPTION_V1: WaylandData = WaylandData {
             sig: &[Uint],
             destructor: false,
         },
+        WaylandMethod {
+            name: "ready2",
+            sig: &[Uint, Uint],
+            destructor: false,
+        },
     ],
     reqs: &[
         WaylandMethod {
@@ -374,7 +394,7 @@ const DATA_WP_IMAGE_DESCRIPTION_V1: WaylandData = WaylandData {
             destructor: false,
         },
     ],
-    version: 1,
+    version: 2,
 };
 pub const WP_IMAGE_DESCRIPTION_V1: &[u8] = DATA_WP_IMAGE_DESCRIPTION_V1.name.as_bytes();
 pub fn write_evt_wp_image_description_info_v1_icc_file(
@@ -461,9 +481,21 @@ const DATA_WP_IMAGE_DESCRIPTION_INFO_V1: WaylandData = WaylandData {
         },
     ],
     reqs: &[],
-    version: 1,
+    version: 2,
 };
 pub const WP_IMAGE_DESCRIPTION_INFO_V1: &[u8] = DATA_WP_IMAGE_DESCRIPTION_INFO_V1.name.as_bytes();
+const DATA_WP_IMAGE_DESCRIPTION_REFERENCE_V1: WaylandData = WaylandData {
+    name: "wp_image_description_reference_v1",
+    evts: &[],
+    reqs: &[WaylandMethod {
+        name: "destroy",
+        sig: &[],
+        destructor: true,
+    }],
+    version: 1,
+};
+pub const WP_IMAGE_DESCRIPTION_REFERENCE_V1: &[u8] =
+    DATA_WP_IMAGE_DESCRIPTION_REFERENCE_V1.name.as_bytes();
 pub fn write_req_wp_commit_timing_manager_v1_get_timer(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -5502,6 +5534,55 @@ const DATA_WL_SUBSURFACE: WaylandData = WaylandData {
     version: 1,
 };
 pub const WL_SUBSURFACE: &[u8] = DATA_WL_SUBSURFACE.name.as_bytes();
+pub fn write_req_wl_fixes_destroy(dst: &mut &mut [u8], for_id: ObjId) {
+    let l = length_req_wl_fixes_destroy();
+    write_header(dst, for_id, l, 0, 0);
+}
+pub fn length_req_wl_fixes_destroy() -> usize {
+    8
+}
+pub fn parse_req_wl_fixes_destroy<'a>(msg: &'a [u8]) -> Result<(), &'static str> {
+    if msg.len() != 8 {
+        return Err(PARSE_ERROR);
+    }
+    Ok(())
+}
+pub const OPCODE_WL_FIXES_DESTROY: MethodId = MethodId::Request(0);
+pub fn write_req_wl_fixes_destroy_registry(dst: &mut &mut [u8], for_id: ObjId, registry: ObjId) {
+    let l = length_req_wl_fixes_destroy_registry();
+    write_header(dst, for_id, l, 1, 0);
+    write_obj(dst, registry);
+}
+pub fn length_req_wl_fixes_destroy_registry() -> usize {
+    12
+}
+pub fn parse_req_wl_fixes_destroy_registry<'a>(mut msg: &'a [u8]) -> Result<ObjId, &'static str> {
+    msg = msg.get(8..).ok_or(PARSE_ERROR)?;
+    let arg1 = parse_obj(&mut msg)?;
+    if !msg.is_empty() {
+        return Err(PARSE_ERROR);
+    }
+    Ok(arg1)
+}
+pub const OPCODE_WL_FIXES_DESTROY_REGISTRY: MethodId = MethodId::Request(1);
+const DATA_WL_FIXES: WaylandData = WaylandData {
+    name: "wl_fixes",
+    evts: &[],
+    reqs: &[
+        WaylandMethod {
+            name: "destroy",
+            sig: &[],
+            destructor: true,
+        },
+        WaylandMethod {
+            name: "destroy_registry",
+            sig: &[Object(WlRegistry)],
+            destructor: false,
+        },
+    ],
+    version: 1,
+};
+pub const WL_FIXES: &[u8] = DATA_WL_FIXES.name.as_bytes();
 pub fn write_req_zwlr_data_control_manager_v1_create_data_source(
     dst: &mut &mut [u8],
     for_id: ObjId,
@@ -6391,7 +6472,7 @@ const DATA_XDG_WM_BASE: WaylandData = WaylandData {
             destructor: false,
         },
     ],
-    version: 6,
+    version: 7,
 };
 pub const XDG_WM_BASE: &[u8] = DATA_XDG_WM_BASE.name.as_bytes();
 const DATA_XDG_POSITIONER: WaylandData = WaylandData {
@@ -6449,7 +6530,7 @@ const DATA_XDG_POSITIONER: WaylandData = WaylandData {
             destructor: false,
         },
     ],
-    version: 6,
+    version: 7,
 };
 pub const XDG_POSITIONER: &[u8] = DATA_XDG_POSITIONER.name.as_bytes();
 pub fn write_req_xdg_surface_get_toplevel(dst: &mut &mut [u8], for_id: ObjId, id: ObjId) {
@@ -6503,7 +6584,7 @@ const DATA_XDG_SURFACE: WaylandData = WaylandData {
             destructor: false,
         },
     ],
-    version: 6,
+    version: 7,
 };
 pub const XDG_SURFACE: &[u8] = DATA_XDG_SURFACE.name.as_bytes();
 pub fn write_req_xdg_toplevel_set_title(dst: &mut &mut [u8], for_id: ObjId, title: &[u8]) {
@@ -6621,7 +6702,7 @@ const DATA_XDG_TOPLEVEL: WaylandData = WaylandData {
             destructor: false,
         },
     ],
-    version: 6,
+    version: 7,
 };
 pub const XDG_TOPLEVEL: &[u8] = DATA_XDG_TOPLEVEL.name.as_bytes();
 const DATA_XDG_POPUP: WaylandData = WaylandData {
@@ -6660,7 +6741,7 @@ const DATA_XDG_POPUP: WaylandData = WaylandData {
             destructor: false,
         },
     ],
-    version: 6,
+    version: 7,
 };
 pub const XDG_POPUP: &[u8] = DATA_XDG_POPUP.name.as_bytes();
 pub fn write_req_xdg_toplevel_icon_manager_v1_create_icon(
@@ -6835,6 +6916,7 @@ pub enum WaylandInterface {
     WlDataSource,
     WlDisplay,
     WlDrm,
+    WlFixes,
     WlKeyboard,
     WlOutput,
     WlPointer,
@@ -6858,6 +6940,7 @@ pub enum WaylandInterface {
     WpImageDescriptionCreatorIccV1,
     WpImageDescriptionCreatorParamsV1,
     WpImageDescriptionInfoV1,
+    WpImageDescriptionReferenceV1,
     WpImageDescriptionV1,
     WpLinuxDrmSyncobjManagerV1,
     WpLinuxDrmSyncobjSurfaceV1,
@@ -6899,7 +6982,7 @@ pub enum WaylandInterface {
     ZwpVirtualKeyboardManagerV1,
     ZwpVirtualKeyboardV1,
 }
-const WAYLANDINTERFACE_LIST: &[WaylandInterface; 89] = &[
+const WAYLANDINTERFACE_LIST: &[WaylandInterface; 91] = &[
     ExtDataControlDeviceV1,
     ExtDataControlManagerV1,
     ExtDataControlOfferV1,
@@ -6926,6 +7009,7 @@ const WAYLANDINTERFACE_LIST: &[WaylandInterface; 89] = &[
     WlDataSource,
     WlDisplay,
     WlDrm,
+    WlFixes,
     WlKeyboard,
     WlOutput,
     WlPointer,
@@ -6949,6 +7033,7 @@ const WAYLANDINTERFACE_LIST: &[WaylandInterface; 89] = &[
     WpImageDescriptionCreatorIccV1,
     WpImageDescriptionCreatorParamsV1,
     WpImageDescriptionInfoV1,
+    WpImageDescriptionReferenceV1,
     WpImageDescriptionV1,
     WpLinuxDrmSyncobjManagerV1,
     WpLinuxDrmSyncobjSurfaceV1,
@@ -6996,7 +7081,7 @@ impl TryFrom<usize> for WaylandInterface {
         WAYLANDINTERFACE_LIST.get(v).copied().ok_or(())
     }
 }
-pub const INTERFACE_TABLE: &[WaylandData; 89] = &[
+pub const INTERFACE_TABLE: &[WaylandData; 91] = &[
     DATA_EXT_DATA_CONTROL_DEVICE_V1,
     DATA_EXT_DATA_CONTROL_MANAGER_V1,
     DATA_EXT_DATA_CONTROL_OFFER_V1,
@@ -7023,6 +7108,7 @@ pub const INTERFACE_TABLE: &[WaylandData; 89] = &[
     DATA_WL_DATA_SOURCE,
     DATA_WL_DISPLAY,
     DATA_WL_DRM,
+    DATA_WL_FIXES,
     DATA_WL_KEYBOARD,
     DATA_WL_OUTPUT,
     DATA_WL_POINTER,
@@ -7046,6 +7132,7 @@ pub const INTERFACE_TABLE: &[WaylandData; 89] = &[
     DATA_WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1,
     DATA_WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1,
     DATA_WP_IMAGE_DESCRIPTION_INFO_V1,
+    DATA_WP_IMAGE_DESCRIPTION_REFERENCE_V1,
     DATA_WP_IMAGE_DESCRIPTION_V1,
     DATA_WP_LINUX_DRM_SYNCOBJ_MANAGER_V1,
     DATA_WP_LINUX_DRM_SYNCOBJ_SURFACE_V1,

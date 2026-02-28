@@ -3726,6 +3726,43 @@ fn proto_viewporter_damage(info: TestInfo) -> TestResult {
     Ok(StatusOk::Pass)
 }
 
+/** Test that wl_fixes::destroy_registry works without issues */
+fn proto_fixes(info: TestInfo) -> TestResult {
+    run_protocol_test(&info, &|mut ctx: ProtocolTestContext| {
+        let [display, registry, fixes, compositor, viewporter, viewport, ..] = ID_SEQUENCE;
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_display_get_registry(dst, display, registry);
+        }));
+
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_registry_global(dst, registry, 1, WL_COMPOSITOR, 6);
+            write_evt_wl_registry_global(dst, registry, 2, WL_FIXES, 1);
+            write_evt_wl_registry_global(dst, registry, 3, WP_VIEWPORTER, 1);
+        }));
+
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_registry_bind(dst, registry, 2, WL_FIXES, 1, fixes);
+            write_req_wl_registry_bind(dst, registry, 1, WL_COMPOSITOR, 6, compositor);
+            write_req_wl_registry_bind(dst, registry, 3, WP_VIEWPORTER, 1, viewporter);
+            write_req_wl_fixes_destroy_registry(dst, fixes, registry);
+        }));
+
+        ctx.comp_write_passthrough(build_msgs(|dst| {
+            write_evt_wl_display_delete_id(dst, display, registry.0);
+        }));
+
+        // Create and use a new object which recycles the old registry ID
+        let surface = registry;
+        ctx.prog_write_passthrough(build_msgs(|dst| {
+            write_req_wl_compositor_create_surface(dst, compositor, surface);
+            write_req_wp_viewporter_get_viewport(dst, viewporter, viewport, surface);
+            write_req_wl_fixes_destroy(dst, fixes);
+        }));
+    })?;
+    Ok(StatusOk::Pass)
+}
+
 /** Test that the entire buffer is updated when a transform change implies buffer content
  * changes. Flipping the way the buffer is linked to the surface may require changing its
  * contents when there is no damage -- because damage is defined as the change to _surface_
@@ -5249,6 +5286,7 @@ fn main() -> ExitCode {
     register_single(t, &f, "base_wire", proto_base_wire);
     register_single(t, &f, "commit_timing", proto_commit_timing);
     register_single(t, &f, "damage_efficiency", proto_damage_efficiency);
+    register_single(t, &f, "fixes", proto_fixes);
     register_single(t, &f, "flip_damage", proto_flip_damage);
     register_single(t, &f, "gamma_control", proto_gamma_control);
     register_single(t, &f, "keymap", proto_keymap);

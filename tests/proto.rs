@@ -89,6 +89,7 @@ mod proto {
     define_test! {base_wire}
     define_test! {commit_timing}
     define_test! {damage_efficiency}
+    define_test! {fixes}
     define_test! {flip_damage}
     define_test! {gamma_control}
     define_test! {keymap}

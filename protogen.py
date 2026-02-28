@@ -63,6 +63,8 @@ handled_funcs = [
     ("wl_display", "error"),
     ("wl_display", "get_registry"),
     ("wl_display", "sync"),
+    ("wl_fixes", "destroy"),
+    ("wl_fixes", "destroy_registry"),
     ("wl_keyboard", "keymap"),
     ("wl_registry", "bind"),
     ("wl_registry", "global"),
