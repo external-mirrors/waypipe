@@ -464,6 +464,30 @@ def write_method_parse(meth_name, method, write):
     write("}")
 
 
+def write_dense_enum(enum_name, enum_entries, with_try, write):
+    write("pub enum " + enum_name + " {")
+    for i, name in enumerate(enum_entries):
+        write("    " + name + ",")
+    write("}")
+
+    write(
+        "const {}_LIST : &[{}; {}] = &[".format(
+            enum_name.upper(), enum_name, len(enum_entries)
+        )
+    )
+    for i, name in enumerate(enum_entries):
+        write("    " + name + ",")
+    write("];")
+
+    if with_try:
+        write("impl TryFrom<usize> for " + enum_name + " {")
+        write("    type Error = ();")
+        write("    fn try_from(v: usize) -> Result<Self, Self::Error> {")
+        write("        {}_LIST.get(v).copied().ok_or(())".format(enum_name.upper()))
+        write("    }")
+        write("}")
+
+
 def write_enum(enum_name, enum_entries, enum_values, with_try, write):
     write("pub enum " + enum_name + " {")
     for i, (name, value) in enumerate(zip(enum_entries, enum_values)):
@@ -618,15 +642,18 @@ if __name__ == "__main__":
 
         write("#[repr(u8)]")
         write("#[derive(Debug,Clone,Copy)]")
-        write_enum(
+        write_dense_enum(
             "WaylandInterface",
             [unsnake(x) for x in sorted(interfaces)],
-            list(range(len(interfaces))),
             True,
             write,
         )
 
-        write("pub const  INTERFACE_TABLE : &[WaylandData] = &[")
+        write(
+            "pub const INTERFACE_TABLE : &[WaylandData; {}] = &[".format(
+                len(interfaces)
+            )
+        )
         for i, intf in enumerate(sorted(interfaces)):
             write("    {},".format("DATA_" + intf.upper()))
         write("];")

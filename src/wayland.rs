@@ -76,7 +76,7 @@ impl std::fmt::Display for MethodId {
 pub fn lookup_intf_by_name(name: &[u8]) -> Option<WaylandInterface> {
     let r = INTERFACE_TABLE.binary_search_by(|cand_intf| cand_intf.name.as_bytes().cmp(name));
     if let Ok(idx) = r {
-        Some(WaylandInterface::try_from(idx as u32).unwrap())
+        Some(WaylandInterface::try_from(idx).unwrap())
     } else {
         None
     }
