@@ -300,8 +300,9 @@ of their initialization, and will not work correctly with this flag.
 
 # EXIT STATUS
 
-*waypipe ssh* will exit with the exit status code from the remote command, or
-with return code 1 if there has been an error.
+*waypipe* will exit with status code 1 if Waypipe has encountered an error;
+otherwise, it will return the exit status code of the command being run (or
+128 plus the value of the terminating signal), if any.
 
 # SECURITY
 
@@ -327,7 +328,7 @@ graphics libraries.
 to the resulting network traffic may, by studying the size and timing of
 packets, learn information about the user's interaction with a Wayland client
 proxied through *waypipe ssh*. For example: a lack of activity suggests the
-user is not currently using the application, while an intermittant stream of
+user is not currently using the application, while an intermittent stream of
 messages from the compositor to the client may indicate mouse movement (or
 maybe something else: the contents of the messages are protected by *ssh*.)
 

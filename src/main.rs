@@ -14,9 +14,9 @@ use std::fmt;
 use std::io::Write;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::Child;
+use std::process::{Child, ExitCode};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -246,6 +246,29 @@ impl fmt::Display for VSockConfig {
             let prefix = if self.to_host { "s" } else { "" };
             write!(f, "{}{}:{}", prefix, self.cid, self.port)
         }
+    }
+}
+
+/** Wait for the child process to complete, and translate its exit status into an exit code */
+fn wait_for_child(child: Option<std::process::Child>) -> Result<ExitCode, String> {
+    let Some(mut c) = child else {
+        return Ok(ExitCode::SUCCESS);
+    };
+
+    debug!("Waiting for child process {} to reveal status", c.id());
+    let status = c
+        .wait()
+        .map_err(|e| tag!("Failed to wait for command completion: {}", e))?;
+    debug!("Status received");
+
+    let status = wait::WaitStatus::from_raw(unistd::Pid::from_raw(c.id() as _), status.into_raw())
+        .map_err(|_| tag!("Failed to parse child exit status"))?;
+    match status {
+        wait::WaitStatus::Exited(_pid, code) => Ok(ExitCode::from(code as u8)),
+        wait::WaitStatus::Signaled(_pid, sig, _coredumped) => {
+            Ok(ExitCode::from(128u8.saturating_add(sig as u8)))
+        }
+        _ => Err(tag!("Unexpected child process exit status: {:?}", status)),
     }
 }
 
@@ -834,7 +857,7 @@ fn run_server_oneshot(
     unlink_at_end: bool,
     socket_path: &SocketSpec,
     cwd: &OwnedFd,
-) -> Result<(), String> {
+) -> Result<ExitCode, String> {
     let (sock1, sock2) = socket::socketpair(
         socket::AddressFamily::Unix,
         socket::SockType::Stream,
@@ -846,7 +869,7 @@ fn run_server_oneshot(
     let sock_str = format!("{}", sock2.as_raw_fd());
     set_cloexec(&sock2, false)?;
 
-    let mut cmd_child: std::process::Child = std::process::Command::new(command[0])
+    let cmd_child: std::process::Child = std::process::Command::new(command[0])
         .arg0(argv0)
         .args(&command[1..])
         .env("WAYLAND_SOCKET", &sock_str)
@@ -859,11 +882,9 @@ fn run_server_oneshot(
 
     handle_server_conn(link_fd, sock1, options, None)?;
 
-    debug!("Waiting for only child {} to reveal status", cmd_child.id());
-    let _ = cmd_child.wait();
-    debug!("Status received");
-
-    Ok(())
+    let exit = wait_for_child(Some(cmd_child))?;
+    debug!("Done");
+    Ok(exit)
 }
 
 /** Optional parameters for run_server_inner() and spawn_xwls_handler() related to
@@ -1229,7 +1250,7 @@ fn run_server_inner(
     mut opt_xsock: Option<XSocketInfo>,
     opt_xchild: &mut Option<std::process::Child>,
     connections: &mut BTreeMap<u32, std::process::Child>,
-) -> Result<std::process::Child, String> {
+) -> Result<ExitCode, String> {
     let mut command = std::process::Command::new(command_with_args[0]);
     command
         .arg0(argv0)
@@ -1257,7 +1278,7 @@ fn run_server_inner(
             .map_err(|x| tag!("Failed to listen to socket: {}", x))?;
     }
 
-    let mut cmd_child: std::process::Child = command
+    let cmd_child: std::process::Child = command
         .spawn()
         .map_err(|x| tag!("Failed to run program {:?}: {}", command_with_args[0], x))?;
 
@@ -1285,7 +1306,7 @@ fn run_server_inner(
         .map_err(|x| tag!("Failed to lookup path to own executable: {}", x))?
         .into_os_string();
 
-    'outer: loop {
+    loop {
         loop {
             /* Handle any child process exits */
             let res = wait::waitid(
@@ -1308,9 +1329,9 @@ fn run_server_inner(
                     };
                     if let Some(pid) = opid {
                         if pid.as_raw() as u32 == cmd_child.id() {
-                            let _ = cmd_child.wait();
+                            let ret = wait_for_child(Some(cmd_child))?;
                             debug!("Exiting, main command has stopped");
-                            break 'outer;
+                            return Ok(ret);
                         }
                         let mut found = false;
                         if let Some(ref mut xchild) = opt_xchild {
@@ -1330,8 +1351,7 @@ fn run_server_inner(
                     }
                 }
                 Err(Errno::ECHILD) => {
-                    error!("Unexpected: no unwaited for children");
-                    break 'outer;
+                    return Err(tag!("waitid reports no unwaited for children, but main command {}'s status never found", cmd_child.id()))
                 }
                 Err(errno) => {
                     assert!(errno == Errno::EINTR);
@@ -1373,8 +1393,9 @@ fn run_server_inner(
             .iter()
             .any(|p| p.revents().unwrap().contains(PollFlags::POLLERR))
         {
-            debug!("Exiting, socket error");
-            break 'outer;
+            return Err(tag!(
+                "Exiting, error occurred on Wayland (or Xwayland) socket"
+            ));
         }
 
         let has_wayland_conn = pfds[0].revents().unwrap().contains(PollFlags::POLLIN);
@@ -1432,8 +1453,6 @@ fn run_server_inner(
             }
         }
     }
-
-    Ok(cmd_child)
 }
 
 /** `waypipe-server` logic for the multiple connection case */
@@ -1447,7 +1466,7 @@ fn run_server_multi(
     display: &OsStr,
     cwd: &OwnedFd,
     run_xwls: bool,
-) -> Result<(), String> {
+) -> Result<ExitCode, String> {
     let mut connections = BTreeMap::new();
 
     let mut conn_strings = Vec::new();
@@ -1511,19 +1530,22 @@ fn run_server_multi(
     };
     /* Unlink the Wayland display socket that was created */
     drop(sock_cleanup);
-    if let Err(err) = res {
-        if let Err(e) = sock_err {
-            error!("While cleaning up: {}", e);
+    let exit = match res {
+        Err(err) => {
+            if let Err(e) = sock_err {
+                error!("While cleaning up: {}", e);
+            }
+            return Err(err);
         }
-        return Err(err);
-    }
+        Ok(exit) => exit,
+    };
     sock_err?;
 
     debug!("Shutting down");
     // Wait for subprocesses to
     wait_for_connnections(connections);
     debug!("Done");
-    Ok(())
+    Ok(exit)
 }
 
 /** `waypipe-client` logic for the single connection case */
@@ -1533,7 +1555,7 @@ fn run_client_oneshot(
     wayland_fd: OwnedFd,
     socket_path: &SocketSpec,
     cwd: &OwnedFd,
-) -> Result<(), String> {
+) -> Result<ExitCode, String> {
     let (channel_socket, sock_cleanup) =
         socket_create_and_bind(socket_path, cwd, socket::SockFlag::SOCK_CLOEXEC)?;
 
@@ -1576,14 +1598,9 @@ fn run_client_oneshot(
 
     handle_client_conn(link_fd, wayland_fd, options)?;
 
-    if let Some(mut c) = cmd_child {
-        debug!("Waiting for only child {} to reveal status", c.id());
-        let _ = c.wait();
-        debug!("Status received");
-    }
+    let exit = wait_for_child(cmd_child)?;
     debug!("Done");
-
-    Ok(())
+    Ok(exit)
 }
 
 /** No-op signal handler (used to ensure SIGCHLD interrupts poll) */
@@ -1750,7 +1767,7 @@ fn run_client_multi(
     wayland_display: &OsStr,
     anti_staircase: bool,
     cwd: &OwnedFd,
-) -> Result<(), String> {
+) -> Result<ExitCode, String> {
     let mut conn_strings = Vec::new();
     let conn_args = build_connection_command(
         &mut conn_strings,
@@ -1779,17 +1796,9 @@ fn run_client_multi(
     debug!("Shutting down");
     wait_for_connnections(connections);
 
-    if let Some(mut child) = cmd_child {
-        debug!(
-            "Waiting for client command child {} to reveal status",
-            child.id()
-        );
-        let _ = child.wait();
-        debug!("Status received");
-    }
-
+    let exit = wait_for_child(cmd_child)?;
     debug!("Done");
-    Ok(())
+    Ok(exit)
 }
 
 /** Main logic for `waypipe client` */
@@ -1802,7 +1811,7 @@ fn run_client(
     cwd: &OwnedFd,
     wayland_socket: Option<OwnedFd>,
     secctx: Option<&str>,
-) -> Result<(), String> {
+) -> Result<ExitCode, String> {
     if let Some(app_id) = secctx {
         let (wayland_disp, sock_cleanup, close_fd) = setup_secctx(cwd, app_id, wayland_socket)?;
 
@@ -1979,7 +1988,7 @@ pub const VERSION_STRING: &str = match option_env!("WAYPIPE_VERSION") {
 };
 
 /** Main entrypoint */
-fn main() -> Result<(), String> {
+fn main() -> Result<ExitCode, String> {
     let command = Command::new(env!("CARGO_PKG_NAME"))
         .disable_help_subcommand(true)
         .subcommand_required(true)
@@ -2628,7 +2637,10 @@ fn main() -> Result<(), String> {
                 )
             }
         }
-        Some(("bench", _)) => bench::run_benchmark(&opts, fast_bench),
+        Some(("bench", _)) => {
+            bench::run_benchmark(&opts, fast_bench)?;
+            Ok(ExitCode::SUCCESS)
+        }
         Some(("server-conn", _)) => {
             debug!("Starting server connection process");
 
@@ -2665,7 +2677,8 @@ fn main() -> Result<(), String> {
                 )?
             };
 
-            handle_server_conn(link_fd, wayland_fd, &opts, test_wire_version)
+            handle_server_conn(link_fd, wayland_fd, &opts, test_wire_version)?;
+            Ok(ExitCode::SUCCESS)
         }
         Some(("client-conn", _)) => {
             debug!("Starting client connection process");
@@ -2692,7 +2705,8 @@ fn main() -> Result<(), String> {
             };
             debug!("have read initial bytes");
 
-            handle_client_conn(link_fd, wayland_fd, &opts)
+            handle_client_conn(link_fd, wayland_fd, &opts)?;
+            Ok(ExitCode::SUCCESS)
         }
         _ => unreachable!(),
     }
