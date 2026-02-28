@@ -51,6 +51,7 @@ pub struct VulkanVideo {
 
     can_hw_enc_h264: bool,
     can_hw_dec_h264: bool,
+    can_hw_enc_av1: bool,
     can_hw_dec_av1: bool,
 
     // TODO: is it possible to detect in advance when hardware en/decoding works?
@@ -707,8 +708,8 @@ pub unsafe fn setup_video(
     let codecs_av1 = CodecSet {
         decoder: lib.avcodec_find_decoder_by_name("av1\0".as_bytes().as_ptr() as *const _),
         sw_decoder: lib.avcodec_find_decoder_by_name("libdav1d\0".as_bytes().as_ptr() as *const _),
-        encoder: std::ptr::null(),
-        /* AV1 encoder comparison. As of writing:
+        encoder: lib.avcodec_find_encoder_by_name("av1_vulkan\0".as_bytes().as_ptr() as *const _),
+        /* AV1 software encoder comparison. As of writing:
          * - librav1e: may require a minimum frame lookahead, unknown if this was ever fixed
          * - libsvtav1: as of version 2.3.0, zero latency is attainable with pred-struct=1:rc=2.
          *     but: the setup/memory allocation for encoding takes a large fraction of a second,
@@ -732,7 +733,8 @@ pub unsafe fn setup_video(
         fmt_bool(!codecs_vp9.sw_decoder.is_null()),
     );
     debug!(
-        "AV1 support:  hwenc f swenc {} hwdec {} swdec {}",
+        "AV1 support:  hwenc {} swenc {} hwdec {} swdec {}",
+        fmt_bool(!codecs_av1.encoder.is_null() && pdev_info.hw_enc_av1),
         fmt_bool(!codecs_av1.sw_encoder.is_null()),
         fmt_bool(!codecs_av1.decoder.is_null() && pdev_info.hw_dec_av1),
         fmt_bool(!codecs_av1.sw_decoder.is_null()),
@@ -862,6 +864,7 @@ pub unsafe fn setup_video(
         codecs_av1,
         can_hw_enc_h264: pdev_info.hw_enc_h264,
         can_hw_dec_h264: pdev_info.hw_dec_h264,
+        can_hw_enc_av1: pdev_info.hw_enc_av1,
         can_hw_dec_av1: pdev_info.hw_dec_av1,
         rgb_to_yuv420_buf,
         yuv420_buf_to_rgb,
@@ -1222,6 +1225,7 @@ pub fn setup_video_decode_sw(
  * for now, until a better solution is found.
  */
 const MIN_H264_HW_SIZE: (u32, u32) = (128, 128);
+const MIN_AV1_HW_ENC_SIZE: (u32, u32) = (128, 128);
 
 pub fn setup_video_decode(
     img: &Arc<VulkanDmabuf>,
@@ -2274,7 +2278,11 @@ pub fn setup_video_encode(
     assert!(img.can_store_and_sample);
     let video = img.vulk.video.as_ref().unwrap();
     let can_hw_encode = match fmt {
-        VideoFormat::AV1 => false,
+        VideoFormat::AV1 => {
+            video.can_hw_enc_av1
+                && !video.codecs_av1.encoder.is_null()
+                && (img.width >= MIN_AV1_HW_ENC_SIZE.0 && img.height >= MIN_AV1_HW_ENC_SIZE.1)
+        }
         VideoFormat::VP9 => false,
         VideoFormat::H264 => {
             video.can_hw_enc_h264

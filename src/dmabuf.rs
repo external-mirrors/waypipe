@@ -790,7 +790,7 @@ fn device_rank(info: &DeviceInfo) -> u8 {
         vk::PhysicalDeviceType::OTHER => 3,
         _ => 3,
     };
-    let hw_enc = info.hw_enc_h264;
+    let hw_enc = info.hw_enc_h264 | info.hw_enc_av1;
     let hw_dec = info.hw_dec_h264 | info.hw_dec_av1;
     /* prefers: faster gpu, then hw decoding availability, then hw encoding availability */
     base_score * 4 + ((!hw_enc) as u8) + 2 * ((!hw_dec) as u8)
@@ -808,6 +808,7 @@ pub struct DeviceInfo {
     /* If hardware video encoding/decoding is supported; set to false if !with_video */
     pub hw_enc_h264: bool,
     pub hw_dec_h264: bool,
+    pub hw_enc_av1: bool,
     pub hw_dec_av1: bool,
     /** Iff true, device supports import and export of timeline semaphores from/to sync files */
     supports_timeline_import_export: bool,
@@ -868,6 +869,8 @@ const EXT_VIDEO_ENC_H264: (&CStr, u32) = (
     vk::KHR_VIDEO_ENCODE_H264_NAME,
     vk::KHR_VIDEO_ENCODE_H264_SPEC_VERSION,
 );
+/** List of device extensions required for hardware video encoding with AV1 */
+const EXT_VIDEO_ENC_AV1: (&CStr, u32) = (c"VK_KHR_video_encode_av1", 1);
 /** List of device extensions required to support hardware video decoding. */
 const EXT_LIST_VIDEO_DEC_BASE: &[(&CStr, u32)] = &[(
     vk::KHR_VIDEO_DECODE_QUEUE_NAME,
@@ -1057,6 +1060,7 @@ pub fn setup_vulkan_instance(
                 let mut video_enc_list = Vec::new();
                 video_enc_list.extend_from_slice(EXT_LIST_VIDEO_ENC_BASE);
                 video_enc_list.push(EXT_VIDEO_ENC_H264);
+                video_enc_list.push(EXT_VIDEO_ENC_AV1);
                 debug!(
                     "Video enc extensions: missing {:?}",
                     list_missing(&video_enc_list, &exts)
@@ -1080,6 +1084,7 @@ pub fn setup_vulkan_instance(
 
             let mut hw_enc_h264 = false;
             let mut hw_dec_h264 = false;
+            let mut hw_enc_av1 = false;
             let mut hw_dec_av1 = false;
 
             if video.format.is_some()
@@ -1107,6 +1112,9 @@ pub fn setup_vulkan_instance(
                 {
                     if exts_has_prop(&exts, EXT_VIDEO_ENC_H264.0, EXT_VIDEO_ENC_H264.1) {
                         hw_enc_h264 = true;
+                    }
+                    if exts_has_prop(&exts, EXT_VIDEO_ENC_AV1.0, EXT_VIDEO_ENC_AV1.1) {
+                        hw_enc_av1 = true;
                     }
                 }
             }
@@ -1199,6 +1207,7 @@ pub fn setup_vulkan_instance(
                 typ: dev_type,
                 hw_enc_h264,
                 hw_dec_h264,
+                hw_enc_av1,
                 hw_dec_av1,
                 supports_binary_import,
                 supports_timeline_import_export,
@@ -1258,10 +1267,11 @@ fn get_enabled_exts(dev_info: &DeviceInfo) -> Vec<*const c_char> {
     let mut enabled_exts: Vec<*const c_char> = Vec::new();
     // TODO: use a static (stack) array instead, since max number of extensions is small
     enabled_exts.extend(EXT_LIST.iter().map(|(name, _)| name.as_ptr()));
-    if dev_info.hw_enc_h264 || dev_info.hw_dec_h264 || dev_info.hw_dec_av1 {
+    if dev_info.hw_enc_h264 || dev_info.hw_dec_h264 || dev_info.hw_enc_av1 || dev_info.hw_dec_av1 {
         enabled_exts.extend(EXT_LIST_VIDEO_BASE.iter().map(|(name, _)| name.as_ptr()));
     }
-    if dev_info.hw_enc_h264 {
+
+    if dev_info.hw_enc_h264 || dev_info.hw_enc_av1 {
         enabled_exts.extend(
             EXT_LIST_VIDEO_ENC_BASE
                 .iter()
@@ -1271,6 +1281,10 @@ fn get_enabled_exts(dev_info: &DeviceInfo) -> Vec<*const c_char> {
     if dev_info.hw_enc_h264 {
         enabled_exts.push(EXT_VIDEO_ENC_H264.0.as_ptr());
     }
+    if dev_info.hw_enc_av1 {
+        enabled_exts.push(EXT_VIDEO_ENC_AV1.0.as_ptr());
+    }
+
     if dev_info.hw_dec_h264 | dev_info.hw_dec_av1 {
         enabled_exts.extend(
             EXT_LIST_VIDEO_DEC_BASE
@@ -1313,7 +1327,7 @@ pub fn setup_vulkan_device_base(
     );
 
     let physdev = dev_info.physdev;
-    let using_hw_video_enc = dev_info.hw_enc_h264;
+    let using_hw_video_enc = dev_info.hw_enc_h264 | dev_info.hw_enc_av1;
     let using_hw_video_dec = dev_info.hw_dec_h264 | dev_info.hw_dec_av1;
     let using_hw_video = using_hw_video_enc | using_hw_video_dec;
 

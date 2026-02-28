@@ -5079,6 +5079,8 @@ fn register_video_tests<'a>(
         (VideoFormat::H264, false, true, false),
         (VideoFormat::VP9, false, false, true),
         (VideoFormat::AV1, false, false, true),
+        (VideoFormat::AV1, true, false, true),
+        (VideoFormat::AV1, true, true, true),
         (VideoFormat::AV1, false, true, true),
     ];
 

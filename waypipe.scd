@@ -147,7 +147,7 @@ compressible as images containing pictures.
 		Use VP9 encoded video.
 
 	*av1*
-		Use VP9 encoded video.
+		Use AV1 encoded video.
 
 	*sw*, *swenc*, *swdec*
 		Use software encoding or decoding, when available.
