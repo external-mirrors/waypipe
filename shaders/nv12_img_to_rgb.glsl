@@ -1,6 +1,6 @@
 #version 450
 
-layout(binding = 0, rgba8) uniform writeonly image2D output_img;
+layout(binding = 0) uniform writeonly image2D output_img;
 layout(binding = 1) uniform sampler2D input_y;
 layout(binding = 2) uniform sampler2D input_vu;
 

@@ -1264,8 +1264,16 @@ pub fn supports_video_format(
         return false;
     };
     match wlfmt {
+        WlShmFormat::Rgb565 => (),
+        WlShmFormat::Bgr565 => (),
         WlShmFormat::Xrgb8888 => (),
         WlShmFormat::Xbgr8888 => (),
+        // These exceed the bit depth of the video formats, but video is already lossy.
+        // 10-bit encoding is still probably worth using if fast
+        WlShmFormat::Xrgb2101010 => (),
+        WlShmFormat::Xbgr2101010 => (),
+        WlShmFormat::Xrgb16161616 => (),
+        WlShmFormat::Xbgr16161616 => (),
         _ => {
             return false;
         }
@@ -3077,14 +3085,41 @@ pub fn start_dmavid_encode(
 fn fill_with_color(w: usize, h: usize, format: u32, color: (f32, f32, f32)) -> Vec<u8> {
     use crate::wayland_gen::*;
 
+    fn scale_to_u(b: f32, bits: u8) -> u32 {
+        assert!(bits < 32);
+        let max = ((1u32 << bits) - 1) as f32;
+        (b * max).clamp(0.0, max).round() as u32
+    }
+
+    fn pack565(b0: f32, b1: f32, b2: f32) -> [u8; 2] {
+        let a0 = scale_to_u(b0, 5) as u16;
+        let a1 = scale_to_u(b1, 6) as u16;
+        let a2 = scale_to_u(b2, 5) as u16;
+        u16::to_le_bytes(a0 | (a1 << 5) | (a2 << 11))
+    }
+
     /* using: byte order of channels */
     fn pack8888(b0: f32, b1: f32, b2: f32, b3: f32) -> [u8; 4] {
         [
-            (b0 * 255.0).clamp(0., 255.0).round() as u8,
-            (b1 * 255.0).clamp(0., 255.0).round() as u8,
-            (b2 * 255.0).clamp(0., 255.0).round() as u8,
-            (b3 * 255.0).clamp(0., 255.0).round() as u8,
+            scale_to_u(b0, 8) as u8,
+            scale_to_u(b1, 8) as u8,
+            scale_to_u(b2, 8) as u8,
+            scale_to_u(b3, 8) as u8,
         ]
+    }
+    fn pack2101010(b0: f32, b1: f32, b2: f32, b3: f32) -> [u8; 4] {
+        let a0 = scale_to_u(b0, 10);
+        let a1 = scale_to_u(b1, 10);
+        let a2 = scale_to_u(b2, 10);
+        let a3 = scale_to_u(b3, 2);
+        u32::to_le_bytes(a0 | (a1 << 10) | (a2 << 20) | (a3 << 30))
+    }
+    fn pack16161616(b0: f32, b1: f32, b2: f32, b3: f32) -> [u8; 8] {
+        let x0 = (scale_to_u(b0, 16) as u16).to_le_bytes();
+        let x1 = (scale_to_u(b1, 16) as u16).to_le_bytes();
+        let x2 = (scale_to_u(b2, 16) as u16).to_le_bytes();
+        let x3 = (scale_to_u(b3, 16) as u16).to_le_bytes();
+        [x0[0], x0[1], x1[0], x1[1], x2[0], x2[1], x3[0], x3[1]]
     }
 
     fn replicate(pattern: &[u8], len: usize) -> Vec<u8> {
@@ -3097,8 +3132,18 @@ fn fill_with_color(w: usize, h: usize, format: u32, color: (f32, f32, f32)) -> V
     }
 
     match drm_to_wayland(format).try_into().unwrap() {
+        WlShmFormat::Rgb565 => replicate(&pack565(color.2, color.1, color.0), w * h),
+        WlShmFormat::Bgr565 => replicate(&pack565(color.0, color.1, color.2), w * h),
         WlShmFormat::Xrgb8888 => replicate(&pack8888(color.2, color.1, color.0, 1.0), w * h),
         WlShmFormat::Xbgr8888 => replicate(&pack8888(color.0, color.1, color.2, 1.0), w * h),
+        WlShmFormat::Xrgb2101010 => replicate(&pack2101010(color.2, color.1, color.0, 1.0), w * h),
+        WlShmFormat::Xbgr2101010 => replicate(&pack2101010(color.0, color.1, color.2, 1.0), w * h),
+        WlShmFormat::Xrgb16161616 => {
+            replicate(&pack16161616(color.2, color.1, color.0, 1.0), w * h)
+        }
+        WlShmFormat::Xbgr16161616 => {
+            replicate(&pack16161616(color.0, color.1, color.2, 1.0), w * h)
+        }
 
         _ => todo!(),
     }
@@ -3115,12 +3160,50 @@ fn get_average_color(w: usize, h: usize, format: u32, data: &[u8]) -> (f32, f32,
     fn swizzle_rgbx(x: (f32, f32, f32, f32)) -> (f32, f32, f32) {
         (x.0, x.1, x.2)
     }
+    fn u32_to_f(x: u32, bits: u8) -> f32 {
+        assert!(bits < 32);
+        let max = (1u32 << bits) - 1;
+        assert!(x <= max);
+        x as f32 / max as f32
+    }
+    fn u16_to_f(x: u16, bits: u8) -> f32 {
+        u32_to_f(x as u32, bits)
+    }
+    fn u8_to_f(x: u8, bits: u8) -> f32 {
+        u32_to_f(x as u32, bits)
+    }
+    fn unpack565(x: &[u8]) -> (f32, f32, f32, f32) {
+        let y = u16::from_le_bytes(x.try_into().unwrap());
+        (
+            u16_to_f(y & 0x1f, 5),
+            u16_to_f((y >> 5) & 0x3f, 6),
+            u16_to_f((y >> 11) & 0x1f, 5),
+            1.0,
+        )
+    }
     fn unpack8888(x: &[u8]) -> (f32, f32, f32, f32) {
         (
-            x[0] as f32 / 255.0,
-            x[1] as f32 / 255.0,
-            x[2] as f32 / 255.0,
-            x[3] as f32 / 255.0,
+            u8_to_f(x[0], 8),
+            u8_to_f(x[1], 8),
+            u8_to_f(x[2], 8),
+            u8_to_f(x[3], 8),
+        )
+    }
+    fn unpack2101010(x: &[u8]) -> (f32, f32, f32, f32) {
+        let y = u32::from_le_bytes(x.try_into().unwrap());
+        (
+            u32_to_f(y & 0x3ff, 10),
+            u32_to_f((y >> 10) & 0x3ff, 10),
+            u32_to_f((y >> 20) & 0x3ff, 10),
+            u32_to_f((y >> 30) & 0x3, 2),
+        )
+    }
+    fn unpack16161616(x: &[u8]) -> (f32, f32, f32, f32) {
+        (
+            u16_to_f(u16::from_le_bytes([x[0], x[1]]), 16),
+            u16_to_f(u16::from_le_bytes([x[2], x[3]]), 16),
+            u16_to_f(u16::from_le_bytes([x[4], x[5]]), 16),
+            u16_to_f(u16::from_le_bytes([x[6], x[7]]), 16),
         )
     }
 
@@ -3130,6 +3213,14 @@ fn get_average_color(w: usize, h: usize, format: u32, data: &[u8]) -> (f32, f32,
 
     let base: (f32, f32, f32) = (0., 0., 0.);
     let rgb = match drm_to_wayland(format).try_into().unwrap() {
+        WlShmFormat::Rgb565 => data
+            .chunks_exact(2)
+            .map(|x| swizzle_bgrx(unpack565(x)))
+            .fold(base, add_color),
+        WlShmFormat::Bgr565 => data
+            .chunks_exact(2)
+            .map(|x| swizzle_rgbx(unpack565(x)))
+            .fold(base, add_color),
         WlShmFormat::Xrgb8888 => data
             .chunks_exact(4)
             .map(|x| swizzle_bgrx(unpack8888(x)))
@@ -3138,6 +3229,23 @@ fn get_average_color(w: usize, h: usize, format: u32, data: &[u8]) -> (f32, f32,
             .chunks_exact(4)
             .map(|x| swizzle_rgbx(unpack8888(x)))
             .fold(base, add_color),
+        WlShmFormat::Xrgb2101010 => data
+            .chunks_exact(4)
+            .map(|x| swizzle_bgrx(unpack2101010(x)))
+            .fold(base, add_color),
+        WlShmFormat::Xbgr2101010 => data
+            .chunks_exact(4)
+            .map(|x| swizzle_rgbx(unpack2101010(x)))
+            .fold(base, add_color),
+        WlShmFormat::Xrgb16161616 => data
+            .chunks_exact(8)
+            .map(|x| swizzle_bgrx(unpack16161616(x)))
+            .fold(base, add_color),
+        WlShmFormat::Xbgr16161616 => data
+            .chunks_exact(8)
+            .map(|x| swizzle_rgbx(unpack16161616(x)))
+            .fold(base, add_color),
+
         _ => todo!(),
     };
     let scale = 1. / ((w * h) as f32);
@@ -3280,7 +3388,14 @@ fn test_video(try_hardware: bool) {
                         let rtrip_err = color_error(*color, output);
 
                         /* Verify that the video encoding gets the color relatively close */
-                        assert!(check_err <= 0.1);
+                        assert!(
+                            check_err <= 0.1,
+                            "encoding error: {:?}, ideal {:?} input {:?} output {:?}",
+                            check_err,
+                            color,
+                            check,
+                            output
+                        );
                         if !try_hardware {
                             // As of writing, H264+radeon hardware video decoding fails on <=32x32 images
                             let thresh = if video_format == VideoFormat::AV1 {
