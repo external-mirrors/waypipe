@@ -35,11 +35,20 @@ fn main() {
             OsStr::new("-o"),
             OsStr::new("-"),
         ];
-        let spirv = Command::new(compiler)
+        let output = Command::new(compiler)
             .args(args)
             .output()
-            .expect("Failed to compile file")
-            .stdout;
+            .expect("Failed to compile file");
+        assert!(
+            output.stderr.is_empty(),
+            "Shader compilation produced error message: '{}'",
+            output.stderr.escape_ascii()
+        );
+        assert!(
+            !output.stdout.is_empty(),
+            "Shader compilation produced no output"
+        );
+        let spirv = output.stdout;
 
         let s: &str = shader.file_stem().unwrap().to_str().unwrap();
 

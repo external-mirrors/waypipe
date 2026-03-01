@@ -2,5 +2,5 @@
 name = "waypipe-shaders"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.56.0"
+rust-version = "1.60.0"
 license = "GPL-3.0-or-later"
