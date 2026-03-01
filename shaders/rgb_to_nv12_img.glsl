@@ -1,8 +1,8 @@
 #version 450
 
 layout(binding = 0) uniform sampler2D input_rgb;
-layout(binding = 1) uniform writeonly image2D output_y;
-layout(binding = 2) uniform writeonly image2D output_vu;
+layout(binding = 1) uniform restrict writeonly image2D output_y;
+layout(binding = 2) uniform restrict writeonly image2D output_vu;
 
 layout(push_constant) uniform constants { mat3x4 rgb_to_yrb; }
 push;
