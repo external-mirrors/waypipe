@@ -2340,7 +2340,12 @@ pub fn process_way_msg(
             match glob.dmabuf_device {
                 DmabufDevice::Unknown
                 | DmabufDevice::Unavailable
-                | DmabufDevice::VulkanSetup(_) => unreachable!(),
+                | DmabufDevice::VulkanSetup(_) => {
+                    /* Device not fully initialized; drop the format event. This is safe
+                     * because VulkanSetup only occurs with v4+ bindings where format
+                     * negotiation happens through the feedback mechanism instead. */
+                    return Ok(ProcMsg::Done);
+                }
                 DmabufDevice::Vulkan((_, ref vulk)) => {
                     let mod_linear = 0;
                     if !vulk.supports_format(format, mod_linear) {
