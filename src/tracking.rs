@@ -2338,12 +2338,14 @@ pub fn process_way_msg(
             let format = parse_evt_zwp_linux_dmabuf_v1_format(msg)?;
 
             match glob.dmabuf_device {
-                DmabufDevice::Unknown
-                | DmabufDevice::Unavailable
-                | DmabufDevice::VulkanSetup(_) => {
+                DmabufDevice::Unknown | DmabufDevice::Unavailable => {
+                    unreachable!();
+                }
+                DmabufDevice::VulkanSetup(_) => {
                     /* Device not fully initialized; drop the format event. This is safe
-                     * because VulkanSetup only occurs with v4+ bindings where format
-                     * negotiation happens through the feedback mechanism instead. */
+                     * because VulkanSetup only occurs if there are only v4+ bindings (where
+                     * format negotiation happens through the feedback mechanism instead). */
+                    debug!("Dropping unexpected zwp_linux_dmabuf_v1::format event, likely compositor error");
                     return Ok(ProcMsg::Done);
                 }
                 DmabufDevice::Vulkan((_, ref vulk)) => {
