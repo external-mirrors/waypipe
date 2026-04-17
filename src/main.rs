@@ -1222,6 +1222,16 @@ fn spawn_xwls_handler(
     #[cfg(target_os = "linux")]
     set_cloexec(&xsock.abstract_socket, false)?;
     set_cloexec(&xsock.unix_socket, false)?;
+    let rust_log = std::env::var_os("RUST_LOG");
+    let log_level = if let Some(ref l) = rust_log {
+        l.as_os_str()
+    } else {
+        if log::max_level() >= log::Level::Debug {
+            OsStr::new("debug")
+        } else {
+            OsStr::new("error")
+        }
+    };
     let child = std::process::Command::new(program)
         .args([
             OsStr::from_bytes(x_disp_slice),
@@ -1233,6 +1243,7 @@ fn spawn_xwls_handler(
             OsStr::from_bytes(regular_slice),
         ])
         .env("WAYLAND_DISPLAY", wayland_display)
+        .env("RUST_LOG", log_level)
         .spawn()
         .map_err(|x| tag!("Failed to run program {:?}: {}", program, x))?;
     /* Close both sockets */
