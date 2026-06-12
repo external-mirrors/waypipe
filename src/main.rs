@@ -21,25 +21,10 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod bench;
-mod compress;
-mod damage;
-mod dmabuf;
-mod gbm;
-mod kernel;
-mod mainloop;
-mod mirror;
-mod platform;
-mod read;
-mod secctx;
-mod stub;
-mod tracking;
-mod util;
-mod video;
-mod wayland;
-mod wayland_gen;
 
-use crate::mainloop::*;
-use crate::util::*;
+use mainloop::tag;
+use mainloop::util::*;
+use mainloop::*;
 
 /** Logger configuration data */
 struct Logger {

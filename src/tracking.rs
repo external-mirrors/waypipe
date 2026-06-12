@@ -6,7 +6,6 @@ use crate::dmabuf::*;
 #[cfg(feature = "gbmfallback")]
 use crate::gbm::*;
 use crate::kernel::*;
-use crate::mainloop::*;
 use crate::platform::*;
 #[cfg(any(not(feature = "video"), not(feature = "gbmfallback")))]
 use crate::stub::*;
@@ -14,6 +13,7 @@ use crate::tag;
 use crate::util::*;
 use crate::wayland::*;
 use crate::wayland_gen::*;
+use crate::*;
 
 use core::str;
 use log::{debug, error};

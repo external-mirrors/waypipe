@@ -1,5 +1,21 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /*! Logic and organization to proxy a single Wayland connection */
+pub mod compress;
+pub mod damage;
+pub mod dmabuf;
+pub mod gbm;
+pub mod kernel;
+pub mod mirror;
+pub mod platform;
+pub mod read;
+pub mod secctx;
+pub mod stub;
+pub mod tracking;
+pub mod util;
+pub mod video;
+pub mod wayland;
+pub mod wayland_gen;
+
 use crate::compress::*;
 #[cfg(feature = "dmabuf")]
 use crate::dmabuf::*;
@@ -14,8 +30,7 @@ use crate::tracking::*;
 use crate::util::*;
 use crate::wayland::*;
 use crate::wayland_gen::*;
-use crate::WAYPIPE_PROTOCOL_VERSION;
-use crate::{tag, Compression, VideoFormat, VideoSetting, MIN_PROTOCOL_VERSION};
+use util::{Compression, VideoFormat, VideoSetting, MIN_PROTOCOL_VERSION};
 
 use log::{debug, error};
 use nix::errno::Errno;

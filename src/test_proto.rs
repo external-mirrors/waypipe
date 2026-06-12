@@ -26,27 +26,14 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[allow(dead_code)]
-mod dmabuf;
-#[allow(dead_code)]
-mod kernel;
-#[allow(dead_code)]
-mod platform;
-#[allow(dead_code)]
-mod util;
-#[allow(dead_code)]
-mod video; /* Only included because it is required by 'video' */
-#[allow(dead_code)]
-mod wayland;
-mod wayland_gen;
-
 #[cfg(feature = "dmabuf")]
-use dmabuf::*;
-use kernel::*;
-use platform::*;
-use util::*;
-use wayland::*;
-use wayland_gen::*;
+use mainloop::dmabuf::*;
+use mainloop::kernel::*;
+use mainloop::platform::*;
+use mainloop::tag;
+use mainloop::util::*;
+use mainloop::wayland::*;
+use mainloop::wayland_gen::*;
 
 /** Test result codes for which error-type control flow is not needed. */
 #[derive(Debug)]
