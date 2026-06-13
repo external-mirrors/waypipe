@@ -416,6 +416,7 @@ fn handle_server_conn(
     set_nonblock(&link_fd)?;
     set_nonblock(&wayland_fd)?;
 
+    ignore_sigpipe()?;
     let (sigmask, sigint_received) = setup_sigint_handler()?;
     mainloop::main_interface_loop(
         link_fd,
@@ -683,6 +684,21 @@ extern "C" fn sigint_handler(_signo: i32) {
     SIGINT_RECEIVED.store(true, Ordering::Release);
 }
 
+/** Ignore SIGPIPE */
+fn ignore_sigpipe() -> Result<(), String> {
+    let sigaction = signal::SigAction::new(
+        signal::SigHandler::SigIgn,
+        signal::SaFlags::empty(),
+        signal::SigSet::empty(),
+    );
+    unsafe {
+        // SAFETY: nothing else unsafely relies on SIGPIPE
+        signal::sigaction(signal::Signal::SIGPIPE, &sigaction)
+            .map_err(|x| tag!("Failed to set sigaction: {}", x))?;
+    }
+    Ok(())
+}
+
 /** Setup a SIGINT handler, and return a modified poll mask in which SIGINT is not blocked. */
 fn setup_sigint_handler() -> Result<(signal::SigSet, &'static AtomicBool), String> {
     /* Block SIGINT, except when polling; this prevents a race in which SIGINT is received outside the poll. */
@@ -803,6 +819,7 @@ fn handle_client_conn(link_fd: OwnedFd, wayland_fd: OwnedFd, opts: &Options) -> 
     set_nonblock(&link_fd)?;
     set_nonblock(&wayland_fd)?;
 
+    ignore_sigpipe()?;
     let (sigmask, sigint_received) = setup_sigint_handler()?;
     mainloop::main_interface_loop(
         link_fd,
