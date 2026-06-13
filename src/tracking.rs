@@ -1256,6 +1256,10 @@ fn translate_timestamp(
     clock_id: u32,
     to_channel: bool,
 ) -> Result<(u32, u32, u32), String> {
+    if tv_nsec >= 1_000_000_000 {
+        return Err(tag!("tv_nsec should be in [0,10^9), got {}", tv_nsec));
+    }
+
     let tv_sec = join_u64(tv_sec_hi, tv_sec_lo);
     let realtime = libc::CLOCK_REALTIME as u32;
     let (new_sec, new_nsec) = if to_channel {
