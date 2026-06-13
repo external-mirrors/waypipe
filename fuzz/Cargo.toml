@@ -1,0 +1,24 @@
+[package]
+name = "waypipe-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+log = { version = "0.4.22", features = ["std"] }
+nix = { version = "0.30.0", features = ["fs", "poll", "uio", "socket", "process","ioctl", "signal", "resource"] }
+
+[dependencies.waypipe]
+path = ".."
+
+[[bin]]
+name = "protocol"
+path = "src/protocol.rs"
+test = false
+doc = false
+bench = false

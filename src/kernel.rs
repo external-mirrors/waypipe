@@ -52,7 +52,29 @@ impl Drop for ExternalMapping {
     }
 }
 impl ExternalMapping {
+    #[allow(unexpected_cfgs)]
     pub fn new(fd: &OwnedFd, size: usize, readonce: bool) -> Result<ExternalMapping, String> {
+        #[cfg(fuzzing)]
+        {
+            /* Waypipe currently does not handle SIGBUS, so will exit if a program shrinks
+             * or submits an incorrectly sized shared memory file; since Waypipe runs one
+             * process per connection, this is safe and should not affect other clients.
+             * If Rust were to gain proper support for setjmp/longjmp, then perhaps the
+             * error message could be improved.
+             *
+             * However, fuzzing frameworks may not have a clean and leak-free way to handle
+             * SIGBUS like other non-bugs, so this check (which fools simple fuzzer that never
+             * resize shm files) is added as a workaround. It is NOT safe to rely on in
+             * practice, because on some platforms the file descriptors sent over a Wayland
+             * connection may just implement mmap or read and nothing else. */
+            if usize::try_from(nix::sys::stat::fstat(fd).expect("fuzzing only").st_size)
+                .expect("fuzzing only")
+                != size
+            {
+                return Err(tag!("File size mismatch"));
+            }
+        }
+
         if size == 0 {
             return Ok(ExternalMapping {
                 addr: std::ptr::null_mut(),
