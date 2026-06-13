@@ -708,6 +708,33 @@ fn setup_sigint_handler() -> Result<(signal::SigSet, &'static AtomicBool), Strin
     Ok((pollmask, &SIGINT_RECEIVED))
 }
 
+/* Setup a SIGCHLD handler, block SIGCHLD for the current thread, and return the
+ * modified poll mask in which SIGCHLD is not blocked.
+ *
+ * This should be called after spawning any subprocesses, to avoid having them
+ * inherit signal disposition changes.
+ */
+fn setup_sigchld_handler() -> Result<signal::SigSet, String> {
+    let mut mask = signal::SigSet::empty();
+    mask.add(signal::SIGCHLD);
+    let mut pollmask = mask
+        .thread_swap_mask(signal::SigmaskHow::SIG_BLOCK)
+        .map_err(|x| tag!("Failed to set sigmask: {}", x))?;
+    pollmask.remove(signal::SIGCHLD);
+
+    let sigaction = signal::SigAction::new(
+        signal::SigHandler::Handler(noop_signal_handler),
+        signal::SaFlags::SA_NOCLDSTOP,
+        signal::SigSet::empty(),
+    );
+    unsafe {
+        // SAFETY: signal handler installed is trivial
+        signal::sigaction(signal::Signal::SIGCHLD, &sigaction)
+            .map_err(|x| tag!("Failed to set sigaction: {}", x))?;
+    }
+    Ok(pollmask)
+}
+
 /** Check connection header and run the main proxy loop for a new
  * `waypipe client` connection. `link_fd` is expected to be a
  * _blocking_ socket. */
@@ -1280,23 +1307,7 @@ fn run_server_inner(
 
     /* Block SIGCHLD _after_ spawning subprocess, to avoid having cmd_child inherit
      * signal disposition changes; note this process should be single threaded. */
-    let mut mask = signal::SigSet::empty();
-    mask.add(signal::SIGCHLD);
-    let mut pollmask = mask
-        .thread_swap_mask(signal::SigmaskHow::SIG_BLOCK)
-        .map_err(|x| tag!("Failed to set sigmask: {}", x))?;
-    pollmask.remove(signal::SIGCHLD);
-
-    let sigaction = signal::SigAction::new(
-        signal::SigHandler::Handler(noop_signal_handler),
-        signal::SaFlags::SA_NOCLDSTOP,
-        signal::SigSet::empty(),
-    );
-    unsafe {
-        // SAFETY: signal handler installed is trivial
-        signal::sigaction(signal::Signal::SIGCHLD, &sigaction)
-            .map_err(|x| tag!("Failed to set sigaction: {}", x))?;
-    }
+    let pollmask = setup_sigchld_handler()?;
 
     let self_path = env::current_exe()
         .map_err(|x| tag!("Failed to lookup path to own executable: {}", x))?
@@ -1628,23 +1639,7 @@ fn run_client_inner(
 
     /* Block SIGCHLD _after_ spawning subprocess, to avoid having cmd_child inherit
      * signal disposition changes; note this process should be single threaded. */
-    let mut mask = signal::SigSet::empty();
-    mask.add(signal::SIGCHLD);
-    let mut pollmask = mask
-        .thread_swap_mask(signal::SigmaskHow::SIG_BLOCK)
-        .map_err(|x| tag!("Failed to set sigmask: {}", x))?;
-    pollmask.remove(signal::SIGCHLD);
-
-    let sigaction = signal::SigAction::new(
-        signal::SigHandler::Handler(noop_signal_handler),
-        signal::SaFlags::SA_NOCLDSTOP,
-        signal::SigSet::empty(),
-    );
-    unsafe {
-        // SAFETY: signal handler installed is trivial
-        signal::sigaction(signal::Signal::SIGCHLD, &sigaction)
-            .map_err(|x| tag!("Failed to set sigaction: {}", x))?;
-    }
+    let pollmask = setup_sigchld_handler()?;
 
     /* Collect path to self now, instead of later, for use when spawning subprocesses.
      * (When the executable is deleted, /proc/self/exe is modified with a " (deleted)"
