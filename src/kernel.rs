@@ -63,15 +63,15 @@ impl ExternalMapping {
              * error message could be improved.
              *
              * However, fuzzing frameworks may not have a clean and leak-free way to handle
-             * SIGBUS like other non-bugs, so this check (which fools simple fuzzer that never
+             * SIGBUS like other non-bugs, so this check (which fools simple fuzzers that never
              * resize shm files) is added as a workaround. It is NOT safe to rely on in
              * practice, because on some platforms the file descriptors sent over a Wayland
              * connection may just implement mmap or read and nothing else. */
             if usize::try_from(nix::sys::stat::fstat(fd).expect("fuzzing only").st_size)
                 .expect("fuzzing only")
-                != size
+                < size
             {
-                return Err(tag!("File size mismatch"));
+                return Err(tag!("Shared memory file is too small"));
             }
         }
 
