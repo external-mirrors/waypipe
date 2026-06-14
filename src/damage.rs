@@ -170,7 +170,6 @@ pub fn compute_damaged_segments(
     if rects.is_empty() {
         return Vec::new();
     }
-    assert!(stride > 0);
     assert!(bpp > 0);
 
     let mut output = Vec::new();

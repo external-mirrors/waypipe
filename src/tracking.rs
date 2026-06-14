@@ -1644,6 +1644,15 @@ pub fn process_way_msg(
                     height
                 ));
             }
+            if offset < 0 {
+                return Err(tag!("wl_shm buffer offsets must be nonnegative"));
+            }
+            if stride < 0 {
+                /* While negative strides have a possible interpretation
+                 * for single plane formats, the protocol documentation is
+                 * vague and libwayland rejects them */
+                return Err(tag!("wl_shm stride should be nonnegative, not {}", stride));
+            }
 
             let sfd = if let WpExtra::WlShmPool(ref x) = &obj.extra {
                 x.buffer.clone()
