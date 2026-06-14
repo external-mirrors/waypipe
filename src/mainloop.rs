@@ -1344,6 +1344,7 @@ pub fn update_core_for_new_size(
 
     let mut inner = Arc::<ShadowFdFileCore>::into_inner(alt.unwrap())
         .ok_or("ExtendFile invoked without exclusive access to ShadowFd")?;
+    assert!(size >= inner.mem_mirror.len());
 
     inner.mem_mirror.extend(size)?;
 

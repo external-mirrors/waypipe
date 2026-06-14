@@ -266,7 +266,8 @@ impl Mirror {
             }
         }
     }
-    /* Increase the size of the mirror; panics if any range is being accessed */
+    /* Increase the size of the mirror; panics if any range is being accessed,
+     * or if the new_size would be a decrease. */
     pub fn extend(&mut self, new_size: usize) -> Result<(), String> {
         if new_size > isize::MAX as usize {
             return Err(tag!(

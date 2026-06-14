@@ -1710,6 +1710,13 @@ pub fn process_way_msg(
 
             let x: &mut ShadowFd = &mut x.buffer.borrow_mut();
             if let ShadowFdVariant::File(ref mut y) = x.data {
+                if new_size < y.buffer_size {
+                    return Err(tag!(
+                        "Invalid decrease in size ({} -> {}) for wl_shm_pool::resize",
+                        y.buffer_size,
+                        new_size
+                    ));
+                }
                 y.buffer_size = new_size;
 
                 // extend the mirror and initialize a new mapping
