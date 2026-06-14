@@ -2008,7 +2008,9 @@ pub fn process_way_msg(
                 if let Some(buf) = glob.objects.get(&buf_id) {
                     let obj = &glob.objects.get(&object_id).unwrap();
                     let WpExtra::WlSurface(ref x) = &obj.extra else {
-                        unreachable!();
+                        return Err(tag!(
+                            "Object produced through unexpected method, missing associated state"
+                        ));
                     };
                     if let WpExtra::WlBuffer(ref buf_data) = buf.extra {
                         let mut sfd = buf_data.sfd.borrow_mut();
@@ -2311,7 +2313,9 @@ pub fn process_way_msg(
             let pt = join_u64(pt_hi, pt_lo);
 
             let WpExtra::WpDrmSyncobjSurface(s) = &obj.extra else {
-                panic!("Incorrect extra type");
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             let surf_id = s.surface;
 
@@ -2387,7 +2391,9 @@ pub fn process_way_msg(
             } else {
                 /* For each format, replace the modifiers listed with what this instance of Waypipe accepts */
                 let WpExtra::ZwpDmabuf(d) = &mut obj.extra else {
-                    panic!();
+                    return Err(tag!(
+                        "Object produced through unexpected method, missing associated state"
+                    ));
                 };
                 if d.formats_seen.contains(&format) {
                     return Ok(ProcMsg::Done);
@@ -3169,7 +3175,9 @@ pub fn process_way_msg(
         (WaylandInterface::ZwlrGammaControlV1, OPCODE_ZWLR_GAMMA_CONTROL_V1_GAMMA_SIZE) => {
             check_space!(msg.len(), 0, remaining_space);
             let WpExtra::ZwlrGammaControl(ref mut gamma) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             let gamma_size = parse_evt_zwlr_gamma_control_v1_gamma_size(msg)?;
             if gamma_size > u32::MAX / 6 {
@@ -3185,7 +3193,9 @@ pub fn process_way_msg(
         (WaylandInterface::ZwlrGammaControlV1, OPCODE_ZWLR_GAMMA_CONTROL_V1_SET_GAMMA) => {
             check_space!(msg.len(), 1, remaining_space);
             let WpExtra::ZwlrGammaControl(ref gamma) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             let Some(gamma_size) = gamma.gamma_size else {
                 return Err(tag!(
@@ -3344,7 +3354,9 @@ pub fn process_way_msg(
                 return Ok(ProcMsg::Done);
             }
             let WpExtra::ExtImageCopyCaptureSession(ref mut session) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
 
             let dev = parse_evt_ext_image_copy_capture_session_v1_dmabuf_device(msg)?;
@@ -3364,7 +3376,9 @@ pub fn process_way_msg(
                 return Ok(ProcMsg::Done);
             }
             let WpExtra::ExtImageCopyCaptureSession(ref mut session) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             let (fmt, modifiers) = parse_evt_ext_image_copy_capture_session_v1_dmabuf_format(msg)?;
             let mut mod_list = Vec::new();
@@ -3385,7 +3399,9 @@ pub fn process_way_msg(
         ) => {
             /* Replay messages */
             let WpExtra::ExtImageCopyCaptureSession(ref mut session) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
 
             let mut space_needed = length_evt_ext_image_copy_capture_session_v1_done();
@@ -3522,7 +3538,9 @@ pub fn process_way_msg(
             check_space!(msg.len(), 0, remaining_space);
 
             let WpExtra::ExtImageCopyCaptureSession(ref session) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             let supported_modifiers = session.last_format_mod_list.clone();
 
@@ -3552,7 +3570,9 @@ pub fn process_way_msg(
             copy_msg(msg, dst);
 
             let WpExtra::ExtImageCopyCaptureSession(ref mut session) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             let mut frames = Vec::new();
             std::mem::swap(&mut session.frame_list, &mut frames);
@@ -3560,7 +3580,9 @@ pub fn process_way_msg(
             for frame_id in frames {
                 let object = glob.objects.get_mut(&frame_id).unwrap();
                 let WpExtra::ExtImageCopyCaptureFrame(ref mut frame) = object.extra else {
-                    unreachable!();
+                    return Err(tag!(
+                        "Object produced through unexpected method, missing associated state"
+                    ));
                 };
                 frame.capture_session = None;
                 frame.supported_modifiers = last_format_mod_list.clone();
@@ -3591,7 +3613,9 @@ pub fn process_way_msg(
 
             let object = glob.objects.get_mut(&object_id).unwrap();
             let WpExtra::ZwlrScreencopyFrame(ref mut frame) = object.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             frame.buffer = Some(buf_info);
             Ok(ProcMsg::Done)
@@ -3622,7 +3646,9 @@ pub fn process_way_msg(
 
             let object = glob.objects.get_mut(&object_id).unwrap();
             let WpExtra::ZwlrScreencopyFrame(ref mut frame) = object.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             frame.buffer = Some(buf_info);
             Ok(ProcMsg::Done)
@@ -3636,7 +3662,9 @@ pub fn process_way_msg(
             copy_msg(msg, dst);
 
             let WpExtra::ExtImageCopyCaptureFrame(ref mut frame) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             let mut session: Option<ObjId> = None;
             std::mem::swap(&mut frame.capture_session, &mut session);
@@ -3644,7 +3672,9 @@ pub fn process_way_msg(
             if let Some(session_id) = session {
                 let object = glob.objects.get_mut(&session_id).unwrap();
                 let WpExtra::ExtImageCopyCaptureSession(ref mut session) = object.extra else {
-                    unreachable!();
+                    return Err(tag!(
+                        "Object produced through unexpected method, missing associated state"
+                    ));
                 };
                 if let Some(i) = session.frame_list.iter().position(|x| *x == object_id) {
                     session.frame_list.remove(i);
@@ -3678,7 +3708,9 @@ pub fn process_way_msg(
 
             let object = glob.objects.get_mut(&object_id).unwrap();
             let WpExtra::ExtImageCopyCaptureFrame(ref mut frame) = object.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             frame.buffer = Some(buf_info);
             Ok(ProcMsg::Done)
@@ -3693,7 +3725,9 @@ pub fn process_way_msg(
 
             if glob.on_display_side {
                 let WpExtra::ExtImageCopyCaptureFrame(ref frame) = obj.extra else {
-                    unreachable!();
+                    return Err(tag!(
+                        "Object produced through unexpected method, missing associated state"
+                    ));
                 };
                 /* Warn if the buffer being submitted does not have a format/modifier pair in the
                  * buffer constraints list; Waypipe currently does not have a mechanism to reliably
@@ -3713,7 +3747,7 @@ pub fn process_way_msg(
                     let err = if let Some(session_id) = frame.capture_session {
                         let object = glob.objects.get_mut(&session_id).unwrap();
                         let WpExtra::ExtImageCopyCaptureSession(ref session) = object.extra else {
-                            unreachable!();
+                            return Err(tag!("Object produced through unexpected method, missing associated state"));
                         };
                         session.last_format_mod_list.binary_search(&pair).is_err()
                     } else {
@@ -3732,7 +3766,9 @@ pub fn process_way_msg(
         (WaylandInterface::ZwlrScreencopyFrameV1, OPCODE_ZWLR_SCREENCOPY_FRAME_V1_READY) => {
             check_space!(msg.len(), 0, remaining_space);
             let WpExtra::ZwlrScreencopyFrame(ref mut frame) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
 
             let Some((ref sfd, ref shm_info)) = frame.buffer else {
@@ -3827,7 +3863,9 @@ pub fn process_way_msg(
             // TODO: deduplicate with wlr_screencopy_frame_v1::ready
             check_space!(msg.len(), 0, remaining_space);
             let WpExtra::ExtImageCopyCaptureFrame(ref mut frame) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
 
             let Some((ref sfd, ref shm_info)) = frame.buffer else {
@@ -3887,7 +3925,9 @@ pub fn process_way_msg(
             check_space!(msg.len(), 0, remaining_space);
             copy_msg(msg, dst);
             let WpExtra::ZwlrScreencopyFrame(ref mut frame) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             frame.buffer = None;
             Ok(ProcMsg::Done)
@@ -3899,7 +3939,9 @@ pub fn process_way_msg(
             check_space!(msg.len(), 0, remaining_space);
             copy_msg(msg, dst);
             let WpExtra::ExtImageCopyCaptureFrame(ref mut frame) = obj.extra else {
-                unreachable!();
+                return Err(tag!(
+                    "Object produced through unexpected method, missing associated state"
+                ));
             };
             frame.buffer = None;
             Ok(ProcMsg::Done)
