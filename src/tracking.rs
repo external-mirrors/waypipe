@@ -580,31 +580,61 @@ fn inverse_damage_rect_transform(
     inverse_viewport_transform(&b, post_vp_size, view_src, view_dst)
 }
 
+/** Get the memory region corresponding to the buffer with the specific format,
+ * or 'None' if there was any overflow. */
+fn extent_for_linear_buffer(
+    buffer: &ObjWlBufferShm,
+    layout: &FormatLayout,
+) -> Option<(usize, usize)> {
+    let start: usize = buffer.offset.try_into().expect("offset nonnegative");
+    let mut end = start;
+    assert!(buffer.stride >= 0 && buffer.width > 0 && buffer.height > 0);
+
+    let ext_stride = (buffer.stride as usize).checked_mul(layout.planes[0].hsub.get() as usize)?;
+    let mut max_row_len: usize = 0;
+
+    for plane in layout.planes {
+        /* In practice, divisions should always be exact/with no remainder;
+         * in case odd sizes are for some reason used, the most sensible thing
+         * to do is round up. (Exactly how to calculate these parameters is left
+         * entirely unspecified by the Wayland protocol as of writing.) */
+        let plane_stride = (ext_stride.checked_mul(plane.bpt.get() as usize)?).div_ceil(
+            layout.planes[0]
+                .bpt
+                .get()
+                .checked_mul(plane.hsub.get())
+                .expect("factors small") as usize,
+        );
+
+        let plane_height = (buffer.height as usize).div_ceil(plane.vsub.get() as usize);
+
+        max_row_len = max_row_len.max(
+            (buffer.width as usize)
+                .checked_mul(plane.bpt.get() as usize)?
+                .div_ceil(plane.hsub.get() as usize),
+        );
+
+        end = end.checked_add(plane_height.checked_mul(plane_stride)? as usize)?;
+    }
+    Some((start, end.max(start.checked_add(max_row_len)?)))
+}
+
 /** Get an interval containing the entire memory region corresponding to the buffer */
 fn damage_for_entire_buffer(buffer: &ObjWlBufferShm) -> (usize, usize) {
-    let start = (buffer.offset) as usize;
-    let end = if let Some(layout) = get_shm_format_layout(buffer.format) {
-        let mut end = start;
-        assert!(buffer.stride >= 0 && buffer.width >= 0 && buffer.height >= 0);
-        // TODO: use checked_mul and return None on overflow?
-        let ext_stride = (buffer.stride as u32) * layout.planes[0].hsub.get();
-
-        for plane in layout.planes {
-            /* In practice, divisions should always be exact/with no remainder;
-             * in case odd sizes are for some reason used, the most sensible thing
-             * to do is round up. (Exactly how to calculate these parameters is left
-             * entirely unspecified by the Wayland protocol as of writing.) */
-            let plane_stride = (ext_stride * plane.bpt.get())
-                .div_ceil(layout.planes[0].bpt.get() * plane.hsub.get());
-            let plane_height = (buffer.height as u32).div_ceil(plane.vsub.get());
-
-            end = end.saturating_add(plane_height.saturating_mul(plane_stride) as usize);
+    let max_endpoint = 64 * (usize::MAX / 64);
+    if let Some(layout) = get_shm_format_layout(buffer.format) {
+        if let Some((start, end)) = extent_for_linear_buffer(buffer, &layout) {
+            (64 * (start / 64), align(end.min(max_endpoint), 64))
+        } else {
+            (64 * (buffer.offset as usize / 64), max_endpoint)
         }
-        end
     } else {
-        start.saturating_add(buffer.stride.saturating_mul(buffer.height) as usize)
-    };
-    (64 * (start / 64), align(end, 64))
+        debug!(
+            "Likely overestimating buffer size for unknown format {}",
+            buffer.format
+        );
+        (64 * (buffer.offset as usize / 64), max_endpoint)
+    }
 }
 
 /** Return a list of rectangular areas damaged on a surface since the last time the given
