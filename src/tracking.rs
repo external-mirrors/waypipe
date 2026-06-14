@@ -612,6 +612,8 @@ fn damage_for_entire_buffer(buffer: &ObjWlBufferShm) -> (usize, usize) {
 fn get_damage_rects(surface: &ObjWlSurface, attachment: &BufferAttachment) -> Vec<Rect> {
     let (width, height) = attachment.buffer_size;
     let mut rects = Vec::<Rect>::new();
+    assert!(width > 0 && height > 0);
+
     let full_damage = Rect {
         x1: 0,
         x2: width.try_into().unwrap(),
@@ -1635,6 +1637,14 @@ pub fn process_way_msg(
             let (buffer_id, offset, width, height, stride, format) =
                 parse_req_wl_shm_pool_create_buffer(msg)?;
 
+            if width <= 0 || height <= 0 {
+                return Err(tag!(
+                    "wl_shm buffer width, height should be positive, not {} x {}",
+                    width,
+                    height
+                ));
+            }
+
             let sfd = if let WpExtra::WlShmPool(ref x) = &obj.extra {
                 x.buffer.clone()
             } else {
@@ -1649,8 +1659,8 @@ pub fn process_way_msg(
                     extra: WpExtra::WlBuffer(Box::new(ObjWlBuffer {
                         sfd,
                         shm_info: Some(ObjWlBufferShm {
-                            width,
-                            height,
+                            width: width.max(0),
+                            height: height.max(0),
                             format,
                             offset,
                             stride,
