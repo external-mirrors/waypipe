@@ -526,10 +526,10 @@ fn inverse_damage_rect_transform(
     transform: WlOutputTransform,
     view_src: Option<(i32, i32, i32, i32)>,
     view_dst: Option<(i32, i32)>,
-    width: i32,
-    height: i32,
+    buf_width: i32,
+    buf_height: i32,
 ) -> Option<WlRect> {
-    assert!(width > 0 && height > 0 && scale > 0);
+    assert!(buf_width > 0 && buf_height > 0 && scale > 0);
 
     /* Each of the eight transformations corresponds to a
      * unique set of reflections: X<->Y | Xflip | Yflip */
@@ -539,18 +539,18 @@ fn inverse_damage_rect_transform(
     let flip_x = code & 0x2 != 0;
     let flip_y = code & 0x4 != 0;
 
-    let mut xl = a.x.clamp(0, width) as u32;
-    let mut xh = a.x.saturating_add(a.width).clamp(0, width) as u32;
-    let mut yl = a.y.clamp(0, height) as u32;
-    let mut yh = a.y.saturating_add(a.height).clamp(0, height) as u32;
+    let mut xl = a.x.clamp(0, buf_width) as u32;
+    let mut xh = a.x.saturating_add(a.width).clamp(0, buf_width) as u32;
+    let mut yl = a.y.clamp(0, buf_height) as u32;
+    let mut yh = a.y.saturating_add(a.height).clamp(0, buf_height) as u32;
     if xh <= xl || yh <= yl {
         /* Rectangle is degenerate after clipping */
         return None;
     }
     let (end_w, end_h) = if swap_xy {
-        (height as u32, width as u32)
+        (buf_height as u32, buf_width as u32)
     } else {
-        (width as u32, height as u32)
+        (buf_width as u32, buf_height as u32)
     };
 
     if swap_xy {
@@ -566,9 +566,15 @@ fn inverse_damage_rect_transform(
     (yl, yh) = (yl / scale, yh.div_ceil(scale));
 
     let post_vp_size = if swap_xy {
-        (height / scale as i32, width / scale as i32)
+        (
+            (buf_height as u32).div_ceil(scale) as i32,
+            (buf_width as u32).div_ceil(scale) as i32,
+        )
     } else {
-        (width / scale as i32, height / scale as i32)
+        (
+            (buf_width as u32).div_ceil(scale) as i32,
+            (buf_height as u32).div_ceil(scale) as i32,
+        )
     };
 
     let b = Rect {
@@ -2095,6 +2101,15 @@ pub fn process_way_msg(
                         current_attachment.buffer_uid = buf_data.unique_id;
                         current_attachment.buffer_size = buffer_size;
                         found_buffer = true;
+
+                        if current_attachment.buffer_size.0 % current_attachment.scale as i32 != 0
+                            || current_attachment.buffer_size.1 % current_attachment.scale as i32
+                                != 0
+                        {
+                            /* This is required as per wl_surface::attach documentation; compositors
+                             * should send an error shortly after this occurs. */
+                            error!("wl_buffer size at commit time is not divisible by surface scale, likely client protocol error");
+                        }
 
                         if let ShadowFdVariant::File(ref mut y) = &mut sfd.data {
                             match &y.damage {
