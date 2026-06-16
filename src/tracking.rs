@@ -1690,11 +1690,42 @@ pub fn process_way_msg(
                 return Err(tag!("wl_shm stride should be nonnegative, not {}", stride));
             }
 
+            let info = ObjWlBufferShm {
+                width: width.max(0),
+                height: height.max(0),
+                format,
+                offset,
+                stride,
+            };
+
             let sfd = if let WpExtra::WlShmPool(ref x) = &obj.extra {
                 x.buffer.clone()
             } else {
                 return Err(tag!("wl_shm_pool object has invalid extra type"));
             };
+
+            let b = sfd.borrow();
+            let ShadowFdVariant::File(f) = &b.data else {
+                panic!("WpExtra::WlShmPool should only link to a shm fd");
+            };
+            let buf_size = f.buffer_size;
+            drop(b);
+
+            if let Some(layout) = get_shm_format_layout(info.format) {
+                /* If the format is something for which damage could feasibly be calculated,
+                 * also confirm the submitted buffer is actually large enough */
+                let too_small =
+                    if let Some(end) = extent_for_linear_buffer(&info, &layout).map(|i| i.1) {
+                        buf_size < end
+                    } else {
+                        true
+                    };
+                if too_small {
+                    return Err(tag!(
+                        "wl_shm_pool is too small to contain provided wl_buffer"
+                    ));
+                }
+            }
 
             insert_new_object(
                 &mut glob.objects,
@@ -1703,13 +1734,7 @@ pub fn process_way_msg(
                     obj_type: WaylandInterface::WlBuffer,
                     extra: WpExtra::WlBuffer(Box::new(ObjWlBuffer {
                         sfd,
-                        shm_info: Some(ObjWlBufferShm {
-                            width: width.max(0),
-                            height: height.max(0),
-                            format,
-                            offset,
-                            stride,
-                        }),
+                        shm_info: Some(info),
                         unique_id: glob.max_buffer_uid,
                     })),
                 },
