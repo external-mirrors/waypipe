@@ -319,7 +319,7 @@ fn apply_viewport_transform(
         (x.0, x.1)
     } else if let Some(x) = view_src {
         /* in crop-only case, the crop rectangle size should be an integer */
-        (x.2 / 256, x.3 / 256)
+        ((x.2 as u32).div_ceil(256) as i32, (x.3 as u32).div_ceil(256) as i32)
     } else {
         (buffer_size.0, buffer_size.1)
     };
@@ -443,7 +443,8 @@ fn apply_damage_rect_transform(
 
 /** Invert a viewport transform, rounding damage rectangle sizes up.
  *
- * The input is a nondegenerate rectangle _contained in_ the [0..buffer_size] rectangle.
+ * The input is a nondegenerate rectangle _contained in_ the [0..buffer_size] rectangle,
+ * or None if there is no overlap.
  */
 fn inverse_viewport_transform(
     a: &Rect,
@@ -484,11 +485,14 @@ fn inverse_viewport_transform(
     };
 
     /* 2: scale to 'dst' and round result to integer */
-    let dst: (u32, u32) = if let Some(x) = view_dst {
-        (x.0 as u32, x.1 as u32)
-    } else if let Some(x) = view_src {
-        /* in crop-only case, the crop rectangle size should be an integer */
-        (x.2 as u32 / 256, x.3 as u32 / 256)
+    let dst: (u32, u32) = if let Some((dw, dh)) = view_dst {
+        assert!(dw > 0 && dh > 0);
+        (dw as u32, dh as u32)
+    } else if let Some((_sx, _sy, sw, sh)) = view_src {
+        /* In crop-only case, the crop rectangle size should be an integer;
+         * the error will be logged at commit time, but relax the handling
+         * here in case clients are broken and compositors don't catch it */
+        ((sw as u32).div_ceil(256), (sh as u32).div_ceil(256))
     } else {
         (buffer_size.0 as u32, buffer_size.1 as u32)
     };
@@ -530,6 +534,7 @@ fn inverse_damage_rect_transform(
     buf_height: i32,
 ) -> Option<WlRect> {
     assert!(buf_width > 0 && buf_height > 0 && scale > 0);
+    assert!(a.width > 0 && a.height > 0);
 
     /* Each of the eight transformations corresponds to a
      * unique set of reflections: X<->Y | Xflip | Yflip */
@@ -2134,6 +2139,14 @@ pub fn process_way_msg(
                             /* This is required as per wl_surface::attach documentation; compositors
                              * should send an error shortly after this occurs. */
                             error!("wl_buffer size at commit time is not divisible by surface scale, likely client protocol error");
+                        }
+
+                        if let Some((_vx, _vy, vw, vh)) = current_attachment.viewport_src {
+                            if current_attachment.viewport_dst.is_none()
+                                && (vw % 256 != 0 || vh % 256 != 0)
+                            {
+                                error!("viewport dst size is unset while src size is not integral, likely client protocol error");
+                            }
                         }
 
                         if let ShadowFdVariant::File(ref mut y) = &mut sfd.data {
