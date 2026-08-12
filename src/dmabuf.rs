@@ -1622,23 +1622,47 @@ pub fn setup_vulkan_device_base(
             }
         }
 
-        let init_sem_value = 0;
-        let drm_fd = drm_open_render(dev_info.render_device_id, false)?;
-        let (semaphore, semaphore_external) = if dev_info.supports_timeline_import_export {
-            let (semaphore, semaphore_drm_handle, semaphore_fd, semaphore_event_fd) =
-                vulkan_create_timeline_parts(&dev, &ext_semaphore_fd, &drm_fd, init_sem_value)?;
-            drop(semaphore_fd);
-            (
-                semaphore,
-                Some(VulkanExternalTimelineSemaphore {
-                    drm_handle: semaphore_drm_handle,
-                    event_fd: semaphore_event_fd,
-                }),
-            )
-        } else {
-            let semaphore = vulkan_create_simple_timeline(&dev, init_sem_value)?;
-            (semaphore, None)
+        let create_semaphore = |dev: &Device,
+                                ext_semaphore_fd: &khr::external_semaphore_fd::Device,
+                                drm_fd: &OwnedFd,
+                                value: u64|
+         -> Result<
+            (vk::Semaphore, Option<VulkanExternalTimelineSemaphore>),
+            String,
+        > {
+            if dev_info.supports_timeline_import_export {
+                let (semaphore, semaphore_drm_handle, semaphore_fd, semaphore_event_fd) =
+                    vulkan_create_timeline_parts(dev, ext_semaphore_fd, drm_fd, value)?;
+                drop(semaphore_fd);
+                Ok((
+                    semaphore,
+                    Some(VulkanExternalTimelineSemaphore {
+                        drm_handle: semaphore_drm_handle,
+                        event_fd: semaphore_event_fd,
+                    }),
+                ))
+            } else {
+                let semaphore = vulkan_create_simple_timeline(dev, value)?;
+                Ok((semaphore, None))
+            }
         };
+
+        let drm_fd = match drm_open_render(dev_info.render_device_id, false) {
+            Ok(f) => f,
+            Err(e) => {
+                dev.destroy_device(None);
+                return Err(e);
+            }
+        };
+        let init_sem_value = 0;
+        let (semaphore, semaphore_external) =
+            match create_semaphore(&dev, &ext_semaphore_fd, &drm_fd, init_sem_value) {
+                Ok((s, s_ext)) => (s, s_ext),
+                Err(e) => {
+                    dev.destroy_device(None);
+                    return Err(e);
+                }
+            };
 
         Ok(Some(VulkanDevice {
             _instance: instance.clone(),
