@@ -225,7 +225,7 @@ where
 /** Helper function to write into a finite length buffer. It does not propagate
  * errors and is most convenient if the write is certain to succeed. Example use:
  *
- * ```
+ * ```custom,{class=rust}
  * let mut buf = [0u8; 256];
  * let slice = write_with_buffer(&mut buf, &|x: &mut &mut [u8]| {
  *     write!(x, "{}", number).expect("buffer should be long enough")
@@ -1211,12 +1211,12 @@ pub fn get_shm_format_layout(format: u32) -> Option<FormatLayout> {
 
 /** Build a libc::timespec from seconds and nanoseconds.
  *
- * libc's issue 3223 [1] means that libc::timespec cannot be constructed as a
+ * [libc's issue 3223][1] means that libc::timespec cannot be constructed as a
  * struct literal on some 32 bit platforms that use 64 bit time. This includes
  * Debian's armhf after the t64 transition. This function can then be used as a
  * workaround constructor.
  *
- * [1] https://github.com/rust-lang/libc/issues/3223
+ * [1]: https://github.com/rust-lang/libc/issues/3223
  */
 pub fn timespec_from_sec_nsec(sec: libc::time_t, nsec: libc::c_long) -> libc::timespec {
     let mut ret: libc::timespec = unsafe { std::mem::zeroed() };

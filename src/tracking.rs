@@ -319,7 +319,10 @@ fn apply_viewport_transform(
         (x.0, x.1)
     } else if let Some(x) = view_src {
         /* in crop-only case, the crop rectangle size should be an integer */
-        ((x.2 as u32).div_ceil(256) as i32, (x.3 as u32).div_ceil(256) as i32)
+        (
+            (x.2 as u32).div_ceil(256) as i32,
+            (x.3 as u32).div_ceil(256) as i32,
+        )
     } else {
         (buffer_size.0, buffer_size.1)
     };
