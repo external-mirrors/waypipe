@@ -987,6 +987,7 @@ pub fn setup_vulkan_instance(
                 .enumerate_device_extension_properties(p)
                 .map_err(|x| tag!("Failed to enumerate device extensions: {:?}", x))?;
 
+            let mut driver_prop = vk::PhysicalDeviceDriverProperties::default();
             let mut drm_prop = vk::PhysicalDeviceDrmPropertiesEXT::default();
             let mut prop = vk::PhysicalDeviceProperties2::default();
             let has_drm_name = exts_has_prop(
@@ -996,6 +997,14 @@ pub fn setup_vulkan_instance(
             );
             if has_drm_name {
                 prop = prop.push_next(&mut drm_prop);
+            }
+            let has_driver_props = exts_has_prop(
+                &exts,
+                vk::KHR_DRIVER_PROPERTIES_NAME,
+                vk::KHR_DRIVER_PROPERTIES_SPEC_VERSION,
+            );
+            if has_driver_props {
+                prop = prop.push_next(&mut driver_prop);
             }
             instance.get_physical_device_properties2(p, &mut prop);
             let dev_type = prop.properties.device_type;
@@ -1167,6 +1176,12 @@ pub fn setup_vulkan_instance(
                  */
                 debug!("No EXPORT_SYNC_FILE, disabling binary semaphore import/export");
                 supports_binary_import = false;
+                supports_timeline_import_export = false;
+            }
+            if has_driver_props && driver_prop.driver_id == vk::DriverId::NVIDIA_PROPRIETARY {
+                /* These drivers do not yet support SYNCOBJ_FD_TO_HANDLE */
+                // TODO: either autodetect whether this works or
+                // check driver version after support is added
                 supports_timeline_import_export = false;
             }
             debug!(
