@@ -1028,6 +1028,18 @@ pub fn setup_vulkan_instance(
                 prop.properties.device_id,
                 prop.properties.device_type
             );
+            if has_driver_props {
+                debug!(
+                    "Driver: {:?}, {}, {}, conformance={}.{}.{}+{}",
+                    driver_prop.driver_id,
+                    EscapeAsciiPrintable(driver_prop.driver_name_as_c_str().unwrap().to_bytes()),
+                    EscapeAsciiPrintable(driver_prop.driver_info_as_c_str().unwrap().to_bytes()),
+                    driver_prop.conformance_version.major,
+                    driver_prop.conformance_version.minor,
+                    driver_prop.conformance_version.subminor,
+                    driver_prop.conformance_version.patch,
+                );
+            }
             if debug {
                 if has_drm_name {
                     let primary = if drm_prop.has_primary != 0 {
