@@ -65,8 +65,8 @@ pub struct VulkanDevice {
     _instance: Arc<VulkanInstance>,
 
     dev_info: DeviceInfo,
-    /** Queue family indices. Order: [compute+transfer, graphics+transfer, encode, decode] */
-    qfis: [Option<u32>; 4],
+    /** Information about the queues that were bound. (flags, video operations, index, number bound) */
+    queue_info: Vec<(vk::QueueFlags, vk::VideoCodecOperationFlagsKHR, i32, i32)>,
 
     /** Timeline semaphore; when it reaches 'queue.last_semaphore_value', all preceding work using
      * the semaphore is done */
@@ -1362,80 +1362,119 @@ pub fn setup_vulkan_device_base(
         let memory_properties = instance
             .instance
             .get_physical_device_memory_properties(physdev);
-        let queue_families = instance
-            .instance
-            .get_physical_device_queue_family_properties(physdev);
 
-        let mut qfis = [None, None, None, None];
-        let mut nqis = [0, 0, 0, 0];
-        for (u, family) in queue_families.iter().enumerate().rev() {
-            let i: u32 = u.try_into().unwrap();
-            if family
+        let num_families = instance
+            .instance
+            .get_physical_device_queue_family_properties2_len(physdev);
+        assert!(num_families <= i32::MAX as usize);
+
+        let mut vid_props = vec![vk::QueueFamilyVideoPropertiesKHR::default(); num_families];
+        let mut qf_props: Vec<vk::QueueFamilyProperties2> = vid_props
+            .iter_mut()
+            .map(|vid_prop| vk::QueueFamilyProperties2::default().push_next(vid_prop))
+            .collect();
+        instance
+            .instance
+            .get_physical_device_queue_family_properties2(physdev, &mut qf_props[..]);
+
+        let mut first_ct = None;
+        let mut first_gt = None;
+        let mut vid_queues = Vec::new();
+        let mut has_vid_enc = false;
+        let mut has_vid_dec = false;
+
+        for (u, qf_prop) in qf_props.iter().enumerate() {
+            if qf_prop
+                .queue_family_properties
                 .queue_flags
                 .contains(vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER)
+                && first_ct.is_none()
             {
-                qfis[0] = Some(i);
-                nqis[0] = family.queue_count;
+                first_ct = Some(u);
             }
-            if family
+            if qf_prop
+                .queue_family_properties
                 .queue_flags
                 .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::TRANSFER)
+                && first_gt.is_none()
             {
-                qfis[1] = Some(i);
-                nqis[1] = family.queue_count;
+                first_gt = Some(u);
             }
-            if family
+
+            // TODO: match the queues to what codecs are listed as being supported,
+            // in particular, to allow for earlier error messages
+            let enc = qf_prop
+                .queue_family_properties
                 .queue_flags
-                .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
-            {
-                qfis[2] = Some(i);
-                nqis[2] = family.queue_count;
-            }
-            if family
+                .contains(vk::QueueFlags::VIDEO_ENCODE_KHR);
+            let dec = qf_prop
+                .queue_family_properties
                 .queue_flags
-                .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
-            {
-                qfis[3] = Some(i);
-                nqis[3] = family.queue_count;
+                .contains(vk::QueueFlags::VIDEO_DECODE_KHR);
+
+            has_vid_enc |= enc;
+            has_vid_dec |= dec;
+            if enc || dec {
+                vid_queues.push(u);
             }
         }
 
-        let Some(queue_family) = qfis[0] else {
+        let Some(queue_family) = first_ct else {
             return Err(tag!("No compute+transfer queue available"));
         };
 
         let prio = &[1.0];
 
-        let chosen_queues: Vec<vk::DeviceQueueCreateInfo<'_>> = if using_hw_video {
-            if qfis[1].is_none() {
+        let qf_indices = if using_hw_video {
+            let Some(gt) = first_gt else {
                 return Err(tag!("No graphics+transfer queue available"));
+            };
+
+            if using_hw_video_enc && !has_vid_enc {
+                return Err(tag!("No video encode queue available"));
             }
 
-            if using_hw_video_enc && qfis[2].is_none() {
-                return Err(tag!("No encode queue available"));
+            if using_hw_video_dec && !has_vid_dec {
+                return Err(tag!("No video decode queue available"));
             }
 
-            if using_hw_video_dec && qfis[3].is_none() {
-                return Err(tag!("No decode queue available"));
-            }
-
-            // Only create one queue out of each family that we need.
-            let mut qfis = qfis.to_vec();
-            qfis.retain(Option::is_some);
-            qfis.sort_unstable();
-            qfis.dedup();
-            qfis.into_iter()
-                .map(|qf| {
-                    vk::DeviceQueueCreateInfo::default()
-                        .queue_family_index(qf.unwrap())
-                        .queue_priorities(prio)
-                })
-                .collect()
+            let mut all_queues = vid_queues;
+            all_queues.insert(0, queue_family);
+            all_queues.insert(0, gt);
+            all_queues.sort_unstable();
+            all_queues.dedup();
+            all_queues
         } else {
-            vec![vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(queue_family)
-                .queue_priorities(prio)]
+            vec![queue_family]
         };
+
+        let queue_family: u32 = queue_family.try_into().unwrap();
+
+        let queue_info: Vec<(vk::QueueFlags, vk::VideoCodecOperationFlagsKHR, i32, i32)> =
+            qf_indices
+                .iter()
+                .map(|u| {
+                    let qf_prop = &qf_props[*u];
+                    // SAFTEY: accessing vid_prop through the (implicit) &mut reference that qf_prop holds
+                    // The type matches the only next item that was pushed.
+                    let vid_prop = *qf_prop.p_next.cast::<vk::QueueFamilyVideoPropertiesKHR>();
+                    (
+                        qf_prop.queue_family_properties.queue_flags,
+                        vid_prop.video_codec_operations,
+                        i32::try_from(*u).unwrap(),
+                        1,
+                    )
+                })
+                .collect();
+
+        let chosen_queues: Vec<vk::DeviceQueueCreateInfo<'_>> = qf_indices
+            .into_iter()
+            .map(|qf| {
+                vk::DeviceQueueCreateInfo::default()
+                    .queue_family_index(qf.try_into().unwrap())
+                    .queue_priorities(prio)
+            })
+            .collect();
 
         let enabled_exts = get_enabled_exts(dev_info);
 
@@ -1695,7 +1734,7 @@ pub fn setup_vulkan_device_base(
             _instance: instance.clone(),
 
             dev_info: *dev_info,
-            qfis,
+            queue_info,
             queue: Mutex::new(VulkanQueue {
                 queue,
                 last_semaphore_value: init_sem_value,
@@ -1745,7 +1784,7 @@ pub fn setup_vulkan_device(
                     &dev.dev,
                     &dev.dev_info,
                     debug,
-                    dev.qfis,
+                    &dev.queue_info[..],
                     &enabled_exts,
                     INSTANCE_EXTS,
                 )?

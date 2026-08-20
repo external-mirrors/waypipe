@@ -103,7 +103,7 @@ if get_option('build_rs')
     )
     libavutil = dependency(
         'libavutil',
-        version: '>=58.11.100',
+        version: '>=60.13.100',
         required: get_option('with_video'),
     )
     libavcodec = dependency(
