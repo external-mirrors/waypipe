@@ -628,7 +628,7 @@ fn extent_for_linear_buffer(
                 .div_ceil(plane.hsub.get() as usize),
         );
 
-        end = end.checked_add(plane_height.checked_mul(plane_stride)? as usize)?;
+        end = end.checked_add(plane_height.checked_mul(plane_stride)?)?;
     }
     Some((start, end.max(start.checked_add(max_row_len)?)))
 }
